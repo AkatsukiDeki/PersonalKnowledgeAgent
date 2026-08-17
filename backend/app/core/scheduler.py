@@ -55,6 +55,11 @@ class PatternScheduler:
                 res = await db.execute(check_stmt)
                 row = res.fetchone()
                 
+                # SQLAlchemy 2.0 implicitly starts a transaction on execute.
+                # Since the pipeline creates its own nested transactions using db.begin(),
+                # we must close the current transaction first.
+                await db.rollback()
+                
                 if row:
                     current_claims = row.c_count
                     current_domains = row.cat_count
