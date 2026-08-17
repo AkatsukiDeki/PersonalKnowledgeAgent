@@ -13,7 +13,7 @@ from ..knowledge.query_condenser import rewrite_query
 from ..knowledge.retrieval import hybrid_search
 from ..schemas.chat import ChatRequest, ChatResponse, Citation
 from ..core.config import settings
-from ..db.models import Pattern, Claim, ClaimRelation, Conversation, Message, ConversationMemory
+from ..db.models import Pattern, Claim, ClaimRelation, Conversation, Message, ConversationMemory, TimelineEvent
 from ..knowledge.conversation_memory import maybe_trigger_memory_update
 from datetime import datetime
 from uuid import UUID
@@ -83,7 +83,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     is_success, search_query = await rewrite_query(payload.query, payload.history)
     
     # Select Thresholds
-    if intent == "ANALYTICAL":
+    if intent in ("ANALYTICAL", "TEMPORAL"):
         min_sim = settings.ANALYTICAL_MIN_TOP1_SIMILARITY
         min_rrf = settings.ANALYTICAL_MIN_TOP_K_RELEVANCE_RRF
     else:
@@ -103,7 +103,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
             r["text_content"] = f"[L1 CHUNK] {r['text_content']}"
     
     # 3. Context Builder (L2, L3, L4)
-    if intent == "ANALYTICAL":
+    if intent in ("ANALYTICAL", "TEMPORAL"):
         # L2 Claims (Active)
         chunk_ids = [r["chunk_id"] for r in retrieved]
         if chunk_ids:
@@ -135,7 +135,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     })
 
         # Graph Traversal (Multi-Hop)
-        if intent in ("ANALYTICAL", "FACTUAL") and chunk_ids:
+        if intent in ("ANALYTICAL", "FACTUAL", "TEMPORAL") and chunk_ids:
             from ..knowledge.graph_traversal import GraphTraversalEngine
             traversal_engine = GraphTraversalEngine(db)
             # In ANALYTICAL we defined claim_ids above. If FACTUAL we might not have it yet. Wait, in FACTUAL we don't have claim_ids!
@@ -167,6 +167,34 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "chunk_id": str(p.id),
                     "source_id": str(p.id),
                     "text_content": f"[L3 ПАТТЕРН] {p.title}: {p.description}\nОбоснование: {p.evidence_summary}",
+                    "score": 1.0,
+                    "rrf_score": 1.0,
+                    "is_pattern": True
+                })
+
+        # Timeline Evolution (L4)
+        if intent in ("TEMPORAL", "ANALYTICAL") and claim_ids:
+            timeline_events = (await db.execute(
+                select(TimelineEvent).where(
+                    (TimelineEvent.old_claim_id.in_(claim_ids)) | 
+                    (TimelineEvent.new_claim_id.in_(claim_ids))
+                ).order_by(TimelineEvent.timestamp.desc()).limit(5)
+            )).scalars().all()
+            
+            if timeline_events:
+                timeline_text_parts = []
+                for ev in timeline_events:
+                    old_date = ev.old_claim.valid_from.strftime("%Y-%m-%d") if (ev.old_claim and ev.old_claim.valid_from) else "Ранее"
+                    new_date = ev.new_claim.valid_from.strftime("%Y-%m-%d") if (ev.new_claim and ev.new_claim.valid_from) else ev.timestamp.strftime("%Y-%m-%d")
+                    timeline_text_parts.append(
+                        f"* [{old_date} -> {new_date}] {ev.title}: \"{ev.description}\" (supersedes: Claim #{ev.old_claim_id} -> Claim #{ev.new_claim_id})"
+                    )
+                
+                timeline_context = "=== [L4 TIMELINE EVOLUTION] ===\n" + "\n".join(timeline_text_parts)
+                retrieved.append({
+                    "chunk_id": "timeline_evolution",
+                    "source_id": "timeline_evolution",
+                    "text_content": timeline_context,
                     "score": 1.0,
                     "rrf_score": 1.0,
                     "is_pattern": True

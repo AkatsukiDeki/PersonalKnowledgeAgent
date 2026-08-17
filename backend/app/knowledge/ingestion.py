@@ -166,8 +166,14 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             logger.info(f"[Ingestion] Running conflict resolver for {len(all_new_claims)} new claims...")
             from .conflict_resolver import resolve_conflicts_for_new_claims
             await resolve_conflicts_for_new_claims(db, all_new_claims)
-            # --------------------------------------------------
             
+            # --- Phase 4 & 5: Graph Linking & Timeline Evolution ---
+            logger.info(f"[Ingestion] Running Graph Linker & Timeline Engine...")
+            from .graph_linker import relink_durable_claims
+            await relink_durable_claims(db)
+            
+            from .timeline_engine import build_timeline_events
+            await build_timeline_events(db)
             # --------------------------------------------------
 
             await resolve_granular_error("extraction", source_id=source.id)

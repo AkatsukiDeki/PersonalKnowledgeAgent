@@ -209,6 +209,24 @@ class ClaimConflict(Base, TimestampedUUIDMixin):
     claim_a: Mapped["Claim"] = relationship("Claim", foreign_keys=[claim_a_id])
     claim_b: Mapped["Claim"] = relationship("Claim", foreign_keys=[claim_b_id])
 
+class TimelineEvent(Base):
+    __tablename__ = "timeline_events"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    event_type: Mapped[str] = mapped_column(String(50), nullable=False, index=True) # decision_change, tool_replacement, strategy_shift
+    old_claim_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("claims.id", ondelete="SET NULL"), nullable=True)
+    new_claim_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("claims.id", ondelete="CASCADE"), index=True)
+    source_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"), nullable=True)
+    title: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    domain: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    timestamp: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    # Relationships
+    old_claim: Mapped[Optional["Claim"]] = relationship("Claim", foreign_keys=[old_claim_id])
+    new_claim: Mapped["Claim"] = relationship("Claim", foreign_keys=[new_claim_id])
+    source: Mapped[Optional["Source"]] = relationship("Source", foreign_keys=[source_id])
+
 class ClaimRelation(Base, TimestampedUUIDMixin):
     __tablename__ = "claim_relations"
 
