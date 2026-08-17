@@ -6,6 +6,7 @@ import { SourceManager } from './components/sources/SourceManager';
 import { PatternDashboard } from './components/patterns/PatternDashboard';
 import { KnowledgeGraphView } from './components/graph/KnowledgeGraphView';
 import { ConflictResolutionCenter } from './components/conflicts/ConflictResolutionCenter';
+import { ProactiveInsights } from './components/patterns/ProactiveInsights';
 
 export function App() {
   const [isUploaderOpen, setIsUploaderOpen] = useState(false);
@@ -78,6 +79,8 @@ export function App() {
         isOpen={isPatternsOpen}
         onClose={() => setIsPatternsOpen(false)}
       />
+
+      <ProactiveInsights />
     </main>
   );
 }

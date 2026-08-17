@@ -203,6 +203,7 @@ class Pattern(Base, TimestampedUUIDMixin):
     evidence_summary: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_claim_ids: Mapped[List[uuid.UUID]] = mapped_column(ARRAY(PG_UUID(as_uuid=True)), default=list, nullable=False)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    status: Mapped[str] = mapped_column(String(50), default="pending_review", index=True)
 
 
 class ImportJob(Base, TimestampedUUIDMixin):

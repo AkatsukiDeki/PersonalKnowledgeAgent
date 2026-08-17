@@ -17,11 +17,15 @@ logging.basicConfig(
 )
 
 
+from .core.scheduler import scheduler
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run DB initialisation on startup."""
+    """Run DB initialisation and background tasks on startup."""
     await init_database()
+    await scheduler.start()
     yield
+    await scheduler.stop()
 
 
 app = FastAPI(

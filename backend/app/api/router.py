@@ -10,6 +10,8 @@ from .conflicts import router as conflicts_router
 from .chat_import import router as chat_import_router
 from ..connectors.obsidian.router import router as obsidian_router
 
+from .insights import router as insights_router
+
 api_router = APIRouter()
 
 api_router.include_router(sources_router)
@@ -21,3 +23,4 @@ api_router.include_router(patterns_router, prefix="/patterns", tags=["patterns"]
 api_router.include_router(conflicts_router, prefix="/conflicts", tags=["conflicts"])
 api_router.include_router(obsidian_router, prefix="/connectors", tags=["obsidian"])
 api_router.include_router(chat_import_router, prefix="/connectors/chats", tags=["chat_import"])
+api_router.include_router(insights_router, prefix="/insights", tags=["insights"])

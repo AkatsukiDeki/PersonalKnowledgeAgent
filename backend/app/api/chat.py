@@ -75,7 +75,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     })
 
         # L3 Patterns
-        patterns = (await db.execute(select(Pattern).where(Pattern.confidence >= 0.70).order_by(Pattern.created_at.desc()).limit(3))).scalars().all()
+        patterns = (await db.execute(select(Pattern).where(Pattern.confidence >= 0.70, Pattern.status == 'accepted').order_by(Pattern.created_at.desc()).limit(3))).scalars().all()
         for p in patterns:
             # check if evidence_claim_ids is not empty (as per spec)
             if p.evidence_claim_ids:
