@@ -5,6 +5,7 @@ const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api/v1';
 export async function streamChat(
   query: string,
   history: { role: string; content: string }[],
+  conversation_id: string | null,
   onStatus: (status: string) => void,
   onCitations: (citations: Citation[]) => void,
   onToken: (token: string) => void,
@@ -15,7 +16,7 @@ export async function streamChat(
     const response = await fetch(`${BASE_URL}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, history }),
+      body: JSON.stringify({ query, history, conversation_id }),
     });
 
     if (!response.ok) {

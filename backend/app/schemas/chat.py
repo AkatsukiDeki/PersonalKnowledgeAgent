@@ -7,6 +7,7 @@ class ChatRequest(BaseModel):
     query: str
     conversation_id: Optional[uuid.UUID] = None
     history: List[dict] = []
+    use_reasoning: bool = False
 
 
 class Citation(BaseModel):

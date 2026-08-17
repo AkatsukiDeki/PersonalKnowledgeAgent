@@ -16,6 +16,8 @@ class Source(Base, TimestampedUUIDMixin):
     title: Mapped[str] = mapped_column(String, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
     source_type: Mapped[str] = mapped_column(String, default="note", nullable=False)
+    importance: Mapped[str] = mapped_column(String(20), default="normal", index=True) # temporary, normal, important, critical
+    file_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Source Manager 2.0 fields
@@ -131,6 +133,21 @@ class Claim(Base, TimestampedUUIDMixin):
         nullable=True,
         index=True
     )
+
+    # Семантическая классификация
+    kind: Mapped[str] = mapped_column(String(50), default="fact", index=True) # fact, decision, habit, preference, observation, plan
+    scope: Mapped[str] = mapped_column(String(50), default="global") # global, project, personal
+    
+    # Метрики Knowledge Scoring
+    stability: Mapped[float] = mapped_column(Float, default=0.5)      # 0.1 (эпизод) .. 1.0 (долгосрочный принцип)
+    importance: Mapped[float] = mapped_column(Float, default=1.0)     # наследуется от Source
+    recurrence: Mapped[int] = mapped_column(Integer, default=1)       # счетчик повторений
+    memory_score: Mapped[float] = mapped_column(Float, default=0.5, index=True) # вычисляемый ранг (Durable >= 0.60)
+    
+    # Жизненный цикл и Temporal State
+    lifecycle_status: Mapped[str] = mapped_column(String(20), default="active", index=True) # active, superseded, deprecated
+    valid_from: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    valid_to: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
 
     source: Mapped["Source"] = relationship("Source")
     chunk: Mapped["Chunk"] = relationship("Chunk")
@@ -250,3 +267,56 @@ class SystemError(Base):
     first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title: Mapped[str] = mapped_column(String(255), default="Новый диалог")
+    domain: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True) # devops, architecture, security, general
+    status: Mapped[str] = mapped_column(String(20), default="active", index=True)      # active, archived, pinned
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+
+    # Relationships
+    messages: Mapped[list["Message"]] = relationship(
+        "Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at"
+    )
+    memory: Mapped["ConversationMemory"] = relationship(
+        "ConversationMemory", back_populates="conversation", uselist=False, cascade="all, delete-orphan"
+    )
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), index=True
+    )
+    role: Mapped[str] = mapped_column(String(20), nullable=False) # user, assistant, system
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # e.g. qwen2.5-coder:14b
+    context_used: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True) # метрики RAG (l1_count, l2_count, l3_count)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    # Relationships
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
+
+
+class ConversationMemory(Base):
+    __tablename__ = "conversation_memories"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    active_decisions: Mapped[Optional[list]] = mapped_column(JSONB, default=list) # ["Используем FastAPI", "Hotfix через cherry-pick"]
+    open_questions: Mapped[Optional[list]] = mapped_column(JSONB, default=list)   # ["Как настроить retention?"]
+    key_claim_ids: Mapped[Optional[list]] = mapped_column(JSONB, default=list)    # [UUID, UUID] - ссылки на связанные Durable Claims
+    message_count_at_summary: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="memory")

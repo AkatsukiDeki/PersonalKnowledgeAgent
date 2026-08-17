@@ -5,13 +5,21 @@ from app.core.llm import model_manager, TaskType
 logger = logging.getLogger(__name__)
 
 class IntentResponse(BaseModel):
-    intent: str = Field(description="Must be 'FACTUAL' or 'ANALYTICAL'")
+    intent: str = Field(description="Must be 'FACTUAL', 'ANALYTICAL', or 'META'")
 
 async def classify_intent(query: str) -> str:
     """Classify user query into FACTUAL or ANALYTICAL intent."""
     query_lower = query.lower()
     
     # 1. Fast path: keyword matching
+    meta_keywords = [
+        "что ты", "кто ты", "как ты работ", "твои возможн", "что умеешь",
+        "взаимосвязан", "устройство", "как устроена память", "структура чат",
+        "помощь", "help", "привет", "здравствуй", "стек агента", "архитектур"
+    ]
+    if any(kw in query_lower for kw in meta_keywords):
+        return "META"
+
     keywords = [
         "противореч", "изменил", "привычк", "паттерн", "что общего", 
         "заметил", "эволюц", "раньше", "сейчас", "динамик", "сравни"
@@ -21,15 +29,15 @@ async def classify_intent(query: str) -> str:
         
     # 2. Semantic fallback
     try:
-        prompt = f"Query: '{query}'\n\nClassify this query. If it asks for specific data points, commands, or facts, classify as FACTUAL. If it asks to compare things, find patterns, analyze history, or find commonalities, classify as ANALYTICAL."
+        prompt = f"Query: '{query}'\n\nClassify this query. If it asks about you (the system), what you can do, or is a greeting, classify as META. If it asks for specific data points, commands, or facts, classify as FACTUAL. If it asks to compare things, find patterns, analyze history, or find commonalities, classify as ANALYTICAL."
         res = await model_manager.generate_structured(
             task_type=TaskType.EXTRACTION,
             schema=IntentResponse,
             prompt=prompt,
-            system_instruction="You are an intent classifier. Respond with exactly FACTUAL or ANALYTICAL in the intent field."
+            system_instruction="You are an intent classifier. Respond with exactly FACTUAL, ANALYTICAL, or META in the intent field."
         )
         intent = res.intent.strip().upper()
-        if intent in ["FACTUAL", "ANALYTICAL"]:
+        if intent in ["FACTUAL", "ANALYTICAL", "META"]:
             return intent
         return "FACTUAL"
     except Exception as e:

@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Literal
 from google import genai
 from google.genai import types
 from pydantic import BaseModel, Field
@@ -13,7 +13,14 @@ logger = logging.getLogger(__name__)
 class ClaimExtraction(BaseModel):
     chunk_index: int = Field(description="Индекс чанка из предоставленного батча (число от 0).")
     content: str = Field(description="Утверждение на том же языке, что и исходный текст. Перевод запрещен.")
-    claim_type: str = Field(description="observation, fact, preference, habit, plan")
+    claim_type: Literal[
+        "fact",
+        "decision",
+        "habit",
+        "preference",
+        "observation",
+        "plan"
+    ] = Field("fact", description="Тип факта/знания")
     category: str = Field(description="sport, programming, study, work, or personal. Do NOT use General.")
     confidence: float = Field(description="Confidence score from 0.0 to 1.0")
 
@@ -46,6 +53,7 @@ SYSTEM_PROMPT = """Ты — аналитический модуль извлеч
 1. ЯЗЫК: Формулируй утверждения СТРОГО НА ТОМ ЖЕ ЯЗЫКЕ, на котором написан исходный текст. ПЕРЕВОД ЗАПРЕЩЕН.
 2. КАТЕГОРИИ (claims): Выбирай строго одну: sport, programming, study, work, personal.
 3. ИНДЕКС: Укажи правильный `chunk_index` для каждого факта и сущности.
+4. ТИПЫ: Поле `claim_type` определяет **форму** знания (fact, decision, habit, preference, observation, plan), а поле `category` — **тему** (devops, study, security, git, sport, programming, work, personal).
 """
 
 async def extract_claims_from_chunks(chunks_texts: List[str]) -> Optional[ClaimsList]:

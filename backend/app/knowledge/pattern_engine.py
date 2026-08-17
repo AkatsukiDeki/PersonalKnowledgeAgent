@@ -58,7 +58,10 @@ async def check_triggers_and_fetch_candidates(db: AsyncSession) -> List[Claim]:
         
         trigger = True
             
-        valid_types = ["habit", "observation", "preference", "plan"]
+        VALID_CLAIM_TYPES_FOR_PATTERNS = {
+            "habit", "observation", "preference", "plan", 
+            "decision", "approach", "rule", "fact"
+        }
         stmt_categories = select(Claim.category).distinct().where(Claim.category.isnot(None))
         res_categories = await db.execute(stmt_categories)
         categories = [row[0] for row in res_categories.all() if row[0]]
@@ -68,7 +71,11 @@ async def check_triggers_and_fetch_candidates(db: AsyncSession) -> List[Claim]:
             stmt = (
                 select(Claim)
                 .where(Claim.category == cat)
-                .where(Claim.claim_type.in_(valid_types))
+                .where(
+                    (Claim.claim_type.in_(VALID_CLAIM_TYPES_FOR_PATTERNS)) | 
+                    (Claim.claim_type.is_(None))
+                )
+                .where(Claim.confidence >= 0.70)
                 .order_by(desc(Claim.created_at))
                 .limit(10)
             )

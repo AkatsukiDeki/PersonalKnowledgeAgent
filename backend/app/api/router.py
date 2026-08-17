@@ -11,13 +11,14 @@ from .chat_import import router as chat_import_router
 from ..connectors.obsidian.router import router as obsidian_router
 
 from .insights import router as insights_router
-
 from .system import router as system_router
+from .endpoints import conversations
 
 api_router = APIRouter()
 
 api_router.include_router(sources_router)
 api_router.include_router(chat_router)
+api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
 api_router.include_router(claims_router)
 api_router.include_router(entities_router)
 api_router.include_router(graph_router)
