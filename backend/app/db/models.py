@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from pgvector.sqlalchemy import Vector
 from ..core.config import settings
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -216,3 +216,37 @@ class ImportJob(Base, TimestampedUUIDMixin):
     stats: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     completed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+
+
+class SystemError(Base):
+    __tablename__ = "system_errors"
+
+    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    fingerprint: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    
+    # Корреляционные идентификаторы
+    job_id: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    source_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
+    chunk_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True), nullable=True, index=True)
+    
+    # Классификация
+    stage: Mapped[str] = mapped_column(String(50), nullable=False, index=True)
+    error_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    exception_class: Mapped[str] = mapped_column(String(100), nullable=False)
+    location: Mapped[str] = mapped_column(String(255), nullable=False)
+    provider: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    
+    # Очищенное тело ошибки
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    traceback: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    context: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    
+    # Жизненный цикл
+    occurrences: Mapped[int] = mapped_column(Integer, default=1)
+    retry_count: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str] = mapped_column(String(20), default="open", index=True)
+    
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)

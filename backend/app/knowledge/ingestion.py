@@ -15,6 +15,7 @@ from .claims_extractor import extract_claims_from_chunks
 from .graph_extractor import extract_and_save_entities_batch, extract_and_save_relations_batch
 from ..core.config import settings
 from ..db.models import Claim
+from ..core.error_tracker import record_error, resolve_granular_error
 
 import uuid
 
@@ -83,6 +84,7 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             source.status = "completed"
             source.completed_at = datetime.utcnow()
             await db.commit()
+            await resolve_granular_error("chunking", source_id=source.id)
 
             # --- Phase 3A: Batch Extraction & Commit ---
             logger.info(f"[Ingestion] Source {source_id} completed chunking. Starting Batch Extraction.")
@@ -156,6 +158,7 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
                 except Exception as batch_err:
                     await db.rollback()
                     logger.error(f"[Ingestion] Failed to process extraction batch for source {source_id}: {batch_err}")
+                    await record_error(batch_err, "extraction", source_id=source.id, context={"batch_start_index": i})
             
             logger.info(f"[Ingestion] Extraction for {source_id} finished. {len(all_new_claims)} claims extracted.")
             # --- Phase 3D: Conflict Resolution & Timeline ---
@@ -165,40 +168,14 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             await resolve_conflicts_for_new_claims(db, all_new_claims)
             # --------------------------------------------------
             
-            # --- Phase 3C: Pattern Discovery Trigger ---
-            from sqlalchemy import text
-            # Check if we should trigger pattern discovery
-            check_stmt = text("""
-                WITH last_pattern AS (
-                    SELECT COALESCE(MAX(created_at), '1970-01-01'::timestamp) as max_date 
-                    FROM patterns
-                ),
-                new_claims AS (
-                    SELECT id, category FROM claims 
-                    WHERE created_at > (SELECT max_date FROM last_pattern)
-                )
-                SELECT count(id) as c_count, count(DISTINCT category) as cat_count
-                FROM new_claims
-            """)
-            res = await db.execute(check_stmt)
-            row = res.fetchone()
-            if row and row.c_count >= 10 and row.cat_count >= 2:
-                logger.info(f"[Ingestion] Threshold reached ({row.c_count} claims, {row.cat_count} domains). Triggering Pattern Discovery...")
-                import asyncio
-                
-                async def pattern_bg_task():
-                    from ..db.session import async_session_factory
-                    from .pattern_engine import run_pattern_discovery_pipeline
-                    async with async_session_factory() as pattern_db:
-                        await run_pattern_discovery_pipeline(pattern_db)
-                        
-                # Fire and forget pattern discovery
-                asyncio.create_task(pattern_bg_task())
             # --------------------------------------------------
-            # --------------------------------------------------
+
+            await resolve_granular_error("extraction", source_id=source.id)
+            await resolve_granular_error("ingestion", source_id=source.id)
 
         except Exception as e:
             await db.rollback()
+            await record_error(e, "ingestion", source_id=source_id)
             source = await db.get(Source, source_id)
             if source:
                 source.status = "failed"

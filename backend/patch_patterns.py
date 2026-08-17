@@ -6,6 +6,7 @@ from app.db.session import async_session_factory
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 async def run_patch():
     async with async_session_factory() as db:
         logger.info("Adding status column to patterns table...")
