@@ -268,6 +268,7 @@ class Pattern(Base, TimestampedUUIDMixin):
     pattern_type: Mapped[str] = mapped_column(String(50), nullable=False)
     domains: Mapped[List[str]] = mapped_column(ARRAY(String), nullable=False)
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    importance: Mapped[float] = mapped_column(Float, default=0.75, index=True)
     evidence_summary: Mapped[str] = mapped_column(Text, nullable=False)
     evidence_claim_ids: Mapped[List[uuid.UUID]] = mapped_column(ARRAY(PG_UUID(as_uuid=True)), default=list, nullable=False)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)

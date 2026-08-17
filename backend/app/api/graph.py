@@ -98,7 +98,10 @@ async def get_graph_topology(
             source_id=str(c.source_id) if getattr(c, 'source_id', None) else None,
             chunk_id=str(c.chunk_id) if getattr(c, 'chunk_id', None) else None,
             superseded_by=str(c.superseded_by) if getattr(c, 'superseded_by', None) else None,
-            content=c.content
+            content=c.content,
+            kind=getattr(c, 'kind', None),
+            domain=getattr(c, 'domain', None),
+            memory_score=getattr(c, 'memory_score', None)
         ))
         
         for e in c.entities:

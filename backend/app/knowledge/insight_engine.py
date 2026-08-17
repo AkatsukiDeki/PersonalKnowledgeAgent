@@ -15,6 +15,7 @@ class InsightExtraction(BaseModel):
     description: str = Field(description="Детальное описание выявленной закономерности, принципа или паттерна на основе фактов")
     pattern_type: str = Field(description="Тип паттерна: architectural_invariance, team_habit, process_rule, code_convention")
     confidence: float = Field(description="Уверенность в паттерне (от 0.0 до 1.0)")
+    importance: float = Field(description="Оценка важности и новизны инсайта (от 0.0 до 1.0, где 1.0 - фундаментальный сдвиг)")
     domains: List[str] = Field(description="Список доменов, к которым относится паттерн (например, 'backend', 'architecture')")
 
 async def generate_proactive_insights(db: AsyncSession) -> List[Pattern]:
@@ -77,7 +78,7 @@ async def generate_proactive_insights(db: AsyncSession) -> List[Pattern]:
         if cid not in visited:
             cluster = []
             dfs(cid, cluster)
-            if len(cluster) > 1: # Only components of size >= 2
+            if len(cluster) >= 3: # Only components of size >= 3
                 clusters.append(cluster)
 
     # 4. Fallback to Domain clustering for unvisited/isolated claims
@@ -107,7 +108,7 @@ async def generate_proactive_insights(db: AsyncSession) -> List[Pattern]:
     
     # 5. Synthesize Insights via LLM
     for i, cluster in enumerate(clusters):
-        if len(cluster) < 2:
+        if len(cluster) < 3:
             continue
             
         logger.info(f"[InsightEngine] Analyzing cluster {i+1}/{len(clusters)} with {len(cluster)} claims...")
@@ -128,13 +129,14 @@ Generate a single overarching pattern or principle (Insight) derived from these 
                 system_instruction="Analyze facts and synthesize high-level patterns."
             )
             
-            if insight_data.confidence >= 0.60:
+            if insight_data.confidence >= 0.80 and insight_data.importance >= 0.75:
                 evidence_ids = [c.id for c in cluster[:15]]
                 pattern = Pattern(
                     title=insight_data.title,
                     description=insight_data.description,
                     pattern_type=insight_data.pattern_type,
                     confidence=insight_data.confidence,
+                    importance=insight_data.importance,
                     domains=insight_data.domains if insight_data.domains else ["general", "insight"],
                     evidence_summary=f"Synthesized from {len(evidence_ids)} durable claims.",
                     evidence_claim_ids=evidence_ids,
@@ -143,6 +145,8 @@ Generate a single overarching pattern or principle (Insight) derived from these 
                 db.add(pattern)
                 new_patterns.append(pattern)
                 logger.info(f"[InsightEngine] Generated candidate insight: {pattern.title}")
+            else:
+                logger.info(f"[InsightEngine] Insight '{insight_data.title}' rejected by Actionability & Novelty Gate (conf={insight_data.confidence}, imp={insight_data.importance})")
                 
         except Exception as e:
             logger.error(f"[InsightEngine] Failed to synthesize insight for cluster: {e}")

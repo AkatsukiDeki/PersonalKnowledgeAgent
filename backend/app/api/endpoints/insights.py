@@ -18,6 +18,7 @@ class InsightResponse(BaseModel):
     description: str
     pattern_type: str
     confidence: float
+    importance: float
     domains: List[str]
     evidence_summary: str
     evidence_claim_ids: List[UUID]
@@ -29,10 +30,26 @@ class InsightResponse(BaseModel):
 
 @router.get("/pending", response_model=List[InsightResponse])
 async def get_pending_insights(db: AsyncSession = Depends(get_db)):
-    """Get list of candidate insights pending user review."""
-    stmt = select(Pattern).where(Pattern.status == "pending_review").order_by(Pattern.created_at.desc())
-    res = await db.execute(stmt)
-    return res.scalars().all()
+    """Retrieve all candidate insights awaiting user review."""
+    result = await db.execute(select(Pattern).where(Pattern.status == "pending_review").order_by(Pattern.created_at.desc()))
+    patterns = result.scalars().all()
+    
+    response_list = []
+    for p in patterns:
+        response_list.append({
+            "id": p.id,
+            "title": p.title,
+            "description": p.description,
+            "pattern_type": p.pattern_type,
+            "confidence": p.confidence or 0.8,
+            "importance": getattr(p, "importance", 0.75) or 0.75,
+            "domains": p.domains or [],
+            "evidence_summary": p.evidence_summary or "",
+            "evidence_claim_ids": p.evidence_claim_ids or [],
+            "status": p.status,
+            "created_at": p.created_at
+        })
+    return response_list
 
 @router.post("/{pattern_id}/accept", response_model=InsightResponse)
 async def accept_insight(pattern_id: UUID, db: AsyncSession = Depends(get_db)):
@@ -70,3 +87,38 @@ async def trigger_generate_insights(background_tasks: BackgroundTasks, db: Async
             
     background_tasks.add_task(bg_task)
     return {"status": "Insight generation queued"}
+
+class InsightEvidenceResponse(BaseModel):
+    pattern_id: UUID
+    title: str
+    evidence: List[dict]
+
+@router.get("/{pattern_id}/evidence", response_model=InsightEvidenceResponse)
+async def get_insight_evidence(pattern_id: UUID, db: AsyncSession = Depends(get_db)):
+    from app.db.models import Claim, Chunk, Source
+    
+    pattern = await db.get(Pattern, pattern_id)
+    if not pattern:
+        raise HTTPException(status_code=404, detail="Pattern not found")
+        
+    evidence_list = []
+    if pattern.evidence_claim_ids:
+        claims = (await db.execute(select(Claim).where(Claim.id.in_(pattern.evidence_claim_ids)))).scalars().all()
+        for c in claims:
+            chunk = await db.get(Chunk, c.chunk_id)
+            source = await db.get(Source, c.source_id)
+            evidence_list.append({
+                "claim_id": str(c.id),
+                "claim_text": c.content,
+                "kind": c.kind,
+                "confidence": c.confidence,
+                "chunk_text": chunk.text_content if chunk else "",
+                "source_title": source.title if source else "Unknown",
+                "source_importance": source.importance if source else "normal"
+            })
+            
+    return InsightEvidenceResponse(
+        pattern_id=pattern.id,
+        title=pattern.title,
+        evidence=evidence_list
+    )

@@ -33,6 +33,9 @@ class GraphNode(BaseModel):
     superseded_by: Optional[str] = None
     aliases: Optional[List[str]] = None
     content: Optional[str] = None
+    kind: Optional[str] = None
+    domain: Optional[str] = None
+    memory_score: Optional[float] = None
 
 class GraphLink(BaseModel):
     source: str

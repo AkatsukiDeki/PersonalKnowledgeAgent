@@ -8,10 +8,11 @@ interface Props {
   onOpenPatterns: () => void;
   onOpenGraph: () => void;
   onOpenConflicts: () => void;
-  activeView: 'chat' | 'graph' | 'conflicts';
+  onOpenTimeline: () => void;
+  activeView: 'chat' | 'graph' | 'conflicts' | 'insights' | 'timeline';
 }
 
-export function Sidebar({ onOpenUploader, onOpenManager, onOpenPatterns, onOpenGraph, onOpenConflicts, activeView }: Props) {
+export function Sidebar({ onOpenUploader, onOpenManager, onOpenPatterns, onOpenGraph, onOpenConflicts, onOpenTimeline, activeView }: Props) {
   const [unresolvedCount, setUnresolvedCount] = useState(0);
 
   useEffect(() => {
@@ -68,7 +69,10 @@ export function Sidebar({ onOpenUploader, onOpenManager, onOpenPatterns, onOpenG
             <Network size={16} /> Граф сущностей (L3)
           </button>
           
-          <button onClick={onOpenPatterns} className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium w-full text-left transition-colors">
+          <button 
+            onClick={onOpenPatterns} 
+            className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium w-full text-left transition-colors ${activeView === 'insights' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
+          >
             <Sparkles size={16} /> Инсайты (Паттерны)
           </button>
 
@@ -86,7 +90,10 @@ export function Sidebar({ onOpenUploader, onOpenManager, onOpenPatterns, onOpenG
             )}
           </button>
 
-          <button className="flex items-center gap-2.5 px-3 py-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 text-xs font-medium w-full text-left transition-colors mt-2">
+          <button 
+            onClick={onOpenTimeline} 
+            className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium w-full text-left transition-colors mt-2 ${activeView === 'timeline' ? 'bg-zinc-800 text-sky-400' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
+          >
             <Clock size={16} /> Таймлайн событий
           </button>
         </div>

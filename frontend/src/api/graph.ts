@@ -1,22 +1,47 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+import { fetchApi } from './client';
+
+export interface GraphNode {
+  id: string;
+  label: string;
+  group: 'claim' | 'entity';
+  category: string;
+  val: number;
+  is_active?: boolean;
+  confidence?: number;
+  created_at?: string;
+  source_id?: string;
+  chunk_id?: string;
+  superseded_by?: string;
+  aliases?: string[];
+  content?: string;
+  kind?: string;
+  domain?: string;
+  memory_score?: number;
+}
+
+export interface GraphLink {
+  source: string | GraphNode;
+  target: string | GraphNode;
+  type: string;
+  color?: string;
+  confidence?: number;
+  evidence_summary?: string;
+}
+
+export interface GraphData {
+  nodes: GraphNode[];
+  links: GraphLink[];
+}
 
 export const graphApi = {
-  getClaimGraph: async (claimId: string) => {
-    const res = await fetch(`${API_URL}/graph/claims/${claimId}`);
-    if (!res.ok) throw new Error('Failed to fetch graph');
-    return res.json();
-  },
-  getGraphTopology: async (category?: string, limit: number = 300, include_superseded: boolean = false) => {
-    const url = new URL(`${API_URL}/graph/topology`);
-    url.searchParams.append('limit', limit.toString());
-    if (include_superseded) {
-      url.searchParams.append('include_superseded', 'true');
-    }
+  getGraphData: (limit: number = 200, category?: string): Promise<GraphData> => {
+    let url = `/graph/topology?limit=${limit}&include_superseded=true`;
     if (category) {
-      url.searchParams.append('category', category);
+      url += `&category=${encodeURIComponent(category)}`;
     }
-    const res = await fetch(url.toString());
-    if (!res.ok) throw new Error('Failed to fetch topology');
-    return res.json();
+    return fetchApi<GraphData>(url);
+  },
+  getGraphTopology: (category?: string, limit: number = 200, showSuperseded?: boolean): Promise<GraphData> => {
+    return graphApi.getGraphData(limit, category);
   }
 };

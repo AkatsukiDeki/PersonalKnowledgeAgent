@@ -10,7 +10,7 @@ from .conflicts import router as conflicts_router
 from .chat_import import router as chat_import_router
 from ..connectors.obsidian.router import router as obsidian_router
 
-from .insights import router as insights_router
+from .endpoints.insights import router as insights_router
 from .system import router as system_router
 from .endpoints import conversations
 from .endpoints import timeline

@@ -8,11 +8,14 @@ import { KnowledgeGraphView } from './components/graph/KnowledgeGraphView';
 import { ConflictResolutionCenter } from './components/conflicts/ConflictResolutionCenter';
 import { ProactiveInsights } from './components/patterns/ProactiveInsights';
 
+import { InsightsWorkspace } from './pages/InsightsWorkspace';
+import { TimelineWorkspace } from './pages/TimelineWorkspace';
+import { GraphWorkspace } from './pages/GraphWorkspace';
+
 export function App() {
   const [isUploaderOpen, setIsUploaderOpen] = useState(false);
   const [isManagerOpen, setIsManagerOpen] = useState(false);
-  const [isPatternsOpen, setIsPatternsOpen] = useState(false);
-  const [activeView, setActiveView] = useState<'chat' | 'graph' | 'conflicts'>('chat');
+  const [activeView, setActiveView] = useState<'chat' | 'graph' | 'conflicts' | 'insights' | 'timeline'>('chat');
 
   return (
     <main className="h-screen w-screen bg-zinc-950 flex flex-col overflow-hidden">
@@ -32,22 +35,17 @@ export function App() {
         <Sidebar 
           onOpenUploader={() => setIsUploaderOpen(true)} 
           onOpenManager={() => setIsManagerOpen(true)}
-          onOpenPatterns={() => setIsPatternsOpen(true)}
+          onOpenPatterns={() => setActiveView('insights')}
           onOpenGraph={() => setActiveView('graph')}
           onOpenConflicts={() => setActiveView('conflicts')}
+          onOpenTimeline={() => setActiveView('timeline')}
           activeView={activeView}
         />
         <div className="flex-1 overflow-hidden relative flex flex-col">
           {activeView === 'chat' && <ChatWorkspace />}
           {activeView === 'graph' && (
-            <div className="w-full h-full relative">
-              <button 
-                onClick={() => setActiveView('chat')}
-                className="absolute top-4 right-4 z-50 bg-slate-800 text-slate-200 px-4 py-2 rounded shadow-md hover:bg-slate-700 transition-colors"
-              >
-                Close Graph
-              </button>
-              <KnowledgeGraphView />
+            <div className="w-full h-full bg-zinc-950">
+              <GraphWorkspace />
             </div>
           )}
           {activeView === 'conflicts' && (
@@ -59,6 +57,16 @@ export function App() {
                 Close Conflicts
               </button>
               <ConflictResolutionCenter />
+            </div>
+          )}
+          {activeView === 'insights' && (
+            <div className="w-full h-full bg-zinc-950">
+              <InsightsWorkspace />
+            </div>
+          )}
+          {activeView === 'timeline' && (
+            <div className="w-full h-full bg-zinc-950">
+              <TimelineWorkspace />
             </div>
           )}
         </div>
@@ -74,13 +82,6 @@ export function App() {
         isOpen={isManagerOpen}
         onClose={() => setIsManagerOpen(false)}
       />
-      
-      <PatternDashboard
-        isOpen={isPatternsOpen}
-        onClose={() => setIsPatternsOpen(false)}
-      />
-
-      <ProactiveInsights />
     </main>
   );
 }

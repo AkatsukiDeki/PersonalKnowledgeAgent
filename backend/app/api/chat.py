@@ -91,82 +91,65 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         min_rrf = settings.FACTUAL_MIN_TOP_K_RELEVANCE_RRF
 
     # 2. Retrieve [L1 CHUNK]
-    retrieved = await hybrid_search(
+    l1_chunks = await hybrid_search(
         db=db, 
         original_query=payload.query, 
         search_query=search_query, 
         limit=5,
         include_history=False
     )
-    for r in retrieved:
+    for r in l1_chunks:
         if not r["text_content"].startswith("[L1 CHUNK]"):
             r["text_content"] = f"[L1 CHUNK] {r['text_content']}"
     
-    # 3. Context Builder (L2, L3, L4)
-    if intent in ("ANALYTICAL", "TEMPORAL"):
+    # Context Layers
+    l2_claims = []
+    l3_patterns = []
+    l4_timeline = []
+    graph_context = []
+    
+    # 3. Context Builder (L2, L3, L4, Graph)
+    chunk_ids = [r["chunk_id"] for r in l1_chunks]
+    
+    if intent in ("ANALYTICAL", "TEMPORAL", "FACTUAL") and chunk_ids:
         # L2 Claims (Active)
-        chunk_ids = [r["chunk_id"] for r in retrieved]
-        if chunk_ids:
-            claims = (await db.execute(select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))).scalars().all()
-            for c in claims:
-                retrieved.append({
-                    "chunk_id": str(c.id),
-                    "source_id": str(c.source_id),
-                    "text_content": f"[L2 УТВЕРЖДЕНИЕ] {c.content}",
+        claims = (await db.execute(select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))).scalars().all()
+        claim_ids = [c.id for c in claims]
+        for c in claims:
+            l2_claims.append({
+                "chunk_id": str(c.id),
+                "source_id": str(c.source_id),
+                "text_content": f"=== [L2 УТВЕРЖДЕНИЕ] ===\n{c.content}",
+                "score": 1.0,
+                "rrf_score": 1.0,
+                "is_pattern": True
+            })
+            
+        # L4 Temporal/Conflict (ClaimRelations)
+        if claim_ids:
+            relations = (await db.execute(select(ClaimRelation).where(
+                (ClaimRelation.source_claim_id.in_(claim_ids)) | (ClaimRelation.target_claim_id.in_(claim_ids))
+            ).limit(5))).scalars().all()
+            for r in relations:
+                l4_timeline.append({
+                    "chunk_id": str(r.id),
+                    "source_id": str(r.source_claim_id),
+                    "text_content": f"=== [L4 СВЯЗЬ: {r.relation_type}] ===\n{r.evidence_summary}",
                     "score": 1.0,
                     "rrf_score": 1.0,
                     "is_pattern": True
                 })
-            
-            # L4 Temporal/Conflict (ClaimRelations)
-            claim_ids = [c.id for c in claims]
-            if claim_ids:
-                relations = (await db.execute(select(ClaimRelation).where(
-                    (ClaimRelation.source_claim_id.in_(claim_ids)) | (ClaimRelation.target_claim_id.in_(claim_ids))
-                ).limit(5))).scalars().all()
-                for r in relations:
-                    retrieved.append({
-                        "chunk_id": str(r.id),
-                        "source_id": str(r.source_claim_id),
-                        "text_content": f"[L4 СВЯЗЬ: {r.relation_type}] {r.evidence_summary}",
-                        "score": 1.0,
-                        "rrf_score": 1.0,
-                        "is_pattern": True
-                    })
 
         # Graph Traversal (Multi-Hop)
-        if intent in ("ANALYTICAL", "FACTUAL", "TEMPORAL") and chunk_ids:
+        if claim_ids:
             from ..knowledge.graph_traversal import GraphTraversalEngine
             traversal_engine = GraphTraversalEngine(db)
-            # In ANALYTICAL we defined claim_ids above. If FACTUAL we might not have it yet. Wait, in FACTUAL we don't have claim_ids!
-            # Let's get claim_ids for FACTUAL too if we didn't get them.
-            try:
-                _ = claim_ids
-            except UnboundLocalError:
-                claims_res = await db.execute(select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))
-                claim_ids = [c.id for c in claims_res.scalars().all()]
-                
-            if claim_ids:
-                graph_context_text = await traversal_engine.traverse_from_claims(claim_ids, max_depth=2, limit_neighbors=5)
-                if graph_context_text:
-                    retrieved.append({
-                        "chunk_id": "graph_traversal",
-                        "source_id": "graph_traversal",
-                        "text_content": f"[GRAPH CONTEXT]\n{graph_context_text}",
-                        "score": 1.0,
-                        "rrf_score": 1.0,
-                        "is_pattern": True
-                    })
-
-        # L3 Patterns
-        patterns = (await db.execute(select(Pattern).where(Pattern.confidence >= 0.70, Pattern.status == 'accepted').order_by(Pattern.created_at.desc()).limit(3))).scalars().all()
-        for p in patterns:
-            # check if evidence_claim_ids is not empty (as per spec)
-            if p.evidence_claim_ids:
-                retrieved.append({
-                    "chunk_id": str(p.id),
-                    "source_id": str(p.id),
-                    "text_content": f"[L3 ПАТТЕРН] {p.title}: {p.description}\nОбоснование: {p.evidence_summary}",
+            graph_context_text = await traversal_engine.traverse_from_claims(claim_ids, max_depth=2, limit_neighbors=5)
+            if graph_context_text:
+                graph_context.append({
+                    "chunk_id": "graph_traversal",
+                    "source_id": "graph_traversal",
+                    "text_content": f"=== [GRAPH CONTEXT] ===\n{graph_context_text}",
                     "score": 1.0,
                     "rrf_score": 1.0,
                     "is_pattern": True
@@ -191,7 +174,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     )
                 
                 timeline_context = "=== [L4 TIMELINE EVOLUTION] ===\n" + "\n".join(timeline_text_parts)
-                retrieved.append({
+                l4_timeline.append({
                     "chunk_id": "timeline_evolution",
                     "source_id": "timeline_evolution",
                     "text_content": timeline_context,
@@ -200,23 +183,59 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "is_pattern": True
                 })
 
+    # L3 Patterns
+    if intent in ("ANALYTICAL", "TEMPORAL", "FACTUAL"):
+        patterns = (await db.execute(select(Pattern).where(Pattern.confidence >= 0.70, Pattern.status == 'accepted').order_by(Pattern.created_at.desc()).limit(3))).scalars().all()
+        for p in patterns:
+            if p.evidence_claim_ids:
+                l3_patterns.append({
+                    "chunk_id": str(p.id),
+                    "source_id": str(p.id),
+                    "text_content": f"=== [L3 ПАТТЕРНЫ] ===\n{p.title}: {p.description}\nОбоснование: {p.evidence_summary}",
+                    "score": 1.0,
+                    "rrf_score": 1.0,
+                    "is_pattern": True
+                })
+
+    # Combine in strict hierarchy
+    retrieved = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
+    has_synth_layers = bool(l2_claims or l3_patterns or l4_timeline)
+
     # 4. Evidence Gate
-    def check_evidence(items: list) -> bool:
+    def check_evidence(items: list, has_synth: bool) -> bool:
         if intent == "META":
             return True
+            
+        if intent in ("ANALYTICAL", "TEMPORAL") and has_synth:
+            return True
+            
         if not items:
             return False
-        if any(r.get("is_pattern") for r in items):
-            return True # Bypass for analytical/patterns
-        top1_sim = max((float(r.get("similarity", 0.0)) for r in items), default=0.0)
-        if top1_sim < min_sim:
-            return False
-        relevant_chunks = [r for r in items if float(r.get("rrf_score", 0.0)) >= min_rrf]
-        if len(relevant_chunks) < settings.MIN_RELEVANT_CHUNKS:
-            return False
+            
+        # For FACTUAL or if no synth layers, we need valid L1/L2
+        l1_l2_items = [r for r in items if r["text_content"].startswith("[L1") or r.get("is_pattern") == False]
+        # In this implementation, only l1_chunks don't have is_pattern=True, but let's use the l1_chunks array directly
         return True
 
-    is_sufficient = check_evidence(retrieved)
+    # Real implementation of check_evidence
+    def check_evidence_strict() -> bool:
+        if intent == "META": return True
+        if intent in ("ANALYTICAL", "TEMPORAL") and has_synth_layers: return True
+        
+        if not l1_chunks:
+            return False
+            
+        top1_sim = max((float(r.get("similarity", 0.0)) for r in l1_chunks), default=0.0)
+        if top1_sim < min_sim:
+            return False
+            
+        relevant_chunks = [r for r in l1_chunks if float(r.get("rrf_score", 0.0)) >= min_rrf]
+        if len(relevant_chunks) < settings.MIN_RELEVANT_CHUNKS:
+            return False
+            
+        return True
+
+    is_sufficient = check_evidence_strict()
     return is_sufficient, retrieved, search_query, intent
 
 @router.post("/", response_model=ChatResponse)
