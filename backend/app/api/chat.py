@@ -134,6 +134,30 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                         "is_pattern": True
                     })
 
+        # Graph Traversal (Multi-Hop)
+        if intent in ("ANALYTICAL", "FACTUAL") and chunk_ids:
+            from ..knowledge.graph_traversal import GraphTraversalEngine
+            traversal_engine = GraphTraversalEngine(db)
+            # In ANALYTICAL we defined claim_ids above. If FACTUAL we might not have it yet. Wait, in FACTUAL we don't have claim_ids!
+            # Let's get claim_ids for FACTUAL too if we didn't get them.
+            try:
+                _ = claim_ids
+            except UnboundLocalError:
+                claims_res = await db.execute(select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))
+                claim_ids = [c.id for c in claims_res.scalars().all()]
+                
+            if claim_ids:
+                graph_context_text = await traversal_engine.traverse_from_claims(claim_ids, max_depth=2, limit_neighbors=5)
+                if graph_context_text:
+                    retrieved.append({
+                        "chunk_id": "graph_traversal",
+                        "source_id": "graph_traversal",
+                        "text_content": f"[GRAPH CONTEXT]\n{graph_context_text}",
+                        "score": 1.0,
+                        "rrf_score": 1.0,
+                        "is_pattern": True
+                    })
+
         # L3 Patterns
         patterns = (await db.execute(select(Pattern).where(Pattern.confidence >= 0.70, Pattern.status == 'accepted').order_by(Pattern.created_at.desc()).limit(3))).scalars().all()
         for p in patterns:
