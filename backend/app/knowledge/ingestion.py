@@ -1,0 +1,208 @@
+"""Ingest a document: create Source, chunk text, embed, and persist to DB."""
+
+from typing import Any, Dict, Optional, Sequence
+from sqlalchemy import func
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
+
+from ..db.models import Source, Chunk
+from .chunking import create_chunks
+from .embeddings.factory import get_embedding_provider
+from .claims_extractor import extract_claims_from_chunks
+from .graph_extractor import extract_and_save_entities_batch, extract_and_save_relations_batch
+from ..core.config import settings
+from ..db.models import Claim
+
+import uuid
+
+async def create_source_db(
+        db: AsyncSession,
+        title: str,
+        content: str,
+        source_type: str = "note",
+        meta_info: Optional[Dict[str, Any]] = None,
+) -> Source:
+    """Create a Source and persist to DB (fast path)."""
+    try:
+        new_source = Source(
+            title=title,
+            content=content,
+            source_type=source_type,
+            meta_info=meta_info or {},
+        )
+        db.add(new_source)
+        await db.commit()
+        await db.refresh(new_source)
+        return new_source
+    except Exception:
+        await db.rollback()
+        raise
+
+
+async def process_source_chunks_bg(source_id: uuid.UUID):
+    """Background task to split content into chunks, embed, and persist."""
+    from ..db.session import async_session_factory
+    async with async_session_factory() as db:
+        try:
+            source = await db.get(Source, source_id)
+            if not source:
+                return
+
+            source.status = "processing"
+            source.started_at = datetime.utcnow()
+            await db.commit()
+
+            raw_chunks: Sequence[str] = create_chunks(source.content)
+
+            provider = get_embedding_provider()
+            embeddings = await provider.embed_documents(list(raw_chunks)) if raw_chunks else []
+
+            db_chunks = []
+            for idx, (text_chunk, embedding_vector) in enumerate(zip(raw_chunks, embeddings)):
+                
+                if len(embedding_vector) != settings.EMBEDDING_DIMENSION:
+                    raise ValueError(f"Model dimension mismatch! Expected {settings.EMBEDDING_DIMENSION}, got {len(embedding_vector)}")
+
+                db_chunk = Chunk(
+                    source_id=source.id,
+                    chunk_index=idx,
+                    text_content=text_chunk,
+                    embedding=embedding_vector,
+                    tsv=func.to_tsvector("russian", text_chunk),
+                    version=source.version,
+                    is_active=True
+                )
+                db_chunks.append(db_chunk)
+
+            if db_chunks:
+                db.add_all(db_chunks)
+
+            source.status = "completed"
+            source.completed_at = datetime.utcnow()
+            await db.commit()
+
+            # --- Phase 3A: Batch Extraction & Commit ---
+            logger.info(f"[Ingestion] Source {source_id} completed chunking. Starting Batch Extraction.")
+            all_new_claims = []
+            
+            from .claims_extractor import extract_claims_from_chunks
+            from sqlalchemy.dialects.postgresql import insert as pg_insert
+            from ..db.models import Entity, claim_entities
+            
+            # Batch processing
+            batch_size = settings.EXTRACTION_BATCH_SIZE
+            for i in range(0, len(db_chunks), batch_size):
+                batch = db_chunks[i:i + batch_size]
+                batch_texts = [c.text_content for c in batch]
+                
+                try:
+                    claims_data = await extract_claims_from_chunks(batch_texts)
+                    if claims_data:
+                        # 1. Prepare and insert claims
+                        batch_claims = []
+                        for c in claims_data.claims:
+                            if c.chunk_index < 0 or c.chunk_index >= len(batch):
+                                continue
+                            chunk = batch[c.chunk_index]
+                            claim = Claim(
+                                source_id=source.id,
+                                chunk_id=chunk.id,
+                                content=c.content,
+                                claim_type=c.claim_type,
+                                category=c.category,
+                                confidence=c.confidence,
+                                meta_info={}
+                            )
+                            batch_claims.append(claim)
+                            
+                        if batch_claims:
+                            db.add_all(batch_claims)
+                            await db.flush() # get IDs for claims
+                            
+                            # Map original chunk index to the first claim found for it (for entity mapping)
+                            chunk_idx_to_claim = {c.chunk_index: claim for c, claim in zip(claims_data.claims, batch_claims) if c.chunk_index >= 0 and c.chunk_index < len(batch)}
+                            
+                            # 2. Prepare and insert entities
+                            for ent in claims_data.entities:
+                                if ent.chunk_index not in chunk_idx_to_claim:
+                                    continue
+                                claim = chunk_idx_to_claim[ent.chunk_index]
+                                
+                                stmt = pg_insert(Entity).values(
+                                    canonical_name=ent.canonical_name.strip().lower(),
+                                    entity_type=ent.entity_type,
+                                    description=ent.description,
+                                    aliases=ent.aliases,
+                                    meta_info={}
+                                )
+                                stmt = stmt.on_conflict_do_update(
+                                    index_elements=["canonical_name"],
+                                    set_=dict(description=stmt.excluded.description)
+                                ).returning(Entity.id)
+                                
+                                res = await db.execute(stmt)
+                                inserted_id = res.scalar_one_or_none()
+                                if inserted_id:
+                                    await db.execute(claim_entities.insert().values(claim_id=claim.id, entity_id=inserted_id))
+                            
+                            # Note: Relations are currently skipped from intra-batch until ClaimRelation logic is updated
+                            
+                            all_new_claims.extend(batch_claims)
+                            
+                    await db.commit()
+                except Exception as batch_err:
+                    await db.rollback()
+                    logger.error(f"[Ingestion] Failed to process extraction batch for source {source_id}: {batch_err}")
+            
+            logger.info(f"[Ingestion] Extraction for {source_id} finished. {len(all_new_claims)} claims extracted.")
+            # --- Phase 3D: Conflict Resolution & Timeline ---
+            # Check for conflicts between newly extracted claims and existing ones
+            logger.info(f"[Ingestion] Running conflict resolver for {len(all_new_claims)} new claims...")
+            from .conflict_resolver import resolve_conflicts_for_new_claims
+            await resolve_conflicts_for_new_claims(db, all_new_claims)
+            # --------------------------------------------------
+            
+            # --- Phase 3C: Pattern Discovery Trigger ---
+            from sqlalchemy import text
+            # Check if we should trigger pattern discovery
+            check_stmt = text("""
+                WITH last_pattern AS (
+                    SELECT COALESCE(MAX(created_at), '1970-01-01'::timestamp) as max_date 
+                    FROM patterns
+                ),
+                new_claims AS (
+                    SELECT id, category FROM claims 
+                    WHERE created_at > (SELECT max_date FROM last_pattern)
+                )
+                SELECT count(id) as c_count, count(DISTINCT category) as cat_count
+                FROM new_claims
+            """)
+            res = await db.execute(check_stmt)
+            row = res.fetchone()
+            if row and row.c_count >= 10 and row.cat_count >= 2:
+                logger.info(f"[Ingestion] Threshold reached ({row.c_count} claims, {row.cat_count} domains). Triggering Pattern Discovery...")
+                import asyncio
+                
+                async def pattern_bg_task():
+                    from ..db.session import async_session_factory
+                    from .pattern_engine import run_pattern_discovery_pipeline
+                    async with async_session_factory() as pattern_db:
+                        await run_pattern_discovery_pipeline(pattern_db)
+                        
+                # Fire and forget pattern discovery
+                asyncio.create_task(pattern_bg_task())
+            # --------------------------------------------------
+            # --------------------------------------------------
+
+        except Exception as e:
+            await db.rollback()
+            source = await db.get(Source, source_id)
+            if source:
+                source.status = "failed"
+                source.error_message = str(e)
+                source.completed_at = datetime.utcnow()
+                await db.commit()
+            logger.error(f"[Ingestion] Background chunking failed for {source_id}: {e}")

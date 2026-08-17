@@ -1,0 +1,61 @@
+version: "3.8"
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: pka_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pka_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pka_password}
+      POSTGRES_DB: ${POSTGRES_DB:-personal_ai}
+    ports:
+      - "5434:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pka_user} -d ${POSTGRES_DB:-personal_ai}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pka-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pka_backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-pka_user}:${POSTGRES_PASSWORD:-pka_password}@db:5432/${POSTGRES_DB:-personal_ai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - pka-network
+    ports:
+      - "8000:8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pka_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - pka-network
+
+networks:
+  pka-network:
+    driver: bridge
+
+volumes:
+  pgdata:

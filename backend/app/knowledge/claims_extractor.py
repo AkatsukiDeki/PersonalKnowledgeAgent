@@ -1,0 +1,70 @@
+import json
+import logging
+from typing import List, Dict, Any, Optional
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
+
+from ..core.config import settings
+from ..core.llm import model_manager, TaskType
+
+logger = logging.getLogger(__name__)
+
+class ClaimExtraction(BaseModel):
+    chunk_index: int = Field(description="Индекс чанка из предоставленного батча (число от 0).")
+    content: str = Field(description="Утверждение на том же языке, что и исходный текст. Перевод запрещен.")
+    claim_type: str = Field(description="observation, fact, preference, habit, plan")
+    category: str = Field(description="sport, programming, study, work, or personal. Do NOT use General.")
+    confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+
+class ExtractedEntity(BaseModel):
+    chunk_index: int = Field(description="Индекс чанка (от 0), к которому относится эта сущность")
+    canonical_name: str = Field(description="Normalized canonical name in lowercase")
+    entity_type: str = Field(description="technology, activity, concept, goal, or person")
+    description: str = Field(description="Short description of the entity")
+    aliases: List[str] = Field(description="Other names or abbreviations")
+
+class ExtractedRelation(BaseModel):
+    source_chunk_index: int = Field(description="Индекс чанка источника")
+    target_chunk_index: int = Field(description="Индекс целевого чанка")
+    relation_type: str = Field(description="supports, contradicts, related_to, derived_from")
+    evidence_summary: str = Field(description="Краткое объяснение связи")
+    confidence: float = Field(..., ge=0.0, le=1.0)
+
+class ClaimsList(BaseModel):
+    claims: List[ClaimExtraction]
+    entities: List[ExtractedEntity]
+    relations: List[ExtractedRelation]
+
+SYSTEM_PROMPT = """Ты — аналитический модуль извлечения данных из текста.
+Твоя задача — проанализировать предоставленный батч текстовых чанков (каждый помечен индексом [CHUNK <id>]) и извлечь:
+1. Список проверяемых атомарных фактов (claims).
+2. Ключевые сущности (entities).
+3. Связи между фактами внутри батча (relations).
+
+СТРОГИЕ ПРАВИЛА:
+1. ЯЗЫК: Формулируй утверждения СТРОГО НА ТОМ ЖЕ ЯЗЫКЕ, на котором написан исходный текст. ПЕРЕВОД ЗАПРЕЩЕН.
+2. КАТЕГОРИИ (claims): Выбирай строго одну: sport, programming, study, work, personal.
+3. ИНДЕКС: Укажи правильный `chunk_index` для каждого факта и сущности.
+"""
+
+async def extract_claims_from_chunks(chunks_texts: List[str]) -> Optional[ClaimsList]:
+    """Extract claims, entities, and intra-batch relations from a batch of text chunks."""
+    if not chunks_texts:
+        return None
+        
+    prompt = "Пожалуйста, извлеки данные из следующих чанков:\n\n"
+    for i, text in enumerate(chunks_texts):
+        prompt += f"[CHUNK {i}]\n{text}\n\n"
+        
+    try:
+        response_model = await model_manager.generate_structured(
+            task_type=TaskType.EXTRACTION,
+            schema=ClaimsList,
+            prompt=prompt,
+            system_instruction=SYSTEM_PROMPT
+        )
+        return response_model
+    except Exception as e:
+        logger.error(f"[ClaimsExtractor] Failed to extract batch: {e}")
+        return None
