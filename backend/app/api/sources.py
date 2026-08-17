@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..db.models import Source, Chunk, Claim
 from ..db.session import get_db
 from ..knowledge.ingestion import create_source_db, process_source_chunks_bg
+from ..knowledge.file_ingestion import ingest_file_revision
 from ..schemas.source import SourceCreate, SourceResponse, SourceDetailResponse, SourceUpdateContent
 from ..parsers.factory import parse_file, is_supported, get_file_extension
 
@@ -34,6 +35,7 @@ async def upload_source(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     domain: Optional[str] = Form(None),
+    importance: str = Form("normal"),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a file, parse it, persist the original binary, and kick off the ingestion pipeline."""
@@ -47,45 +49,44 @@ async def upload_source(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # 1. Parse the file into normalised text + metadata
-    try:
-        normalised_text, file_type, metadata = parse_file(file.filename, file_bytes)
-    except Exception as e:
-        logger.error(f"[Sources] Parse error for {file.filename}: {e}")
-        raise HTTPException(status_code=422, detail=f"Failed to parse file: {e}")
-
-    # 2. Save the original binary to disk
-    source_id = uuid.uuid4()
+    # 1. Save the original binary to disk temporarily or permanently
+    # (We can use a random uuid for the temp path if it's new, but we'll store it under Source ID)
     _ensure_data_dir()
-    source_dir = os.path.join(DATA_DIR, str(source_id))
+    
+    # 2. Call idempotency ingestion
+    title = os.path.splitext(file.filename)[0]
+    
+    try:
+        source, ingest_status = await ingest_file_revision(
+            db=db,
+            filename=file.filename,
+            file_bytes=file_bytes,
+            title=title,
+            domain=domain,
+            importance=importance,
+            original_path=None # We will update this below
+        )
+    except Exception as e:
+        logger.error(f"[Sources] Parse/Ingest error for {file.filename}: {e}")
+        raise HTTPException(status_code=422, detail=f"Failed to ingest file: {e}")
+
+    # Now that we have a source_id, save the file properly
+    source_dir = os.path.join(DATA_DIR, str(source.id))
     os.makedirs(source_dir, exist_ok=True)
     original_path = os.path.join(source_dir, file.filename)
-    with open(original_path, "wb") as f:
-        f.write(file_bytes)
+    if ingest_status != "unchanged":
+        with open(original_path, "wb") as f:
+            f.write(file_bytes)
+        source.original_file_path = original_path
+        await db.commit()
 
-    # 3. Persist the Source record
-    title = os.path.splitext(file.filename)[0]
-    new_source = Source(
-        id=source_id,
-        title=title,
-        content=normalised_text,
-        raw_content=normalised_text,
-        source_type="file",
-        file_type=file_type,
-        original_file_path=original_path,
-        domain=domain,
-        version=1,
-        metadata_info=metadata,
-        meta_info={},
-    )
-    db.add(new_source)
-    await db.commit()
-    await db.refresh(new_source)
+    # 3. Kick off background ingestion only if changed
+    if ingest_status != "unchanged":
+        background_tasks.add_task(process_source_chunks_bg, source.id)
 
-    # 4. Kick off background ingestion (chunking → embedding → claims → relations)
-    background_tasks.add_task(process_source_chunks_bg, new_source.id)
-
-    return _enrich_source_response(new_source, 0, 0)
+    chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
+    claims_count = await _count(db, Claim, Claim.source_id == source.id)
+    return _enrich_source_response(source, chunks_count, claims_count)
 
 
 # ──────────────────────────────────────────────
@@ -95,21 +96,29 @@ async def upload_source(
 @router.post("", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED, include_in_schema=False)
 async def create_source(payload: SourceCreate, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
     try:
-        source = await create_source_db(
+        source, ingest_status = await ingest_file_revision(
             db=db,
+            filename=payload.title + ".txt",
+            file_bytes=payload.content.encode('utf-8'),
             title=payload.title,
-            content=payload.content,
-            source_type=payload.source_type,
-            meta_info=payload.meta_info,
+            domain=payload.meta_info.get("domain", None),
+            importance=payload.meta_info.get("importance", "normal"),
+            original_path=None
         )
-        # Set raw_content = content for text sources
-        source.raw_content = payload.content
-        source.file_type = "txt"
+        
+        source.source_type = payload.source_type
+        if payload.meta_info:
+            source.meta_info = payload.meta_info
+            
         await db.commit()
         await db.refresh(source)
 
-        background_tasks.add_task(process_source_chunks_bg, source.id)
-        return _enrich_source_response(source, 0, 0)
+        if ingest_status != "unchanged":
+            background_tasks.add_task(process_source_chunks_bg, source.id)
+            
+        chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
+        claims_count = await _count(db, Claim, Claim.source_id == source.id)
+        return _enrich_source_response(source, chunks_count, claims_count)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

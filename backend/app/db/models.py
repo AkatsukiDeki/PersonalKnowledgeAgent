@@ -14,20 +14,20 @@ class Source(Base, TimestampedUUIDMixin):
     __tablename__ = "sources"
 
     title: Mapped[str] = mapped_column(String, nullable=False)
-    content: Mapped[str] = mapped_column(Text, nullable=False)
     source_type: Mapped[str] = mapped_column(String, default="note", nullable=False)
     importance: Mapped[str] = mapped_column(String(20), default="normal", index=True) # temporary, normal, important, critical
-    file_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    domain: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
+    is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
-    # Source Manager 2.0 fields
-    file_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)  # md, txt, pdf, docx, xlsx, csv, json
+    # Legacy / deprecated fields (to be cleaned up or used for transition)
+    content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    file_hash: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)
+    file_type: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
+    raw_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     original_file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    raw_content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)  # normalised editable representation
-    domain: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)  # programming, sport, study, etc.
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
-    is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False, index=True)  # soft delete
-    metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)  # file size, pages, etc.
+    is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False, index=True)
 
     status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -40,6 +40,32 @@ class Source(Base, TimestampedUUIDMixin):
         cascade="all, delete-orphan",
         lazy="selectin"
     )
+    revisions: Mapped[List["FileRevision"]] = relationship(
+        "FileRevision",
+        back_populates="source",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+        order_by="FileRevision.version.desc()"
+    )
+
+class FileRevision(Base, TimestampedUUIDMixin):
+    __tablename__ = "file_revisions"
+
+    source_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    file_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(100), default="text/plain", nullable=False)
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    
+    source: Mapped["Source"] = relationship("Source", back_populates="revisions")
+    chunks: Mapped[List["Chunk"]] = relationship("Chunk", back_populates="revision", cascade="all, delete-orphan")
+
 
 
 class Chunk(Base, TimestampedUUIDMixin):
@@ -49,6 +75,12 @@ class Chunk(Base, TimestampedUUIDMixin):
         PG_UUID(as_uuid=True),
         ForeignKey("sources.id", ondelete="CASCADE"),
         nullable=False
+    )
+    revision_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("file_revisions.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True
     )
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text_content: Mapped[str] = mapped_column(Text, nullable=False)
@@ -66,6 +98,7 @@ class Chunk(Base, TimestampedUUIDMixin):
     metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     source: Mapped["Source"] = relationship("Source", back_populates="chunks")
+    revision: Mapped[Optional["FileRevision"]] = relationship("FileRevision", back_populates="chunks")
 
     __table_args__ = (
         Index(
