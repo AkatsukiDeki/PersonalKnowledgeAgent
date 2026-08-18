@@ -87,7 +87,7 @@ class GraphTraversalEngine:
                     claim_entities.c.claim_id.notin_(visited_claims)
                 )
                 entity_claims_rels = (await self.db.execute(stmt_entity_claims)).all()
-                for link, e_claim in entity_claims_rels:
+                for c_id, ent_id, e_claim in entity_claims_rels:
                      edges.append({
                         "source_id": None, # Transitive, not direct
                         "target_claim": e_claim,

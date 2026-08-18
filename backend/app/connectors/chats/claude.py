@@ -16,13 +16,19 @@ class ClaudeParser(BaseChatParser):
 
     async def parse(self, file_path: str) -> AsyncIterator[UnifiedConversation]:
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            from app.knowledge.parsers.chat_parser import safe_decode
+            with open(file_path, "rb") as f:
+                raw_bytes = f.read()
+            text = safe_decode(raw_bytes)
+            data = json.loads(text)
         except Exception as e:
             raise UnsupportedExportSchemaError(f"Failed to read JSON: {e}")
 
         if not isinstance(data, list):
-            raise UnsupportedExportSchemaError("Expected a list of conversations")
+            if isinstance(data, dict):
+                data = [data]
+            else:
+                raise UnsupportedExportSchemaError("Expected a list of conversations or a single conversation object")
 
         for conv in data:
             if "chat_messages" not in conv:

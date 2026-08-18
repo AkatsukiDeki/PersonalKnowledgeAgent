@@ -5,27 +5,51 @@ import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
 import { Send } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
+import { ConversationMemory, Decision } from '../../types/chat';
+import { ConversationExperiencePanel } from './ConversationExperiencePanel';
 
 export function ChatWorkspace() {
   const [messages, setMessages] = useState<Message[]>([]);
+  const [memory, setMemory] = useState<ConversationMemory | null>(null);
+  const [decisions, setDecisions] = useState<Decision[]>([]);
+  
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCooldown, setIsCooldown] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState('');
   
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [showExperiencePanel, setShowExperiencePanel] = useState(true);
 
   useEffect(() => {
     if (activeConvId) {
       loadConversation(activeConvId);
     } else {
       setMessages([]);
+      setMemory(null);
+      setDecisions([]);
     }
   }, [activeConvId]);
+
+  useEffect(() => {
+    const handleOpenConv = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const convId = customEvent.detail?.conversationId;
+      if (convId) {
+        setActiveConvId(convId);
+      }
+    };
+    window.addEventListener('openConversation', handleOpenConv);
+    return () => window.removeEventListener('openConversation', handleOpenConv);
+  }, []);
 
   const loadConversation = async (id: string) => {
     try {
       const data = await conversationsApi.getConversationDetail(id);
+      
+      setMemory(data.memory || null);
+      setDecisions(data.decisions || []);
+      
       const formatted = data.messages.map(m => {
         let r: 'user' | 'assistant' = 'user';
         if (m.role === 'assistant' || m.role === 'system') r = 'assistant';
@@ -156,7 +180,20 @@ export function ChatWorkspace() {
         onSelectConversation={setActiveConvId}
         onNewConversation={handleNewConversation}
       />
-      <div className="flex flex-col flex-1 h-full bg-zinc-950 text-zinc-100">
+      <div className="flex flex-col flex-1 h-full bg-zinc-950 text-zinc-100 min-w-0">
+        
+        {/* Header */}
+        {activeConvId && (memory || decisions.length > 0) && (
+          <div className="h-12 border-b border-zinc-800 flex items-center justify-end px-4 shrink-0">
+            <button 
+              onClick={() => setShowExperiencePanel(!showExperiencePanel)}
+              className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${showExperiencePanel ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}
+            >
+              {showExperiencePanel ? 'Скрыть опыт' : 'Показать опыт'}
+            </button>
+          </div>
+        )}
+
         <div className="flex-1 overflow-y-auto p-4 max-w-3xl w-full mx-auto">
           {messages.length === 0 ? (
             <div className="h-full flex flex-col gap-4 items-center justify-center text-zinc-500 text-sm">
@@ -178,7 +215,7 @@ export function ChatWorkspace() {
           </div>
         )}
 
-        <div className="p-4 border-t border-zinc-800 max-w-3xl w-full mx-auto">
+        <div className="p-4 border-t border-zinc-800 max-w-3xl w-full mx-auto shrink-0">
           <form onSubmit={handleSubmit} className="flex gap-2">
             <input
               type="text"
@@ -198,6 +235,10 @@ export function ChatWorkspace() {
           </form>
         </div>
       </div>
+      
+      {showExperiencePanel && (memory || decisions.length > 0) && (
+        <ConversationExperiencePanel memory={memory} decisions={decisions} />
+      )}
     </div>
   );
 }

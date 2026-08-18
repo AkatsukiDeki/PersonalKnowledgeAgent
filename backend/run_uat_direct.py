@@ -42,7 +42,9 @@ async def run_uat():
             results_md += f"### Q{i}: {q}\n"
             try:
                 payload = ChatRequest(query=q, history=history)
-                is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload)
+                from app.knowledge.intent_classifier import classify_intent
+                intent = await classify_intent(payload.query)
+                is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload, intent)
                 
                 results_md += f"**Intent:** {intent} | **Condensed Query:** {search_query} | **Sufficient Evidence:** {is_sufficient}\n"
                 

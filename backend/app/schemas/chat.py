@@ -20,3 +20,4 @@ class Citation(BaseModel):
 class ChatResponse(BaseModel):
     answer: str
     citations: List[Citation]
+    metrics: Optional[dict] = None

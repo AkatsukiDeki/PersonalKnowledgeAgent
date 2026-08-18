@@ -7,6 +7,8 @@ interface GraphSidebarFiltersProps {
   onSelectCategory: (category: string | null) => void;
   showSuperseded: boolean;
   onToggleSuperseded: () => void;
+  showDecisions: boolean;
+  onToggleDecisions: () => void;
 }
 
 export const GraphSidebarFilters: React.FC<GraphSidebarFiltersProps> = ({
@@ -14,7 +16,9 @@ export const GraphSidebarFilters: React.FC<GraphSidebarFiltersProps> = ({
   selectedCategory,
   onSelectCategory,
   showSuperseded,
-  onToggleSuperseded
+  onToggleSuperseded,
+  showDecisions,
+  onToggleDecisions
 }) => {
   const categories = useMemo(() => {
     const cats = new Set<string>();
@@ -26,8 +30,9 @@ export const GraphSidebarFilters: React.FC<GraphSidebarFiltersProps> = ({
     return Array.from(cats).sort();
   }, [nodes]);
   
-  const activeCount = nodes.filter(n => n.is_active).length;
+  const activeCount = nodes.filter(n => n.is_active && n.group !== 'decision').length;
   const supersededCount = nodes.filter(n => !n.is_active && n.group === 'claim').length;
+  const decisionCount = nodes.filter(n => n.group === 'decision').length;
 
   return (
     <div className="absolute top-4 left-4 z-10 w-64 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-lg p-4 flex flex-col gap-4">
@@ -42,10 +47,21 @@ export const GraphSidebarFilters: React.FC<GraphSidebarFiltersProps> = ({
           <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${showSuperseded ? 'left-5' : 'left-1'}`} />
         </button>
       </div>
+
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium text-slate-700 dark:text-slate-300">Show Decisions</span>
+        <button 
+          onClick={onToggleDecisions}
+          className={`w-10 h-6 rounded-full transition-colors relative ${showDecisions ? 'bg-rose-500' : 'bg-slate-300 dark:bg-slate-700'}`}
+        >
+          <span className={`absolute top-1 w-4 h-4 rounded-full bg-white transition-all ${showDecisions ? 'left-5' : 'left-1'}`} />
+        </button>
+      </div>
       
-      <div className="text-xs text-slate-500 flex justify-between">
-        <span>Active nodes: {activeCount}</span>
+      <div className="text-xs text-slate-500 grid grid-cols-2 gap-2">
+        <span>Active: {activeCount}</span>
         <span>Superseded: {supersededCount}</span>
+        <span className="col-span-2">Decisions: {decisionCount}</span>
       </div>
       
       <hr className="border-slate-200 dark:border-slate-800" />

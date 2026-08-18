@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { InsightEvidenceResponse, insightsApi } from '../../api/insights';
-import { X, Loader2, GitCommit, FileText, ChevronDown, ChevronUp } from 'lucide-react';
+import { X, Loader2, GitCommit, MessageSquare } from 'lucide-react';
+import { Search } from 'lucide-react';
 
 interface Props {
   patternId: string | null;
@@ -10,7 +11,6 @@ interface Props {
 export function EvidenceInspectorModal({ patternId, onClose }: Props) {
   const [evidenceData, setEvidenceData] = useState<InsightEvidenceResponse | null>(null);
   const [loading, setLoading] = useState(false);
-  const [expandedChunks, setExpandedChunks] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (!patternId) return;
@@ -23,8 +23,11 @@ export function EvidenceInspectorModal({ patternId, onClose }: Props) {
 
   if (!patternId) return null;
 
-  const toggleChunk = (id: string) => {
-    setExpandedChunks(prev => ({ ...prev, [id]: !prev[id] }));
+  const handleOpenChat = (conversationId: string) => {
+    onClose();
+    window.dispatchEvent(new CustomEvent('openConversation', {
+      detail: { conversationId }
+    }));
   };
 
   return (
@@ -60,48 +63,42 @@ export function EvidenceInspectorModal({ patternId, onClose }: Props) {
             </div>
           ) : (
             <div className="relative before:absolute before:inset-y-0 before:left-[19px] before:w-[2px] before:bg-zinc-800 pl-2">
-              {evidenceData?.evidence.map((ev, i) => {
-                const isExpanded = expandedChunks[ev.claim_id];
-                return (
-                  <div key={ev.claim_id} className="relative mb-6 last:mb-0 group">
-                    {/* Node Dot */}
-                    <div className="absolute left-0 top-1.5 w-6 h-6 rounded-full bg-zinc-900 border-2 border-zinc-700 flex items-center justify-center z-10 group-hover:border-indigo-500 transition-colors">
-                      <GitCommit size={12} className="text-zinc-500 group-hover:text-indigo-400" />
-                    </div>
-                    
-                    <div className="ml-10">
-                      <div className="bg-zinc-800/50 border border-zinc-800 rounded-lg p-4">
-                        <div className="flex items-center gap-2 mb-2">
+              {evidenceData?.evidence.map((ev, i) => (
+                <div key={ev.id} className="relative mb-6 last:mb-0 group">
+                  {/* Node Dot */}
+                  <div className="absolute left-0 top-1.5 w-6 h-6 rounded-full bg-zinc-900 border-2 border-zinc-700 flex items-center justify-center z-10 group-hover:border-indigo-500 transition-colors">
+                    <GitCommit size={12} className="text-zinc-500 group-hover:text-indigo-400" />
+                  </div>
+                  
+                  <div className="ml-10">
+                    <div className="bg-zinc-800/50 border border-zinc-800 rounded-lg p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
                           <span className="px-2 py-0.5 bg-zinc-700 text-zinc-300 rounded text-[10px] uppercase font-bold tracking-wider">
-                            {ev.kind}
+                            {ev.type}
                           </span>
-                          <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
-                            Source: {ev.source_title}
-                          </span>
+                          {ev.domain && (
+                            <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
+                              Domain: {ev.domain}
+                            </span>
+                          )}
                         </div>
-                        <p className="text-zinc-200 text-sm font-medium leading-relaxed">
-                          {ev.claim_text}
-                        </p>
-
-                        <button 
-                          onClick={() => toggleChunk(ev.claim_id)}
-                          className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-indigo-400 mt-3 font-medium transition-colors"
-                        >
-                          <FileText size={14} />
-                          {isExpanded ? 'Скрыть исходный текст' : 'Показать исходный текст'}
-                          {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                        </button>
-
-                        {isExpanded && (
-                          <div className="mt-3 p-3 bg-zinc-950 rounded-md border border-zinc-800 text-zinc-400 text-xs font-mono whitespace-pre-wrap leading-relaxed">
-                            {ev.chunk_text}
-                          </div>
+                        {ev.conversation_id && (
+                          <button 
+                            onClick={() => handleOpenChat(ev.conversation_id!)}
+                            className="flex items-center gap-1.5 text-xs text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 px-2 py-1 rounded transition-colors font-medium"
+                          >
+                            <MessageSquare size={14} /> Открыть диалог
+                          </button>
                         )}
                       </div>
+                      <p className="text-zinc-200 text-sm font-medium leading-relaxed">
+                        {ev.text}
+                      </p>
                     </div>
                   </div>
-                );
-              })}
+                </div>
+              ))}
             </div>
           )}
         </div>
@@ -109,6 +106,3 @@ export function EvidenceInspectorModal({ patternId, onClose }: Props) {
     </div>
   );
 }
-
-// Just to keep icons working if Search wasn't imported from lucide-react above
-import { Search } from 'lucide-react';

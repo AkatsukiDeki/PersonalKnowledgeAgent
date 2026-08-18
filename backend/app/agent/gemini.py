@@ -11,9 +11,9 @@ import logging
 logger = logging.getLogger(__name__)
 
 from ..core.config import settings
-from app.core.llm import tenacity_retry_llm, tenacity_retry_reasoning_llm, model_manager
+from ..core.llm import tenacity_retry_llm, tenacity_retry_reasoning_llm, model_manager
 from .prompts import RAG_SYSTEM_INSTRUCTION, QUERY_REWRITE_PROMPT, build_rag_prompt
-from app.core.ollama_client import OllamaClient
+from ..core.ollama_client import OllamaClient
 
 _client = None
 

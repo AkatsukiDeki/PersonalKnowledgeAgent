@@ -5,7 +5,7 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from .deps import get_db
-from ..db.models import Claim, ClaimRelation
+from ..db.models import Claim, ClaimRelation, Decision
 from ..schemas.graph import GraphClaimResponse, GraphTopologyResponse, GraphNode, GraphLink
 
 router = APIRouter(prefix="/graph", tags=["Graph"])
@@ -53,6 +53,7 @@ async def get_claim_graph(
     )
 
 @router.get("/topology", response_model=GraphTopologyResponse)
+@router.get("", response_model=GraphTopologyResponse)
 async def get_graph_topology(
     category: str = None,
     limit: int = 150,
@@ -136,4 +137,28 @@ async def get_graph_topology(
             evidence_summary=rel.evidence_summary
         ))
         
+    # Fetch decisions and project them into the graph
+    dec_stmt = select(Decision)
+    # optionally filter by include_superseded if needed
+    if not include_superseded:
+        dec_stmt = dec_stmt.where(Decision.status != "superseded")
+    decisions = (await db.execute(dec_stmt)).scalars().all()
+    
+    for d in decisions:
+        nodes.append(GraphNode(
+            id=str(d.id),
+            label=d.decision[:50] + "..." if len(d.decision) > 50 else d.decision,
+            group="decision",
+            category="decision",
+            val=5,
+            is_active=d.status != "superseded",
+            content=d.decision,
+            rationale=d.rationale,
+            alternatives=d.alternatives,
+            memory_id=str(d.memory_id)
+        ))
+        # If we wanted to link decisions to claims or entities, we would do it here.
+        # For now, decisions will just be floating nodes, or they can be linked to the conversation memory node.
+        # Since the graph might not have conversation memory nodes, we'll just return the decision nodes.
+
     return GraphTopologyResponse(nodes=nodes, links=links)

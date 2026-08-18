@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict
 
 class SourceBase(BaseModel):
     title: str
-    content: str
+    content: Optional[str] = None
     source_type: str = "note"
     meta_info: Dict[str, Any] = {}
 
@@ -18,7 +18,7 @@ class SourceCreate(SourceBase):
 class SourceResponse(BaseModel):
     id: uuid.UUID
     title: str
-    content: str
+    content: Optional[str] = None
     source_type: str
     meta_info: Dict[str, Any] = {}
 

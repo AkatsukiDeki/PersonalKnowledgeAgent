@@ -17,8 +17,11 @@ class GeminiParser(BaseChatParser):
     async def parse(self, file_path: str) -> AsyncIterator[UnifiedConversation]:
         # Google Takeout Gemini/Bard JSON format is usually a list of conversations/turns
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            from app.knowledge.parsers.chat_parser import safe_decode
+            with open(file_path, "rb") as f:
+                raw_bytes = f.read()
+            text = safe_decode(raw_bytes)
+            data = json.loads(text)
         except Exception as e:
             raise UnsupportedExportSchemaError(f"Failed to read JSON: {e}")
 

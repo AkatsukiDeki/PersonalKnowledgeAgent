@@ -3,7 +3,7 @@ import { NodeObject, LinkObject } from 'react-force-graph-2d';
 export interface GraphNode extends NodeObject {
   id: string;
   label: string;
-  group: 'claim' | 'entity';
+  group: string;
   category?: string;
   is_active?: boolean;
   confidence?: number;
@@ -14,6 +14,9 @@ export interface GraphNode extends NodeObject {
   aliases?: string[];
   content?: string;
   val?: number;
+  rationale?: string;
+  alternatives?: string[];
+  memory_id?: string;
 }
 
 export interface GraphLink extends LinkObject {

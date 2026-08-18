@@ -1,10 +1,12 @@
-"""Chat endpoint — retrieves context and generates a RAG response."""
-
 import json
+import uuid
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
+import logging
+
+logger = logging.getLogger(__name__)
 
 from .deps import get_db
 from ..agent.gemini import generate_rag_response, stream_rag_response
@@ -13,7 +15,8 @@ from ..knowledge.query_condenser import rewrite_query
 from ..knowledge.retrieval import hybrid_search
 from ..schemas.chat import ChatRequest, ChatResponse, Citation
 from ..core.config import settings
-from ..db.models import Pattern, Claim, ClaimRelation, Conversation, Message, ConversationMemory, TimelineEvent
+from ..db.models import Pattern, Claim, ClaimRelation, Conversation, ConversationMessage, ConversationMemory, Decision, TimelineEvent
+from sqlalchemy.orm import selectinload
 from ..knowledge.conversation_memory import maybe_trigger_memory_update
 from datetime import datetime
 from uuid import UUID
@@ -67,9 +70,9 @@ async def get_thread_context(db: AsyncSession, conversation_id: UUID, limit_mess
     thread_state_str = "\n".join(thread_state_parts)
 
     msg_stmt = (
-        select(Message)
-        .where(Message.conversation_id == conversation_id)
-        .order_by(Message.created_at.desc())
+        select(ConversationMessage)
+        .where(ConversationMessage.conversation_id == conversation_id)
+        .order_by(ConversationMessage.created_at.desc())
         .limit(limit_messages)
     )
     res = await db.execute(msg_stmt)
@@ -107,6 +110,62 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     l3_patterns = []
     l4_timeline = []
     graph_context = []
+    
+    # ML Enrichment Searches (Decision & Memory)
+    from app.knowledge.embeddings.factory import get_embedding_provider
+    provider = get_embedding_provider()
+    query_emb = None
+    try:
+        emb_res = await provider.embed_query(search_query)
+        query_emb = emb_res
+    except Exception as e:
+        logger.warning(f"Failed to embed query for ML Enrichment: {e}")
+        
+    if query_emb and len(query_emb) == settings.EMBEDDING_DIMENSION:
+        # 1. Search Decisions
+        dec_stmt = (
+            select(Decision, Decision.embedding.cosine_distance(query_emb).label("distance"))
+            .where(Decision.embedding.is_not(None))
+            .order_by(Decision.embedding.cosine_distance(query_emb))
+            .limit(5)
+        )
+        dec_res = await db.execute(dec_stmt)
+        for dec, dist in dec_res.all():
+            sim = 1.0 - float(dist)
+            if sim < 0.45: continue
+            
+            # Temporal Resolution Logic
+            score_multiplier = 1.5 if dec.status == "active" else 0.1
+            final_sim = sim * score_multiplier
+            
+            l2_claims.append({
+                "chunk_id": str(dec.id),
+                "source_id": str(dec.memory_id),
+                "text_content": f"=== [DECISION ({dec.status})] ===\nDecision: {dec.decision}\nRationale: {dec.rationale}\nAlternatives: {', '.join(dec.alternatives)}",
+                "similarity": final_sim,
+                "rrf_score": final_sim,
+                "is_pattern": True
+            })
+            
+        # 2. Search Conversation Memories
+        mem_stmt = (
+            select(ConversationMemory, ConversationMemory.embedding.cosine_distance(query_emb).label("distance"))
+            .where(ConversationMemory.embedding.is_not(None))
+            .order_by(ConversationMemory.embedding.cosine_distance(query_emb))
+            .limit(3)
+        )
+        mem_res = await db.execute(mem_stmt)
+        for mem, dist in mem_res.all():
+            sim = 1.0 - float(dist)
+            if sim < 0.3: continue
+            l2_claims.append({
+                "chunk_id": str(mem.id),
+                "source_id": str(mem.conversation_id),
+                "text_content": f"=== [CONVERSATION MEMORY] ===\nProblem: {mem.problem}\nAttempts: {', '.join(mem.attempts)}\nOutcome: {mem.outcome}",
+                "similarity": sim,
+                "rrf_score": sim,
+                "is_pattern": True
+            })
     
     # 3. Context Builder (L2, L3, L4, Graph)
     chunk_ids = [r["chunk_id"] for r in l1_chunks]
@@ -147,8 +206,8 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
             graph_context_text = await traversal_engine.traverse_from_claims(claim_ids, max_depth=2, limit_neighbors=5)
             if graph_context_text:
                 graph_context.append({
-                    "chunk_id": "graph_traversal",
-                    "source_id": "graph_traversal",
+                    "chunk_id": str(uuid.uuid4()),
+                    "source_id": str(uuid.uuid4()),
                     "text_content": f"=== [GRAPH CONTEXT] ===\n{graph_context_text}",
                     "score": 1.0,
                     "rrf_score": 1.0,
@@ -158,7 +217,9 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         # Timeline Evolution (L4)
         if intent in ("TEMPORAL", "ANALYTICAL") and claim_ids:
             timeline_events = (await db.execute(
-                select(TimelineEvent).where(
+                select(TimelineEvent)
+                .options(selectinload(TimelineEvent.old_claim), selectinload(TimelineEvent.new_claim))
+                .where(
                     (TimelineEvent.old_claim_id.in_(claim_ids)) | 
                     (TimelineEvent.new_claim_id.in_(claim_ids))
                 ).order_by(TimelineEvent.timestamp.desc()).limit(5)
@@ -175,8 +236,8 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 
                 timeline_context = "=== [L4 TIMELINE EVOLUTION] ===\n" + "\n".join(timeline_text_parts)
                 l4_timeline.append({
-                    "chunk_id": "timeline_evolution",
-                    "source_id": "timeline_evolution",
+                    "chunk_id": str(uuid.uuid4()),
+                    "source_id": str(uuid.uuid4()),
                     "text_content": timeline_context,
                     "score": 1.0,
                     "rrf_score": 1.0,
@@ -201,42 +262,40 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     retrieved = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
     has_synth_layers = bool(l2_claims or l3_patterns or l4_timeline)
 
-    # 4. Evidence Gate
-    def check_evidence(items: list, has_synth: bool) -> bool:
-        if intent == "META":
-            return True
-            
-        if intent in ("ANALYTICAL", "TEMPORAL") and has_synth:
-            return True
-            
-        if not items:
-            return False
-            
-        # For FACTUAL or if no synth layers, we need valid L1/L2
-        l1_l2_items = [r for r in items if r["text_content"].startswith("[L1") or r.get("is_pattern") == False]
-        # In this implementation, only l1_chunks don't have is_pattern=True, but let's use the l1_chunks array directly
-        return True
+    # 4. Evidence Gate Strict
+    # Фильтрация по порогу уверенности
+    RELEVANCE_THRESHOLD = 0.45
+    
+    # We only keep items that explicitly pass similarity, or are structural (graph context)
+    # But we MUST have at least one high-similarity source chunk or decision.
+    has_high_sim = any(
+        float(item.get("similarity", 0.0)) >= RELEVANCE_THRESHOLD 
+        for item in retrieved if "similarity" in item
+    )
+    
+    valid_evidence = [
+        item for item in retrieved 
+        if "similarity" not in item or float(item["similarity"]) >= RELEVANCE_THRESHOLD
+    ]
 
-    # Real implementation of check_evidence
-    def check_evidence_strict() -> bool:
-        if intent == "META": return True
-        if intent in ("ANALYTICAL", "TEMPORAL") and has_synth_layers: return True
-        
-        if not l1_chunks:
-            return False
+    is_sufficient = True
+    if intent not in ("META",):
+        if not has_high_sim:
+            is_sufficient = False
+        else:
+            # check the top 1 similarity among those that actually have it
+            sims = [float(r["similarity"]) for r in retrieved if "similarity" in r]
+            top1_sim = max(sims) if sims else 0.0
             
-        top1_sim = max((float(r.get("similarity", 0.0)) for r in l1_chunks), default=0.0)
-        if top1_sim < min_sim:
-            return False
-            
-        relevant_chunks = [r for r in l1_chunks if float(r.get("rrf_score", 0.0)) >= min_rrf]
-        if len(relevant_chunks) < settings.MIN_RELEVANT_CHUNKS:
-            return False
-            
-        return True
+            if top1_sim < min_sim:
+                is_sufficient = False
+                
+            # For factual, we need enough chunks
+            relevant_chunks = [r for r in valid_evidence if r.get("source_id")] # actual chunks
+            if intent == "FACTUAL" and len(relevant_chunks) < settings.MIN_RELEVANT_CHUNKS:
+                is_sufficient = False
 
-    is_sufficient = check_evidence_strict()
-    return is_sufficient, retrieved, search_query, intent
+    return is_sufficient, valid_evidence if valid_evidence else retrieved, search_query, intent
 
 @router.post("/", response_model=ChatResponse)
 @router.post("", response_model=ChatResponse, include_in_schema=False)
@@ -269,7 +328,7 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 conv.updated_at = datetime.utcnow()
                 await db.commit()
                 background_tasks.add_task(maybe_trigger_memory_update, conv.id)
-            return ChatResponse(answer=answer, citations=[])
+            return ChatResponse(answer=answer, citations=[], metrics=metrics)
 
         is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload, intent)
         
@@ -281,8 +340,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
 
         if thread_state:
             retrieved.insert(0, {
-                "chunk_id": "thread_state",
-                "source_id": "thread_state",
+                "chunk_id": str(uuid.uuid4()),
+                "source_id": str(uuid.uuid4()),
                 "text_content": f"[CONVERSATION LOCAL STATE]\n{thread_state}",
                 "score": 1.0,
                 "rrf_score": 1.0
@@ -291,9 +350,12 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
         answer = await generate_rag_response(query=payload.query, retrieved_chunks=retrieved)
 
         metrics = {
-            "l1_count": len([r for r in retrieved if r["text_content"].startswith("[L1")]),
-            "l2_count": len([r for r in retrieved if r["text_content"].startswith("[L2")]),
-            "l3_count": len([r for r in retrieved if r["text_content"].startswith("[L3")])
+            "l1_count": int(len([r for r in retrieved if r["text_content"].startswith("[L1")])),
+            "l2_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L2")])),
+            "l3_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L3")])),
+            "l4_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L4")])),
+            "graph_hops": int(len([r for r in retrieved if r["text_content"].startswith("=== [GRAPH")])),
+            "intent": str(intent)
         }
 
         if conv:
@@ -335,11 +397,12 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 text_snippet=item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item["text_content"],
                 score=round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
             )
-            for item in retrieved if str(item["chunk_id"]) != "thread_state"
+            for item in retrieved if not item["text_content"].startswith("[CONVERSATION LOCAL STATE]")
         ]
 
-        return ChatResponse(answer=answer, citations=citations)
+        return ChatResponse(answer=answer, citations=citations, metrics=metrics)
     except Exception as e:
+        logger.exception("RAG pipeline failed")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/stream")
@@ -390,8 +453,8 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
 
             if thread_state:
                 retrieved.insert(0, {
-                    "chunk_id": "thread_state",
-                    "source_id": "thread_state",
+                    "chunk_id": str(uuid.uuid4()),
+                    "source_id": str(uuid.uuid4()),
                     "text_content": f"[CONVERSATION LOCAL STATE]\n{thread_state}",
                     "score": 1.0,
                     "rrf_score": 1.0
@@ -404,7 +467,7 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
                     "text_snippet": item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item["text_content"],
                     "score": round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
                 }
-                for item in retrieved if str(item["chunk_id"]) != "thread_state"
+                for item in retrieved if not item["text_content"].startswith("[CONVERSATION LOCAL STATE]")
             ]
             yield f"event: citations\ndata: {json.dumps(citations_data, ensure_ascii=False)}\n\n"
 
@@ -431,9 +494,12 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
                         conv.title = payload.query[:30] + ("..." if len(payload.query) > 30 else "")
 
                 metrics = {
-                    "l1_count": len([r for r in retrieved if r["text_content"].startswith("[L1")]),
-                    "l2_count": len([r for r in retrieved if r["text_content"].startswith("[L2")]),
-                    "l3_count": len([r for r in retrieved if r["text_content"].startswith("[L3")])
+                    "l1_count": int(len([r for r in retrieved if r["text_content"].startswith("[L1")])),
+                    "l2_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L2")])),
+                    "l3_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L3")])),
+                    "l4_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L4")])),
+                    "graph_hops": int(len([r for r in retrieved if r["text_content"].startswith("=== [GRAPH")])),
+                    "intent": str(intent)
                 }
                 user_msg = Message(conversation_id=conv.id, role="user", content=payload.query)
                 assistant_msg = Message(
@@ -451,6 +517,7 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
 
             yield "event: done\ndata: [DONE]\n\n"
         except Exception as exc:
+            logger.exception("RAG streaming pipeline failed")
             yield f"event: error\ndata: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(

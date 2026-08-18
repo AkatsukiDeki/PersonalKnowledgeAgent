@@ -13,3 +13,22 @@ export interface Message {
   timestamp: string;
   isStreaming?: boolean;
 }
+
+export interface Decision {
+  id: string;
+  decision: string;
+  rationale?: string;
+  alternatives?: string[];
+  status: string;
+  created_at: string;
+}
+
+export interface ConversationMemory {
+  id: string;
+  problem: string;
+  context?: string;
+  attempts?: string[];
+  decision_summary: string;
+  outcome?: string;
+  importance?: number;
+}

@@ -5,6 +5,7 @@ import { conflictsApi } from '../../api/conflicts';
 interface Props {
   onOpenUploader: () => void;
   onOpenManager: () => void;
+  onOpenChat: () => void;
   onOpenPatterns: () => void;
   onOpenGraph: () => void;
   onOpenConflicts: () => void;
@@ -12,7 +13,7 @@ interface Props {
   activeView: 'chat' | 'graph' | 'conflicts' | 'insights' | 'timeline';
 }
 
-export function Sidebar({ onOpenUploader, onOpenManager, onOpenPatterns, onOpenGraph, onOpenConflicts, onOpenTimeline, activeView }: Props) {
+export function Sidebar({ onOpenUploader, onOpenManager, onOpenChat, onOpenPatterns, onOpenGraph, onOpenConflicts, onOpenTimeline, activeView }: Props) {
   const [unresolvedCount, setUnresolvedCount] = useState(0);
 
   useEffect(() => {
@@ -53,7 +54,7 @@ export function Sidebar({ onOpenUploader, onOpenManager, onOpenPatterns, onOpenG
 
           <button 
             className={`flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium w-full text-left transition-colors ${activeView === 'chat' ? 'bg-zinc-800 text-emerald-400' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'}`}
-            onClick={() => {/* handled in App currently by default */}}
+            onClick={onOpenChat}
           >
             <MessageSquare size={16} /> Диалог (RAG Chat)
           </button>

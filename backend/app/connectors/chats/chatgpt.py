@@ -16,13 +16,25 @@ class ChatGPTParser(BaseChatParser):
 
     async def parse(self, file_path: str) -> AsyncIterator[UnifiedConversation]:
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
+            from app.knowledge.parsers.chat_parser import safe_decode
+            with open(file_path, "rb") as f:
+                raw_bytes = f.read()
+            text = safe_decode(raw_bytes)
+            data = json.loads(text)
         except Exception as e:
             raise UnsupportedExportSchemaError(f"Failed to read JSON: {e}")
 
         if not isinstance(data, list):
-            raise UnsupportedExportSchemaError("Expected a list of conversations")
+            if isinstance(data, dict):
+                # If it's a dict wrapping a list, or just a single conversation dict
+                if "conversations" in data and isinstance(data["conversations"], list):
+                    data = data["conversations"]
+                elif "mapping" in data:
+                    data = [data]
+                else:
+                    data = [data]
+            else:
+                raise UnsupportedExportSchemaError("Expected a list of conversations or a single conversation object")
 
         for conv in data:
             if "mapping" not in conv or "current_node" not in conv:

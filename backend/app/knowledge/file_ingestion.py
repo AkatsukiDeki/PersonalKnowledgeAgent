@@ -37,6 +37,9 @@ async def ingest_file_revision(
 
     status = "created"
 
+    # Parse content
+    normalised_text, file_type, metadata = parse_file(filename, file_bytes)
+
     if source:
         # Check for exact duplicate in this source
         rev_stmt = select(FileRevision).where(FileRevision.source_id == source.id, FileRevision.file_hash == file_hash)
@@ -69,22 +72,27 @@ async def ingest_file_revision(
             source_type="file",
             importance=importance,
             domain=domain,
-            version=1
+            version=1,
+            content=normalised_text,
+            raw_content=normalised_text,
+            file_type=file_type,
+            meta_info=metadata,
+            metadata_info=metadata,
+            status="pending"
         )
         db.add(source)
 
     await db.flush() # ensure source gets an id if new
 
-    # Parse content
-    normalised_text, file_type, metadata = parse_file(filename, file_bytes)
-
     # Update deprecated fields on Source for temporary backwards compatibility
-    source.file_type = file_type
-    source.raw_content = normalised_text
-    source.content = normalised_text
-    source.original_file_path = original_path
-    source.metadata_info = metadata
-    source.status = "pending"
+    if status == "updated":
+        source.file_type = file_type
+        source.raw_content = normalised_text
+        source.content = normalised_text
+        source.original_file_path = original_path
+        source.meta_info = metadata
+        source.metadata_info = metadata
+        source.status = "pending"
 
     # Create new file revision
     new_rev = FileRevision(

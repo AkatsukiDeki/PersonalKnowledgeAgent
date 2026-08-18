@@ -25,7 +25,7 @@ class ChatImportService:
             await db.commit()
 
             # 1. Unzip if necessary
-            target_json = file_path
+            target_jsons = []
             temp_dir = f"/tmp/pka_extract_{job_id}"
             
             if file_path.endswith('.zip'):
@@ -33,11 +33,32 @@ class ChatImportService:
                 with zipfile.ZipFile(file_path, 'r') as zip_ref:
                     zip_ref.extractall(temp_dir)
                 
-                # find conversations.json
-                for root, _, files in os.walk(temp_dir):
-                    if "conversations.json" in files:
-                        target_json = os.path.join(root, "conversations.json")
-                        break
+                if provider == "gemini":
+                    for root, _, files in os.walk(temp_dir):
+                        for f in files:
+                            if f.endswith(".txt") and "Conversation History" in root:
+                                target_jsons.append(os.path.join(root, f))
+                            elif f.endswith(".json") and not f.startswith("__MACOSX"):
+                                target_jsons.append(os.path.join(root, f))
+                else:
+                    json_files = []
+                    for root, _, files in os.walk(temp_dir):
+                        for f in files:
+                            if f.endswith(".json") and not f.startswith("__MACOSX"):
+                                json_files.append(os.path.join(root, f))
+                    
+                    if not json_files:
+                        raise ValueError("No .json file found in the uploaded archive.")
+                        
+                    target_json = next((f for f in json_files if os.path.basename(f) == "conversations.json"), None)
+                    if not target_json:
+                        target_json = max(json_files, key=os.path.getsize)
+                    target_jsons = [target_json]
+                    
+                if not target_jsons:
+                    raise ValueError(f"No suitable files found in the uploaded archive for provider {provider}.")
+            else:
+                target_jsons = [file_path]
             
             if provider == "chatgpt":
                 parser = ChatGPTParser()
@@ -64,42 +85,43 @@ class ChatImportService:
             
             previews = []
             
-            async for conv in parser.parse(target_json):
-                total_convs += 1
-                topics = list(segmenter.segment(conv))
-                total_topics += len(topics)
-                
-                # Check deduplication
-                stmt = select(Source).where(
-                    text("metadata_info->>'provider' = :provider AND metadata_info->>'external_id' = :ext_id")
-                ).params(provider=provider, ext_id=conv.external_id)
-                
-                existing = (await db.execute(stmt)).scalars().first()
-                
-                status = "new"
-                if existing:
-                    existing_hash = existing.metadata_info.get("conversation_hash")
-                    if existing_hash == conv.conversation_hash:
-                        status = "skipped"
-                        skipped_convs += 1
+            for target_json in target_jsons:
+                async for conv in parser.parse(target_json):
+                    total_convs += 1
+                    topics = list(segmenter.segment(conv))
+                    total_topics += len(topics)
+                    
+                    # Check deduplication
+                    stmt = select(Source).where(
+                        text("metadata_info->>'provider' = :provider AND metadata_info->>'external_id' = :ext_id")
+                    ).params(provider=provider, ext_id=conv.external_id)
+                    
+                    existing = (await db.execute(stmt)).scalars().first()
+                    
+                    status = "new"
+                    if existing:
+                        existing_hash = existing.metadata_info.get("conversation_hash")
+                        if existing_hash == conv.conversation_hash:
+                            status = "skipped"
+                            skipped_convs += 1
+                        else:
+                            status = "updated"
+                            updated_convs += 1
                     else:
-                        status = "updated"
-                        updated_convs += 1
-                else:
-                    new_convs += 1
+                        new_convs += 1
 
-                domains["personal"] += len(topics)
+                    domains["personal"] += len(topics)
 
-                previews.append({
-                    "external_id": conv.external_id,
-                    "title": conv.title,
-                    "status": status,
-                    "domain": "personal",
-                    "topics_count": len(topics),
-                    "messages_count": len(conv.messages),
-                    "conversation_hash": conv.conversation_hash,
-                    "topics_data": [t.model_dump() for t in topics]  # Cache the segmented data
-                })
+                    previews.append({
+                        "external_id": conv.external_id,
+                        "title": conv.title,
+                        "status": status,
+                        "domain": "personal",
+                        "topics_count": len(topics),
+                        "messages_count": len(conv.messages),
+                        "conversation_hash": conv.conversation_hash,
+                        "topics_data": [t.model_dump() for t in topics]  # Cache the segmented data
+                    })
 
             summary = {
                 "total_conversations": total_convs,
@@ -167,7 +189,7 @@ class ChatImportService:
                 source = Source(
                     title=p["title"],
                     content="Chat Export",
-                    source_kind="chat_export",
+                    source_type="chat_export",
                     domain=p["domain"],
                     metadata_info={
                         "provider": job.provider,

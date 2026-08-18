@@ -1,0 +1,36 @@
+[
+  {
+    "id": "fact-01",
+    "category": "Factual",
+    "question": "Какая база данных используется в проекте для векторного поиска?",
+    "expected_semantics": "В проекте используется база данных PostgreSQL с расширением pgvector для векторного поиска.",
+    "must_reject": false
+  },
+  {
+    "id": "temp-01",
+    "category": "Temporal",
+    "question": "Какой веб-фреймворк сейчас актуален для бэкенда?",
+    "expected_semantics": "В качестве бэкенд-фреймворка выбран FastAPI благодаря его скорости и асинхронности, в то время как от Django отказались.",
+    "must_reject": false
+  },
+  {
+    "id": "exp-01",
+    "category": "Analytical",
+    "question": "Почему не подошла первая схема работы с LLM в локальной среде?",
+    "expected_semantics": "Оригинальная модель не справлялась с генерацией JSON и часто падала по таймауту.",
+    "must_reject": false
+  },
+  {
+    "id": "cross-01",
+    "category": "Cross-Domain",
+    "question": "Как связаны Ollama и Qwen2.5 в нашем проекте?",
+    "expected_semantics": "Мы перешли на использование модели Qwen2.5 через провайдера Ollama, что решило проблемы структурированной генерации JSON.",
+    "must_reject": false
+  },
+  {
+    "id": "neg-01",
+    "category": "Negative",
+    "question": "Какой брокер сообщений мы выбрали: Kafka или RabbitMQ?",
+    "must_reject": true
+  }
+]

@@ -1,0 +1,83 @@
+- id: Q001
+  category: factual
+  query: "Какой стек используется в проекте StudyMatch?"
+  expected:
+    target_claims: ["React", "Django"]
+    required_layers: ["L1"]
+    forbidden_tokens: ["INSUFFICIENT_DATA"]
+    max_latency_ms: 3000
+
+- id: Q011
+  category: factual
+  query: "Как называется алгоритм, который я использую для балансировки нагрузки?"
+  expected:
+    target_claims: ["Round Robin"]
+    required_layers: ["L1"]
+    forbidden_tokens: ["INSUFFICIENT_DATA"]
+    max_latency_ms: 3000
+
+- id: Q021
+  category: cross_domain
+  query: "Что общего между моим подходом к программированию и тренировкам?"
+  expected:
+    min_domains: 2
+    required_layers: ["L3"]
+    target_pattern_keywords: ["дисциплина", "системность", "итерации"]
+
+- id: Q031
+  category: cross_domain
+  query: "Как концепция 'Разделяй и властвуй' применяется у меня в книгах и коде?"
+  expected:
+    min_domains: 2
+    required_layers: ["L3"]
+    target_pattern_keywords: ["модульность", "главы"]
+
+- id: Q041
+  category: temporal
+  query: "Какой инструмент сборки и управления зависимостями в Python я использовал раньше и на что перешел?"
+  expected:
+    required_layers: ["L4"]
+    timeline_chain:
+      old_claim_keyword: "pip"
+      new_claim_keyword: "uv"
+      relation: "supersedes"
+
+- id: Q042
+  category: temporal
+  query: "Почему я отказался от монолита в пользу микросервисов?"
+  expected:
+    required_layers: ["L4"]
+    timeline_chain:
+      relation: "supersedes"
+
+- id: Q051
+  category: graph
+  query: "Какие компоненты бэкенда связаны с PostgreSQL через асинхронный драйвер?"
+  expected:
+    required_layers: ["GRAPH"]
+    min_hops: 2
+    target_nodes: ["SQLAlchemy", "FastAPI"]
+
+- id: Q052
+  category: graph
+  query: "Что зависит от модуля кэширования Redis в моем проекте?"
+  expected:
+    required_layers: ["GRAPH"]
+    min_hops: 1
+    target_nodes: ["Redis"]
+
+- id: Q061
+  category: negative
+  query: "Какая у меня любимая СУБД для Rust-проектов?"
+  expected:
+    must_trigger_evidence_gate: true
+    expected_response_token: "INSUFFICIENT_DATA"
+    allow_llm_generation: false
+
+- id: Q062
+  category: negative
+  query: "Где я храню свои пароли от криптовалютных кошельков?"
+  expected:
+    must_trigger_evidence_gate: true
+    expected_response_token: "INSUFFICIENT_DATA"
+    allow_llm_generation: false

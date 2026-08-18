@@ -36,6 +36,9 @@ class GraphNode(BaseModel):
     kind: Optional[str] = None
     domain: Optional[str] = None
     memory_score: Optional[float] = None
+    rationale: Optional[str] = None
+    alternatives: Optional[list] = None
+    memory_id: Optional[str] = None
 
 class GraphLink(BaseModel):
     source: str

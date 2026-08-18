@@ -24,7 +24,7 @@ export const NodeInspector: React.FC<NodeInspectorProps> = ({
     <div className="absolute top-0 right-0 h-full w-80 bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col z-20 overflow-y-auto animate-in slide-in-from-right">
       <div className="p-4 border-b border-slate-200 dark:border-slate-800 flex justify-between items-center sticky top-0 bg-white/90 dark:bg-slate-900/90 backdrop-blur">
         <h2 className="font-bold text-slate-800 dark:text-slate-100 capitalize">
-          {node.group === 'entity' ? 'Entity Details' : 'Claim Details'}
+          {node.group === 'entity' ? 'Entity Details' : node.group === 'decision' ? 'Decision Details' : 'Claim Details'}
         </h2>
         <button onClick={onClose} className="p-1 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md text-slate-500">
           <X size={18} />
@@ -66,6 +66,27 @@ export const NodeInspector: React.FC<NodeInspectorProps> = ({
              </div>
           )}
         </div>
+
+        {node.group === 'decision' && (
+          <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-100 dark:border-slate-800">
+            {node.rationale && (
+              <div className="mb-3">
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Rationale</h4>
+                <p className="text-sm text-slate-700 dark:text-slate-300 italic">"{node.rationale}"</p>
+              </div>
+            )}
+            {node.alternatives && node.alternatives.length > 0 && (
+              <div>
+                <h4 className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-1">Alternatives Rejected</h4>
+                <ul className="list-disc pl-4 space-y-1">
+                  {node.alternatives.map((alt, idx) => (
+                    <li key={idx} className="text-sm text-slate-600 dark:text-slate-400">{alt}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        )}
 
         {node.source_id && onViewSource && (
           <button 

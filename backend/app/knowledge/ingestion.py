@@ -104,28 +104,65 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
                     claims_data = await extract_claims_from_chunks(batch_texts)
                     if claims_data:
                         # 1. Prepare and insert claims
+                        from sqlalchemy import select
+                        claim_texts = [c.content for c in claims_data.claims]
+                        if claim_texts:
+                            claim_embeddings = await provider.embed_documents(claim_texts)
+                        else:
+                            claim_embeddings = []
+
                         batch_claims = []
-                        for c in claims_data.claims:
+                        chunk_idx_to_claim = {}
+                        
+                        for i_claim, c in enumerate(claims_data.claims):
                             if c.chunk_index < 0 or c.chunk_index >= len(batch):
                                 continue
                             chunk = batch[c.chunk_index]
-                            claim = Claim(
-                                source_id=source.id,
-                                chunk_id=chunk.id,
-                                content=c.content,
-                                claim_type=c.claim_type,
-                                category=c.category,
-                                confidence=c.confidence,
-                                meta_info={}
-                            )
-                            batch_claims.append(claim)
+                            emb = claim_embeddings[i_claim] if i_claim < len(claim_embeddings) else None
+                            
+                            # Поиск дубликатов (Cosine Sim >= 0.88 -> Distance <= 0.12)
+                            existing_claim = None
+                            if emb:
+                                stmt = select(Claim).filter(Claim.embedding.cosine_distance(emb) <= 0.12).order_by(Claim.embedding.cosine_distance(emb)).limit(1)
+                                result = await db.execute(stmt)
+                                existing_claim = result.scalars().first()
+                                
+                            if existing_claim:
+                                existing_claim.recurrence += 1
+                                # Обновляем memory_score, например: importance * (1.0 + min(recurrence, 10)/20.0)
+                                existing_claim.memory_score = existing_claim.importance * (1.0 + min(existing_claim.recurrence, 10) / 20.0)
+                                
+                                if c.temporal_context:
+                                    if "temporal_context" not in existing_claim.meta_info:
+                                        existing_claim.meta_info["temporal_context"] = c.temporal_context
+                                    else:
+                                        existing_claim.meta_info["temporal_context"] += f"; {c.temporal_context}"
+                                
+                                db.add(existing_claim)
+                                chunk_idx_to_claim[c.chunk_index] = existing_claim
+                            else:
+                                meta = {}
+                                if c.temporal_context:
+                                    meta["temporal_context"] = c.temporal_context
+                                    
+                                claim = Claim(
+                                    source_id=source.id,
+                                    chunk_id=chunk.id,
+                                    content=c.content,
+                                    embedding=emb,
+                                    claim_type=c.claim_type,
+                                    category=c.category,
+                                    confidence=c.confidence,
+                                    importance=c.importance,
+                                    memory_score=c.importance,
+                                    meta_info=meta
+                                )
+                                batch_claims.append(claim)
+                                chunk_idx_to_claim[c.chunk_index] = claim
                             
                         if batch_claims:
                             db.add_all(batch_claims)
                             await db.flush() # get IDs for claims
-                            
-                            # Map original chunk index to the first claim found for it (for entity mapping)
-                            chunk_idx_to_claim = {c.chunk_index: claim for c, claim in zip(claims_data.claims, batch_claims) if c.chunk_index >= 0 and c.chunk_index < len(batch)}
                             
                             # 2. Prepare and insert entities
                             for ent in claims_data.entities:
@@ -170,7 +207,7 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             # --- Phase 4 & 5: Graph Linking & Timeline Evolution ---
             logger.info(f"[Ingestion] Running Graph Linker & Timeline Engine...")
             from .graph_linker import relink_durable_claims
-            await relink_durable_claims(db)
+            await relink_durable_claims(db, new_claims=all_new_claims)
             
             from .timeline_engine import build_timeline_events
             await build_timeline_events(db)

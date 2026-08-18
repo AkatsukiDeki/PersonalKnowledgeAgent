@@ -23,6 +23,8 @@ class ClaimExtraction(BaseModel):
     ] = Field("fact", description="Тип факта/знания")
     category: str = Field(description="sport, programming, study, work, or personal. Do NOT use General.")
     confidence: float = Field(description="Confidence score from 0.0 to 1.0")
+    importance: float = Field(default=0.5, description="Важность знания от 0.1 до 1.0 (см. шкалу в системном промпте)")
+    temporal_context: Optional[str] = Field(default=None, description="Явный временной контекст (например 'летом 2023', 'вчера', '2024-05'), если указан.")
 
 class ExtractedEntity(BaseModel):
     chunk_index: int = Field(description="Индекс чанка (от 0), к которому относится эта сущность")
@@ -45,7 +47,7 @@ class ClaimsList(BaseModel):
 
 SYSTEM_PROMPT = """Ты — аналитический модуль извлечения данных из текста.
 Твоя задача — проанализировать предоставленный батч текстовых чанков (каждый помечен индексом [CHUNK <id>]) и извлечь:
-1. Список проверяемых атомарных фактов (claims).
+1. Список проверяемых атомарных фактов (claims). Отбрасывай факты, не несущие ценности (контекстный шум, случайные реплики).
 2. Ключевые сущности (entities).
 3. Связи между фактами внутри батча (relations).
 
@@ -53,7 +55,13 @@ SYSTEM_PROMPT = """Ты — аналитический модуль извлеч
 1. ЯЗЫК: Формулируй утверждения СТРОГО НА ТОМ ЖЕ ЯЗЫКЕ, на котором написан исходный текст. ПЕРЕВОД ЗАПРЕЩЕН.
 2. КАТЕГОРИИ (claims): Выбирай строго одну: sport, programming, study, work, personal.
 3. ИНДЕКС: Укажи правильный `chunk_index` для каждого факта и сущности.
-4. ТИПЫ: Поле `claim_type` определяет **форму** знания (fact, decision, habit, preference, observation, plan), а поле `category` — **тему** (devops, study, security, git, sport, programming, work, personal).
+4. ТИПЫ: Поле `claim_type` определяет **форму** знания (fact, decision, habit, preference, observation, plan).
+5. ВАЖНОСТЬ (`importance`): Оценивай важность каждого факта строго по шкале:
+   - 0.9 - 1.0: Архитектурные правила, неизменяемые решения, стек, жесткие ограничения.
+   - 0.6 - 0.8: Принятые решения по фичам, настройки, устойчивые привычки.
+   - 0.3 - 0.5: Временные эксперименты, черновики, промежуточные статусы задач.
+   - (Факты с важностью ниже 0.3 лучше отбрасывать на этапе извлечения).
+6. ВРЕМЯ (`temporal_context`): Если в тексте явно указано время, период или дата актуальности факта (например, "в 2023 году", "вчера", "на прошлой неделе"), сохрани эту строку в поле `temporal_context` как есть.
 """
 
 async def extract_claims_from_chunks(chunks_texts: List[str]) -> Optional[ClaimsList]:

@@ -19,6 +19,7 @@ class Source(Base, TimestampedUUIDMixin):
     domain: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Legacy / deprecated fields (to be cleaned up or used for transition)
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -153,6 +154,7 @@ class Claim(Base, TimestampedUUIDMixin):
         nullable=False
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
     claim_type: Mapped[str] = mapped_column(String, nullable=False)
     category: Mapped[str] = mapped_column(String, index=True, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
@@ -321,54 +323,105 @@ class SystemError(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
 
 class Conversation(Base):
+    """Первичная сессия диалога (ChatGPT, Claude, Gemini)."""
     __tablename__ = "conversations"
 
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    title: Mapped[str] = mapped_column(String(255), default="Новый диалог")
-    domain: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True) # devops, architecture, security, general
-    status: Mapped[str] = mapped_column(String(20), default="active", index=True)      # active, archived, pinned
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, index=True)
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String(500), nullable=False, default="Untitled Conversation")
+    platform = Column(String(50), nullable=False, default="chatgpt")  # chatgpt | claude | gemini
+    external_id = Column(String(255), nullable=True, index=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    ended_at = Column(DateTime(timezone=True), nullable=True)
+    message_count = Column(Integer, default=0)
+    source_hash = Column(String(64), nullable=True, index=True)
+    status = Column(String(50), default="imported")  # imported | processing | indexed | error
 
-    # Relationships
-    messages: Mapped[list["Message"]] = relationship(
-        "Message", back_populates="conversation", cascade="all, delete-orphan", order_by="Message.created_at"
-    )
-    memory: Mapped["ConversationMemory"] = relationship(
-        "ConversationMemory", back_populates="conversation", uselist=False, cascade="all, delete-orphan"
-    )
+    # Связи
+    messages = relationship("ConversationMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationMessage.sequence_num")
+    segments = relationship("ConversationSegment", back_populates="conversation", cascade="all, delete-orphan")
+    memory = relationship("ConversationMemory", back_populates="conversation", uselist=False, cascade="all, delete-orphan")
 
 
-class Message(Base):
-    __tablename__ = "messages"
+class ConversationMessage(Base):
+    """Сырые реплики диалога для доказательной базы (Provenance)."""
+    __tablename__ = "conversation_messages"
 
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    conversation_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), index=True
-    )
-    role: Mapped[str] = mapped_column(String(20), nullable=False) # user, assistant, system
-    content: Mapped[str] = mapped_column(Text, nullable=False)
-    model: Mapped[Optional[str]] = mapped_column(String(100), nullable=True) # e.g. qwen2.5-coder:14b
-    context_used: Mapped[Optional[dict]] = mapped_column(JSONB, nullable=True) # метрики RAG (l1_count, l2_count, l3_count)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(50), nullable=False)  # user | assistant | system
+    content = Column(Text, nullable=False)
+    sequence_num = Column(Integer, nullable=False)
+    timestamp = Column(DateTime(timezone=True), nullable=True)
+    meta_info = Column(JSONB, default=dict)
 
-    # Relationships
-    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="messages")
+    conversation = relationship("Conversation", back_populates="messages")
+
+
+class ConversationSegment(Base):
+    """Тематические блоки внутри длинного диалога (2.5-phase segmentation)."""
+    __tablename__ = "conversation_segments"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, index=True)
+    topic = Column(String(255), nullable=True)
+    start_seq = Column(Integer, nullable=False)
+    end_seq = Column(Integer, nullable=False)
+    local_summary = Column(Text, nullable=True)
+
+    conversation = relationship("Conversation", back_populates="segments")
 
 
 class ConversationMemory(Base):
+    """Консолидированный опыт сессии (Первоклассный гражданин памяти)."""
     __tablename__ = "conversation_memories"
 
-    id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    conversation_id: Mapped[uuid.UUID] = mapped_column(
-        PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), unique=True, index=True
-    )
-    summary: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    active_decisions: Mapped[Optional[list]] = mapped_column(JSONB, default=list) # ["Используем FastAPI", "Hotfix через cherry-pick"]
-    open_questions: Mapped[Optional[list]] = mapped_column(JSONB, default=list)   # ["Как настроить retention?"]
-    key_claim_ids: Mapped[Optional[list]] = mapped_column(JSONB, default=list)    # [UUID, UUID] - ссылки на связанные Durable Claims
-    message_count_at_summary: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    conversation_id = Column(PG_UUID(as_uuid=True), ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False, unique=True)
+    
+    problem = Column(Text, nullable=False)        # Какая проблема решалась
+    context = Column(Text, nullable=True)         # Вводные и ограничения
+    attempts = Column(JSONB, default=list)         # Что пробовали и почему не подошло
+    decision_summary = Column(Text, nullable=False) # Итоговая суть принятого решения
+    outcome = Column(Text, nullable=True)         # Результат / артефакт
+    embedding = mapped_column(Vector(1024), nullable=True) # ML Enrichment (Optional)
+    
+    importance = Column(Float, default=0.7)
+    memory_score = Column(Float, default=0.7)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
 
-    # Relationships
-    conversation: Mapped["Conversation"] = relationship("Conversation", back_populates="memory")
+    conversation = relationship("Conversation", back_populates="memory")
+    decisions = relationship("Decision", back_populates="memory", cascade="all, delete-orphan")
+
+
+class Decision(Base):
+    """Атомарное зафиксированное архитектурное/инженерное решение."""
+    __tablename__ = "decisions"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    memory_id = Column(PG_UUID(as_uuid=True), ForeignKey("conversation_memories.id", ondelete="CASCADE"), nullable=False, index=True)
+    
+    decision = Column(Text, nullable=False)       # Формулировка: "Выбран FastAPI для бэкенда"
+    rationale = Column(Text, nullable=True)       # Обоснование: "Лучше подходит под асинхронный пайплайн"
+    alternatives = Column(JSONB, default=list)     # ["Django рассматривался, но отвергнут"]
+    domain = Column(String(100), default="engineering")
+    status = Column(String(50), default="active") # active | superseded | deprecated
+    embedding = mapped_column(Vector(1024), nullable=True) # ML Enrichment (Optional)
+    
+    superseded_by_id = Column(PG_UUID(as_uuid=True), ForeignKey("decisions.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)
+
+    memory = relationship("ConversationMemory", back_populates="decisions")
+
+
+class Insight(Base):
+    """Проактивный вывод (STEP 6), синтезированный из семантических коллизий и графа."""
+    __tablename__ = "insights"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    insight_type = Column(String(50), nullable=False) # 'cross_domain_link', 'contradiction', 'trend', 'attempt_loop'
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=False)
+    evidence_links = Column(JSONB, default=list) # Ссылки на Decisions, Memories, Claims
+    domains_involved = Column(JSONB, default=list) # ['engineering', 'design']
+    importance_score = Column(Float, default=0.5) # 0.0 - 1.0
+    created_at = Column(DateTime(timezone=True), default=datetime.utcnow)

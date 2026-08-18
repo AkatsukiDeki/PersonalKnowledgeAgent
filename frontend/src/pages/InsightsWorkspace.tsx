@@ -13,7 +13,7 @@ export function InsightsWorkspace() {
   const fetchInsights = async () => {
     setLoading(true);
     try {
-      const data = await insightsApi.getPendingInsights();
+      const data = await insightsApi.getInsights();
       setInsights(data);
     } catch (e) {
       console.error(e);
@@ -25,24 +25,6 @@ export function InsightsWorkspace() {
   useEffect(() => {
     fetchInsights();
   }, []);
-
-  const handleAccept = async (id: string) => {
-    try {
-      await insightsApi.acceptInsight(id);
-      setInsights(prev => prev.filter(i => i.id !== id));
-    } catch (e) {
-      console.error(e);
-    }
-  };
-
-  const handleDismiss = async (id: string) => {
-    try {
-      await insightsApi.dismissInsight(id);
-      setInsights(prev => prev.filter(i => i.id !== id));
-    } catch (e) {
-      console.error(e);
-    }
-  };
 
   const handleGenerate = async () => {
     setGenerating(true);
@@ -87,7 +69,7 @@ export function InsightsWorkspace() {
         ) : insights.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-zinc-500">
             <Sparkles size={48} className="mb-4 opacity-20" />
-            <p>Нет новых инсайтов на ревью</p>
+            <p>Нет инсайтов</p>
             <p className="text-sm mt-1">Попробуйте сгенерировать новые на основе последних знаний</p>
           </div>
         ) : (
@@ -96,8 +78,6 @@ export function InsightsWorkspace() {
               <InsightCard
                 key={insight.id}
                 insight={insight}
-                onAccept={handleAccept}
-                onDismiss={handleDismiss}
                 onInspect={setInspectPatternId}
               />
             ))}

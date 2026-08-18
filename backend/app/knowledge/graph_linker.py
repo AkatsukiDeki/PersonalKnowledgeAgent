@@ -29,35 +29,42 @@ class ExtractedRelation(BaseModel):
 class RelationsList(BaseModel):
     relations: List[ExtractedRelation]
 
-async def relink_durable_claims(db: AsyncSession) -> None:
+async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Claim]] = None) -> None:
     """
-    Analyzes only Durable Claims (active, memory_score >= 0.60) and 
-    creates 6 strict functional edges between them.
+    Analyzes claims and creates 6 strict functional edges between them using vector pre-filtering.
     """
-    stmt = select(Claim).where(Claim.is_active == True, Claim.memory_score >= 0.60)
-    claims_res = await db.execute(stmt)
-    durable_claims = claims_res.scalars().all()
+    if new_claims is not None:
+        claims_to_process = new_claims
+    else:
+        stmt = select(Claim).where(Claim.is_active == True, Claim.memory_score >= 0.60)
+        claims_res = await db.execute(stmt)
+        claims_to_process = claims_res.scalars().all()
     
-    logger.info(f"[GraphLinker] Found {len(durable_claims)} durable claims for relinking.")
+    logger.info(f"[GraphLinker] Found {len(claims_to_process)} claims for relinking.")
     
-    for i, claim in enumerate(durable_claims):
-        logger.info(f"[GraphLinker] Processing claim {i+1}/{len(durable_claims)}: {claim.id}")
+    from ..db.models import Chunk
+    
+    for i, claim in enumerate(claims_to_process):
+        logger.info(f"[GraphLinker] Processing claim {i+1}/{len(claims_to_process)}: {claim.id}")
         
-        # Search for candidates to link to
-        # Limit to 5 potential related claims
-        retrieved = await hybrid_search(db, original_query=claim.content, search_query=claim.content, limit=5)
-        if not retrieved:
+        chunk = await db.get(Chunk, claim.chunk_id)
+        if not chunk or not chunk.embedding:
             continue
             
-        candidate_ids = [c["chunk_id"] for c in retrieved] # In retrieval.py it's actually chunk_id, wait, retrieval returns chunk_ids, we need claim_ids
-        
-        # Let's get claims that correspond to those chunk_ids
-        candidates_stmt = select(Claim).where(
-            Claim.chunk_id.in_(candidate_ids), 
-            Claim.id != claim.id,
-            Claim.is_active == True,
-            Claim.memory_score >= 0.60
-        ).limit(10)
+        # Search for candidates to link to using pgvector cosine distance
+        # cos(E_new, E_existing) >= 0.65 => distance <= 0.35
+        distance = Chunk.embedding.cosine_distance(chunk.embedding)
+        candidates_stmt = (
+            select(Claim)
+            .join(Chunk, Claim.chunk_id == Chunk.id)
+            .where(
+                Claim.is_active == True,
+                Claim.id != claim.id,
+                distance <= 0.35
+            )
+            .order_by(distance)
+            .limit(10)
+        )
         candidates_res = await db.execute(candidates_stmt)
         candidates = candidates_res.scalars().all()
         

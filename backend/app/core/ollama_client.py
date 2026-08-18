@@ -13,7 +13,7 @@ T = TypeVar("T", bound=BaseModel)
 class OllamaClient:
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
-        self.timeout = settings.OLLAMA_TIMEOUT_SECONDS
+        self.timeout = httpx.Timeout(3000.0, connect=10.0)
 
     async def generate(self, model: str, prompt: str, system: Optional[str] = None, format_schema: Optional[Dict[str, Any]] = None) -> str:
         """
@@ -23,6 +23,11 @@ class OllamaClient:
             "model": model,
             "prompt": prompt,
             "stream": False,
+            "options": {
+                "num_predict": 768,
+                "temperature": 0.1,
+                "num_ctx": 4096,
+            }
         }
         if system:
             payload["system"] = system
@@ -40,7 +45,7 @@ class OllamaClient:
                 logger.error(f"Ollama HTTP error: {e.response.text}")
                 raise
             except httpx.RequestError as e:
-                logger.error(f"Ollama request error: {str(e)}")
+                logger.error(f"Ollama request error: {repr(e)}")
                 raise
 
     async def generate_structured(self, model: str, prompt: str, schema_cls: Type[T], system: Optional[str] = None) -> T:

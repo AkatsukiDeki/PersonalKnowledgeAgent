@@ -24,27 +24,28 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
 
     # Grounding Configuration
-    FACTUAL_MIN_TOP1_SIMILARITY: float = 0.60
-    FACTUAL_MIN_TOP_K_RELEVANCE_RRF: float = 0.015
-    ANALYTICAL_MIN_TOP1_SIMILARITY: float = 0.55
-    ANALYTICAL_MIN_TOP_K_RELEVANCE_RRF: float = 0.010
+    FACTUAL_MIN_TOP1_SIMILARITY: float = 0.40
+    FACTUAL_MIN_TOP_K_RELEVANCE_RRF: float = 0.010
+    ANALYTICAL_MIN_TOP1_SIMILARITY: float = 0.40
+    ANALYTICAL_MIN_TOP_K_RELEVANCE_RRF: float = 0.005
     MIN_RELEVANT_CHUNKS: int = 1
     
     # Model Routing
     LLM_ROUTING_BACKEND: str = "hybrid"  # "local" | "cloud" | "hybrid"
     
     # Ollama Settings
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_EXTRACTION_MODEL: str = "qwen2.5:7b"
     OLLAMA_QA_MODEL: str = "qwen2.5:7b"
-    OLLAMA_TIMEOUT_SECONDS: float = 300.0
-    EXTRACTION_BATCH_SIZE: int = 3
+    OLLAMA_TIMEOUT_SECONDS: float = 3000.0
+    EXTRACTION_BATCH_SIZE: int = 2
     
     FAST_LLM_MODEL: str = "gemini-3.5-flash-lite"
     REASONING_LLM_MODEL: str = "gemini-3.6-flash"
     OPENAI_API_KEY: str | None = None
     
     # Obsidian Connector Settings
+    OBSIDIAN_VAULT_PATH: Optional[str] = None
     OBSIDIAN_MAX_ZIP_SIZE_MB: int = 100
     OBSIDIAN_MAX_FILES: int = 2000
     TAG_DOMAIN_MAPPING: dict = {

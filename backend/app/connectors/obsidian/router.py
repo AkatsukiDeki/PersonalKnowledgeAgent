@@ -23,6 +23,7 @@ async def preview_import(
     if not file.filename.endswith('.zip'):
         raise HTTPException(status_code=400, detail="Only ZIP files are supported.")
         
+    await file.seek(0)
     temp_fd, temp_path = tempfile.mkstemp(suffix=".zip")
     try:
         with os.fdopen(temp_fd, 'wb') as f:
@@ -51,14 +52,18 @@ async def start_import(
     job_id = str(uuid.uuid4())
     
     # Save uploaded file temporarily
+    await file.seek(0)
     temp_fd, temp_path = tempfile.mkstemp(suffix=".zip")
     with os.fdopen(temp_fd, 'wb') as f:
         shutil.copyfileobj(file.file, f)
         
     # Get total files roughly
     import zipfile
-    with zipfile.ZipFile(temp_path, 'r') as zf:
-        total_files = sum(1 for info in zf.infolist() if info.filename.endswith('.md') and not info.is_dir())
+    try:
+        with zipfile.ZipFile(temp_path, 'r') as zf:
+            total_files = sum(1 for f in zf.namelist() if f.endswith('.md') and not f.startswith('__MACOSX'))
+    except zipfile.BadZipFile as e:
+        raise HTTPException(status_code=400, detail=f"Bad zip file: {e}")
         
     # Initialize job state
     job = ImportJobState(

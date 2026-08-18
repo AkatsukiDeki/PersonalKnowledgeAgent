@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select, func
 from sqlalchemy.dialects.postgresql import insert
 from app.db.session import async_session_factory
-from app.db.models import Message, ConversationMemory
+from app.db.models import ConversationMessage, ConversationMemory
 from app.core.config import settings
 import httpx
 

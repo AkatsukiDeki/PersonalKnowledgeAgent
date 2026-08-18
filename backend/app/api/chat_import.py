@@ -26,9 +26,15 @@ async def start_import(
     if provider not in ["chatgpt", "claude", "gemini"]:
         raise HTTPException(status_code=400, detail="Unsupported provider")
 
-    # Save uploaded file
+    # Save uploaded file with its original extension
     file_id = uuid.uuid4()
-    save_path = f"/tmp/pka_upload_{file_id}.zip"
+    ext = ".zip"
+    if file.filename:
+        _, file_ext = os.path.splitext(file.filename)
+        if file_ext:
+            ext = file_ext.lower()
+    
+    save_path = f"/tmp/pka_upload_{file_id}{ext}"
     
     content = await file.read()
     if len(content) > 100 * 1024 * 1024:

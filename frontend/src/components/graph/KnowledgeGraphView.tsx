@@ -28,6 +28,23 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ onSelect
   // Filters state
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showSuperseded, setShowSuperseded] = useState(false);
+  const [showDecisions, setShowDecisions] = useState(true);
+
+  useEffect(() => {
+    const handleHighlightEvent = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      const nodeIds = customEvent.detail?.nodeIds as string[];
+      if (nodeIds && nodeIds.length > 0) {
+        setHighlightNodes(new Set(nodeIds));
+        setHighlightLinks(new Set());
+      } else {
+        setHighlightNodes(new Set());
+        setHighlightLinks(new Set());
+      }
+    };
+    window.addEventListener('highlightGraphNodes', handleHighlightEvent);
+    return () => window.removeEventListener('highlightGraphNodes', handleHighlightEvent);
+  }, []);
 
   useEffect(() => {
     const handleResize = () => setWindowSize({ width: window.innerWidth - 256, height: window.innerHeight });
@@ -63,6 +80,7 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ onSelect
     }
     
     if (node.group === 'entity') return '#8b5cf6';
+    if (node.group === 'decision') return '#f43f5e';
     if (node.is_active === false) return '#94a3b8'; // superseded
     
     switch (node.category) {
@@ -160,6 +178,14 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ onSelect
   if (loading && data.nodes.length === 0) return <div className="p-8 text-slate-400 flex items-center justify-center h-full">Loading graph topology...</div>;
   if (error) return <div className="p-8 text-red-400">Error: {error}</div>;
 
+  const filteredData = useMemo(() => {
+    if (showDecisions) return data;
+    return {
+      nodes: data.nodes.filter(n => n.group !== 'decision'),
+      links: data.links // decisions don't have links yet, but filter if they do
+    };
+  }, [data, showDecisions]);
+
   return (
     <div className="w-full h-full relative overflow-hidden bg-slate-50 dark:bg-slate-950 flex-1 flex">
       
@@ -169,13 +195,15 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ onSelect
         onSelectCategory={setSelectedCategory}
         showSuperseded={showSuperseded}
         onToggleSuperseded={() => setShowSuperseded(!showSuperseded)}
+        showDecisions={showDecisions}
+        onToggleDecisions={() => setShowDecisions(!showDecisions)}
       />
       
       <ForceGraph2D
         ref={fgRef}
         width={windowSize.width}
         height={windowSize.height}
-        graphData={data}
+        graphData={filteredData}
         nodeColor={getNodeColor as any}
         nodeVal="val"
         nodeLabel={(n: any) => `<div class="bg-slate-800 text-white p-2 rounded text-xs shadow-lg max-w-xs break-words whitespace-pre-wrap">${n.label}</div>`}
@@ -218,6 +246,25 @@ export const KnowledgeGraphView: React.FC<KnowledgeGraphViewProps> = ({ onSelect
           }}
           onSelectNode={focusOnNode}
         />
+      )}
+
+      {(highlightNodes.size > 0 || selectedNode !== null) && (
+        <div className="absolute top-4 right-4 z-50">
+          <button
+            onClick={() => {
+              setHighlightNodes(new Set());
+              setHighlightLinks(new Set());
+              setSelectedNode(null);
+              updateHighlight(null);
+              if (fgRef.current) {
+                fgRef.current.zoomToFit(400, 50);
+              }
+            }}
+            className="px-3 py-1.5 text-xs font-medium text-slate-200 bg-slate-800/80 hover:bg-slate-700 border border-slate-600 rounded-lg shadow-sm backdrop-blur transition-all flex items-center gap-1.5"
+          >
+            <span>✕</span> Сбросить фокус
+          </button>
+        </div>
       )}
     </div>
   );

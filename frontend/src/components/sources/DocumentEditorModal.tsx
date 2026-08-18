@@ -23,8 +23,8 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
       setError(null);
       const data = await sourcesApi.getDetail(sourceId);
       setDetail(data);
-      setEditedContent(data.raw_content || data.content);
-      setDomain(data.domain || '');
+      setEditedContent(data.raw_content ?? data.content ?? '');
+      setDomain(data.domain ?? '');
     } catch (err: any) {
       setError(err.message);
     } finally {
@@ -50,7 +50,7 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
     }
   };
 
-  const hasChanges = detail && (editedContent !== (detail.raw_content || detail.content) || domain !== (detail.domain || ''));
+  const hasChanges = detail && (editedContent !== (detail.raw_content ?? detail.content ?? '') || domain !== (detail.domain ?? ''));
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
@@ -133,7 +133,7 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
                 </div>
               </div>
               <textarea
-                value={editedContent}
+                value={editedContent ?? ''}
                 onChange={e => setEditedContent(e.target.value)}
                 className="flex-1 bg-zinc-950 text-zinc-200 text-sm p-4 font-mono leading-relaxed resize-none focus:outline-none focus:ring-1 focus:ring-blue-500/30 border-none"
                 spellCheck={false}

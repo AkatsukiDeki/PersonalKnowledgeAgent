@@ -18,6 +18,8 @@ export interface ConversationDetailOut {
   summary: string | null;
   active_decisions: string[];
   open_questions: string[];
+  memory: any;
+  decisions: any[];
   messages: MessageOut[];
 }
 

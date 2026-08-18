@@ -3,7 +3,7 @@ import asyncio
 import sys
 
 async def upload_vault():
-    url = "http://localhost:8000/api/v1/connectors/obsidian/import"
+    url = "http://localhost:8001/api/v1/connectors/obsidian/import"
     file_path = "test_vault.zip"
     
     with open(file_path, "rb") as f:
@@ -22,7 +22,7 @@ async def upload_vault():
                     
                     # Poll for status
                     while True:
-                        status_url = f"http://localhost:8000/api/v1/connectors/obsidian/import/{job_id}"
+                        status_url = f"http://localhost:8001/api/v1/connectors/obsidian/import/{job_id}"
                         status_resp = await client.get(status_url)
                         status_data = status_resp.json()
                         print(f"[{status_data['status']}] Processed {status_data['processed_files']}/{status_data['total_files']} files...")

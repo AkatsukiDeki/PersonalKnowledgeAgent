@@ -4,7 +4,7 @@ from pydantic import BaseModel
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.session import get_db
-from app.db.models import Conversation, Message, ConversationMemory
+from app.db.models import Conversation, ConversationMessage, ConversationMemory, Decision
 
 router = APIRouter()
 
@@ -38,11 +38,11 @@ class ConversationDetailOut(BaseModel):
 
 @router.post("", response_model=dict)
 async def create_conversation(data: ConversationCreate, db: AsyncSession = Depends(get_db)):
-    conv = Conversation(title=data.title, domain=data.domain)
+    conv = Conversation(title=data.title)
     db.add(conv)
     await db.commit()
     await db.refresh(conv)
-    return {"id": conv.id, "title": conv.title, "domain": conv.domain, "status": conv.status}
+    return {"id": conv.id, "title": conv.title, "domain": None, "status": conv.status}
 
 @router.get("", response_model=list[dict])
 async def list_conversations(
@@ -51,7 +51,7 @@ async def list_conversations(
     offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
-    stmt = select(Conversation).order_by(desc(Conversation.updated_at)).offset(offset).limit(limit)
+    stmt = select(Conversation).order_by(desc(Conversation.started_at)).offset(offset).limit(limit)
     if status:
         stmt = stmt.where(Conversation.status == status)
     res = await db.execute(stmt)
@@ -60,10 +60,10 @@ async def list_conversations(
         {
             "id": c.id,
             "title": c.title,
-            "domain": c.domain,
+            "domain": None,
             "status": c.status,
-            "created_at": c.created_at.isoformat(),
-            "updated_at": c.updated_at.isoformat()
+            "created_at": c.started_at.isoformat() if c.started_at else "",
+            "updated_at": c.ended_at.isoformat() if c.ended_at else ""
         }
         for c in convs
     ]
@@ -75,30 +75,55 @@ async def get_conversation(conversation_id: UUID, db: AsyncSession = Depends(get
         raise HTTPException(status_code=404, detail="Conversation not found")
 
     # Сообщения
-    msg_stmt = select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc())
+    msg_stmt = select(ConversationMessage).where(ConversationMessage.conversation_id == conversation_id).order_by(ConversationMessage.sequence_num.asc())
     messages = (await db.execute(msg_stmt)).scalars().all()
 
     # Память ветки
     mem_stmt = select(ConversationMemory).where(ConversationMemory.conversation_id == conversation_id)
     mem = (await db.execute(mem_stmt)).scalar_one_or_none()
+    
+    decisions_list = []
+    memory_dict = None
+    if mem:
+        dec_stmt = select(Decision).where(Decision.memory_id == mem.id).order_by(Decision.created_at.asc())
+        decisions = (await db.execute(dec_stmt)).scalars().all()
+        decisions_list = [
+            {
+                "id": str(d.id),
+                "decision": d.decision,
+                "rationale": d.rationale,
+                "alternatives": d.alternatives,
+                "status": d.status,
+                "created_at": d.created_at.isoformat() if d.created_at else ""
+            } for d in decisions
+        ]
+        
+        memory_dict = {
+            "id": str(mem.id),
+            "problem": mem.problem,
+            "context": mem.context,
+            "attempts": mem.attempts,
+            "decision_summary": mem.decision_summary,
+            "outcome": mem.outcome,
+            "importance": mem.importance
+        }
 
     return {
         "id": conv.id,
         "title": conv.title,
-        "domain": conv.domain,
+        "domain": None,
         "status": conv.status,
-        "created_at": conv.created_at.isoformat(),
-        "updated_at": conv.updated_at.isoformat(),
-        "summary": mem.summary if mem else None,
-        "active_decisions": mem.active_decisions if mem else [],
-        "open_questions": mem.open_questions if mem else [],
+        "created_at": conv.started_at.isoformat() if conv.started_at else "",
+        "updated_at": conv.ended_at.isoformat() if conv.ended_at else "",
+        "memory": memory_dict,
+        "decisions": decisions_list,
         "messages": [
             {
                 "id": m.id,
                 "role": m.role,
                 "content": m.content,
-                "model": m.model,
-                "created_at": m.created_at.isoformat()
+                "model": getattr(m, "model", None),
+                "created_at": m.timestamp.isoformat() if m.timestamp else ""
             }
             for m in messages
         ]
@@ -111,8 +136,6 @@ async def update_conversation(conversation_id: UUID, data: ConversationUpdate, d
         raise HTTPException(status_code=404, detail="Conversation not found")
     if data.title is not None:
         conv.title = data.title
-    if data.domain is not None:
-        conv.domain = data.domain
     if data.status is not None:
         conv.status = data.status
     await db.commit()

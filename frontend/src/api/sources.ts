@@ -14,6 +14,8 @@ export const sourcesApi = {
   upload: async (file: File, domain?: string): Promise<Source> => {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('title', file.name);
+    formData.append('importance', 'normal');
     if (domain) {
       formData.append('domain', domain);
     }

@@ -30,10 +30,11 @@ def _ensure_data_dir():
 # ──────────────────────────────────────────────
 #  POST /sources/upload  — multipart file upload
 # ──────────────────────────────────────────────
-@router.post("/upload", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
+@router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
 async def upload_source(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    title: Optional[str] = Form(None),
     domain: Optional[str] = Form(None),
     importance: str = Form("normal"),
     db: AsyncSession = Depends(get_db),
@@ -56,6 +57,74 @@ async def upload_source(
     # 2. Call idempotency ingestion
     title = os.path.splitext(file.filename)[0]
     
+    # Helper for background chat pipeline execution
+    async def _process_chat_bg(chat_data: dict):
+        from ..db.session import async_session_factory
+        from ..knowledge.chat_pipeline import process_chat_pipeline
+        chat_title = chat_data.get("title", "Imported Chat")
+        async with async_session_factory() as session:
+            try:
+                await process_chat_pipeline(session, chat_data, title=chat_title, platform="chatgpt")
+            except Exception as e:
+                logger.error(f"[Sources] Failed to process chat session {chat_title}: {e}")
+
+    # Check if this is an AI chat export using Magic Bytes
+    import gzip
+    import io
+    import json
+    import zipfile
+    from ..knowledge.parsers.chat_parser import parse_chatgpt_json, safe_decode
+
+    # 1. Check for ZIP archive (Magic bytes: PK\x03\x04)
+    if file_bytes.startswith(b"PK\x03\x04") or file.filename.lower().endswith(".zip"):
+        try:
+            with zipfile.ZipFile(io.BytesIO(file_bytes), "r") as z:
+                found_chats = []
+                for name in z.namelist():
+                    if name.endswith(".json") and not name.startswith("__MACOSX"):
+                        raw = z.read(name)
+                        text = safe_decode(raw)
+                        try:
+                            data = json.loads(text)
+                            chats = list(parse_chatgpt_json(data))
+                            found_chats.extend(chats)
+                        except Exception:
+                            continue
+                
+                if found_chats:
+                    for chat in found_chats:
+                        background_tasks.add_task(_process_chat_bg, chat)
+                    return {"status": "ok", "message": f"Архив принят: найдено {len(found_chats)} диалогов"}
+        except zipfile.BadZipFile:
+            logger.error("ZIP parse error: BadZipFile")
+
+    # 2. Check for GZIP (.gz)
+    elif file_bytes.startswith(b"\x1f\x8b"):
+        try:
+            decompressed = gzip.decompress(file_bytes)
+            text = safe_decode(decompressed)
+            data = json.loads(text)
+            chats = list(parse_chatgpt_json(data))
+            if chats:
+                for chat in chats:
+                    background_tasks.add_task(_process_chat_bg, chat)
+                return {"status": "ok", "message": f"GZ-архив обработан: {len(chats)} диалогов"}
+        except Exception as e:
+            logger.error(f"GZIP parse error: {e}")
+
+    # 3. Handle as plain JSON if starts with { or [
+    elif file_bytes.lstrip().startswith(b"{") or file_bytes.lstrip().startswith(b"["):
+        text = safe_decode(file_bytes)
+        try:
+            data = json.loads(text)
+            chats = list(parse_chatgpt_json(data)) if isinstance(data, (list, dict)) else []
+            if chats:
+                for chat in chats:
+                    background_tasks.add_task(_process_chat_bg, chat)
+                return {"status": "ok", "message": f"JSON принят: {len(chats)} диалогов"}
+        except json.JSONDecodeError:
+            pass
+
     try:
         source, ingest_status = await ingest_file_revision(
             db=db,
@@ -79,6 +148,7 @@ async def upload_source(
             f.write(file_bytes)
         source.original_file_path = original_path
         await db.commit()
+        await db.refresh(source)
 
     # 3. Kick off background ingestion only if changed
     if ingest_status != "unchanged":
