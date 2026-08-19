@@ -258,10 +258,10 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
 
   useEffect(() => {
     if (fgRef.current) {
-      fgRef.current.d3Force('center', forceCenter(windowSize.width / 2, windowSize.height / 2));
-      fgRef.current.centerAt(windowSize.width / 2, windowSize.height / 2, 0);
+      fgRef.current.d3Force('center', forceCenter(0, 0));
+      fgRef.current.centerAt(0, 0, 0);
     }
-  }, [windowSize.width, windowSize.height]);
+  }, []);
 
   useEffect(() => {
     const tick = (now: number) => {
@@ -387,7 +387,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     setSelectedLink(null);
     updateHighlight(null);
     if (fgRef.current) {
-      fgRef.current.zoomToFit(400, 40);
+      fgRef.current.zoomToFit(800, 80);
     }
   }, [updateHighlight]);
 
@@ -469,7 +469,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
       ? Math.sin(phase * config.pulseFreq * Math.PI) * 0.5 + 0.5
       : 0;
 
-    const baseRadius = config.radius / Math.max(globalScale * 0.28, 1);
+    const baseRadius = config.radius / Math.max(globalScale, 0.08);
     const visualRadius = isSelected || isHovered ? baseRadius * 1.15 : baseRadius;
 
     ctx.save();
@@ -659,7 +659,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         onEngineStop={() => {
           attemptPendingFocus();
           if (fgRef.current && !selectedNode && !selectedLink && !pendingFocusRef.current) {
-            fgRef.current.zoomToFit(400, 40);
+            fgRef.current.zoomToFit(800, 80);
           }
         }}
         backgroundColor="transparent"
