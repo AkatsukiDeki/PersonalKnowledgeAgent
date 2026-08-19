@@ -50,7 +50,7 @@ const STAR_BOUNDS = 5000;
 const STAR_COUNT = 640;
 const FRAME_MS = 1000 / 24;
 const SPACE_VOID = '#0a0b10';
-const LINK_GLOW = 'rgba(56, 189, 248, 0.25)';
+const LINK_GLOW = 'rgba(148, 163, 184, 0.25)';
 const LINK_CORE = 'rgba(186, 230, 253, 0.55)';
 
 const ENTITY_CONFIG: Record<string, EntityVisualMeta> = {
@@ -258,10 +258,11 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
 
   useEffect(() => {
     if (fgRef.current) {
-      fgRef.current.d3Force('center', forceCenter(0, 0));
-      fgRef.current.centerAt(0, 0, 0);
+      fgRef.current.d3Force('center', null); // мягкий радиальный центрирование
+      fgRef.current.d3Force('link', forceLink(data.links).id((d: any) => d.id).distance(45).strength(0.7));
+      fgRef.current.d3Force('charge', forceManyBody().strength(-120).distanceMax(500));
     }
-  }, []);
+  }, [data.links]);
 
   useEffect(() => {
     const tick = (now: number) => {
@@ -550,39 +551,13 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     const hasActiveSelection = highlightLinks.size > 0;
     ctx.globalAlpha = isHL ? 0.75 : hasActiveSelection ? 0.03 : 0.12;
 
-    const relType = link.type.toLowerCase();
-    const isConflict = relType === 'supersedes' || relType === 'contradicts';
-    ctx.strokeStyle = isHL
-      ? isConflict ? '#EF4444' : '#8B5CF6'
-      : isConflict ? '#7F1D1D' : 'rgba(255, 255, 255, 0.2)';
-
-    ctx.lineWidth = (isHL ? 1.4 : 0.4) / globalScale;
-
-    if (isConflict) {
-      ctx.setLineDash([3 / globalScale, 3 / globalScale]);
-    }
+    ctx.strokeStyle = LINK_GLOW; // полупрозрачные неоновые нити
+    ctx.lineWidth = 0.8 / globalScale; // толщиной 0.8px
 
     ctx.beginPath();
     ctx.moveTo(sn.x ?? 0, sn.y ?? 0);
     ctx.lineTo(tn.x ?? 0, tn.y ?? 0);
     ctx.stroke();
-    ctx.setLineDash([]);
-
-    if (isHL) {
-      const dx = (tn.x ?? 0) - (sn.x ?? 0);
-      const dy = (tn.y ?? 0) - (sn.y ?? 0);
-      const angle = Math.atan2(dy, dx);
-      const len = 4.5 / globalScale;
-      const mx = ((sn.x ?? 0) + (tn.x ?? 0)) / 2;
-      const my = ((sn.y ?? 0) + (tn.y ?? 0)) / 2;
-
-      ctx.fillStyle = ctx.strokeStyle;
-      ctx.beginPath();
-      ctx.moveTo(mx + len * Math.cos(angle), my + len * Math.sin(angle));
-      ctx.lineTo(mx + len * Math.cos(angle - 2.4), my + len * Math.sin(angle - 2.4));
-      ctx.lineTo(mx + len * Math.cos(angle + 2.4), my + len * Math.sin(angle + 2.4));
-      ctx.fill();
-    }
 
     ctx.restore();
   }, [highlightLinks]);
