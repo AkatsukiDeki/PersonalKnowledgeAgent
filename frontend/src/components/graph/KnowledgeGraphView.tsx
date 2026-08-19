@@ -55,7 +55,7 @@ const LINK_CORE = 'rgba(186, 230, 253, 0.55)';
 
 const ENTITY_CONFIG: Record<string, EntityVisualMeta> = {
   insight:  { color: '#f59e0b', glowRgb: '245, 158, 11',  radius: 9, pulseFreq: 1.8 },
-  decision: { color: '#8b5cf6', glowRgb: '139, 92, 246',  radius: 7, pulseFreq: 1.2 },
+  decision: { color: '#a855f7', glowRgb: '168, 85, 247',  radius: 7, pulseFreq: 1.2 },
   entity:   { color: '#a855f7', glowRgb: '168, 85, 247',  radius: 5.5, pulseFreq: 1.0 },
   claim:    { color: '#38bdf8', glowRgb: '56, 189, 248',  radius: 3.5, pulseFreq: 0.9 },
   source:   { color: '#64748B', glowRgb: '100, 116, 139', radius: 3, pulseFreq: 0.5 },
@@ -392,6 +392,13 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   }, []);
 
   const paintBackground = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
+    ctx.save();
+    ctx.fillStyle = 'rgba(30, 27, 75, 0.35)';
+    ctx.beginPath();
+    ctx.arc(0, 0, STAR_BOUNDS * globalScale, 0, 2 * Math.PI);
+    ctx.fill();
+    ctx.restore();
+
     const phase = phaseRef.current;
 
     ctx.save();
@@ -620,7 +627,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         onEngineStop={() => {
           attemptPendingFocus();
           if (fgRef.current && !selectedNode && !selectedLink && !pendingFocusRef.current) {
-            fgRef.current.zoomToFit(400, 60);
+            fgRef.current.zoomToFit(600, 60);
           }
         }}
         backgroundColor="transparent"
