@@ -305,6 +305,16 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     fetchData();
   }, [fetchData]);
 
+  const validGraphData = useMemo(() => {
+    const nodeIds = new Set(data.nodes.map((n) => String(n.id)));
+    const safeLinks = data.links.filter((link: any) => {
+      const sourceId = String(typeof link.source === 'object' ? link.source.id : link.source);
+      const targetId = String(typeof link.target === 'object' ? link.target.id : link.target);
+      return nodeIds.has(sourceId) && nodeIds.has(targetId);
+    });
+    return { nodes: data.nodes, links: safeLinks };
+  }, [data]);
+
   const updateHighlight = useCallback((node: GraphNode | null) => {
     if (!node) {
       setHighlightNodes(new Set());
@@ -562,21 +572,6 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     ctx.restore();
   }, [highlightLinks]);
 
-  const filteredData = useMemo(() => {
-    let nodes = data.nodes;
-    if (!showDecisions) {
-      nodes = nodes.filter((n) => n.group !== 'decision' && n.kind !== 'decision');
-    }
-    const nodeIds = new Set(nodes.map((n) => n.id));
-    const links = data.links.filter((l) => {
-      const sId = endpointId(l.source);
-      const tId = endpointId(l.target);
-      return nodeIds.has(sId) && nodeIds.has(tId);
-    });
-
-    return { nodes, links };
-  }, [data, showDecisions]);
-
   if (loading && data.nodes.length === 0) {
     return (
       <div className="h-full flex items-center justify-center bg-[#06070B]">
@@ -608,7 +603,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         ref={fgRef}
         width={windowSize.width}
         height={windowSize.height}
-        graphData={filteredData}
+        graphData={validGraphData} // Используем отфильтрованные данные
         nodeCanvasObject={nodeCanvasObject}
         nodePointerAreaPaint={(node, color, ctx) => {
           if (!isGraphNode(node)) return;
