@@ -305,14 +305,14 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     fetchData();
   }, [fetchData]);
 
-  const validGraphData = useMemo(() => {
-    const nodeIds = new Set(data.nodes.map((n) => String(n.id)));
-    const safeLinks = data.links.filter((link: any) => {
-      const sourceId = String(typeof link.source === 'object' ? link.source.id : link.source);
-      const targetId = String(typeof link.target === 'object' ? link.target.id : link.target);
-      return nodeIds.has(sourceId) && nodeIds.has(targetId);
+  const sanitizedGraphData = useMemo(() => {
+    const nodeMap = new Set(data.nodes.map((n) => String(n.id)));
+    const validLinks = data.links.filter((link: any) => {
+      const sId = String(typeof link.source === 'object' ? link.source.id : link.source);
+      const tId = String(typeof link.target === 'object' ? link.target.id : link.target);
+      return nodeMap.has(sId) && nodeMap.has(tId);
     });
-    return { nodes: data.nodes, links: safeLinks };
+    return { nodes: data.nodes, links: validLinks };
   }, [data]);
 
   const updateHighlight = useCallback((node: GraphNode | null) => {
@@ -603,7 +603,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         ref={fgRef}
         width={windowSize.width}
         height={windowSize.height}
-        graphData={validGraphData} // Используем отфильтрованные данные
+        graphData={sanitizedGraphData} // Используем отфильтрованные данные
         nodeCanvasObject={nodeCanvasObject}
         nodePointerAreaPaint={(node, color, ctx) => {
           if (!isGraphNode(node)) return;
