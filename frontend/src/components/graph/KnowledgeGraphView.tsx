@@ -257,6 +257,13 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   }, []);
 
   useEffect(() => {
+    if (fgRef.current) {
+      fgRef.current.d3Force('center', forceCenter(windowSize.width / 2, windowSize.height / 2));
+      fgRef.current.centerAt(windowSize.width / 2, windowSize.height / 2, 0);
+    }
+  }, [windowSize.width, windowSize.height]);
+
+  useEffect(() => {
     const tick = (now: number) => {
       rafRef.current = requestAnimationFrame(tick);
       if (document.hidden) return;
@@ -380,7 +387,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     setSelectedLink(null);
     updateHighlight(null);
     if (fgRef.current) {
-      fgRef.current.zoomToFit(600, 80);
+      fgRef.current.zoomToFit(400, 40);
     }
   }, [updateHighlight]);
 
@@ -611,7 +618,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   }
 
   return (
-    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-[#06070B] flex-1 flex">
+    <div ref={containerRef} className="w-full h-full min-h-[100vh] relative overflow-hidden bg-[#06070B] flex-1 flex">
       <GraphSidebarFilters
         nodes={data.nodes}
         selectedCategory={selectedCategory}
@@ -652,7 +659,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         onEngineStop={() => {
           attemptPendingFocus();
           if (fgRef.current && !selectedNode && !selectedLink && !pendingFocusRef.current) {
-            fgRef.current.zoomToFit(600, 60);
+            fgRef.current.zoomToFit(400, 40);
           }
         }}
         backgroundColor="transparent"
