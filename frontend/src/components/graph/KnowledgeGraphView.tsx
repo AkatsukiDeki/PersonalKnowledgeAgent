@@ -256,6 +256,31 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     return () => window.removeEventListener('resize', measure);
   }, []);
 
+  useEffect(() => {
+    const tick = (now: number) => {
+      rafRef.current = requestAnimationFrame(tick);
+      if (document.hidden) return;
+      const elapsed = now - lastFrameRef.current;
+      if (elapsed < FRAME_MS) return;
+      const dt = Math.min(elapsed, 80) / 1000;
+      lastFrameRef.current = now;
+      phaseRef.current += dt;
+
+      const stars = starsRef.current;
+      for (let i = 0; i < stars.length; i++) {
+        const star = stars[i];
+        star.x = wrapCoord(star.x + star.driftSpeedX * dt, STAR_BOUNDS);
+        star.y = wrapCoord(star.y + star.driftSpeedY * dt, STAR_BOUNDS);
+      }
+
+      fgRef.current?.resumeAnimation();
+    };
+
+    lastFrameRef.current = performance.now();
+    rafRef.current = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, []);
+
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
@@ -393,17 +418,17 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
 
   const paintBackground = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
     ctx.save();
-    ctx.fillStyle = 'rgba(30, 27, 75, 0.35)';
-    ctx.beginPath();
-    ctx.arc(0, 0, STAR_BOUNDS * globalScale, 0, 2 * Math.PI);
-    ctx.fill();
-    ctx.restore();
+    ctx.fillStyle = '#07080d';
+    ctx.fillRect(-STAR_BOUNDS, -STAR_BOUNDS, STAR_BOUNDS * 2, STAR_BOUNDS * 2);
 
     const phase = phaseRef.current;
 
-    ctx.save();
-    ctx.fillStyle = '#06070B';
-    ctx.fillRect(-STAR_BOUNDS - 1000, -STAR_BOUNDS - 1000, (STAR_BOUNDS + 1000) * 2, (STAR_BOUNDS + 1000) * 2);
+    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 900);
+    gradient.addColorStop(0, 'rgba(30, 27, 75, 0.35)');
+    gradient.addColorStop(1, 'rgba(10, 11, 16, 0)');
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(-STAR_BOUNDS, -STAR_BOUNDS, STAR_BOUNDS * 2, STAR_BOUNDS * 2);
 
     const stars = starsRef.current;
     const radiusScale = 1 / Math.max(globalScale, 0.35);
