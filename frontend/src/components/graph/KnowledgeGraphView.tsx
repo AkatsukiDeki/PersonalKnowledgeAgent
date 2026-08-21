@@ -8,7 +8,7 @@ import React, {
   useImperativeHandle,
 } from 'react';
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
-import { forceCenter, forceCollide, forceManyBody, forceX, forceY, forceLink } from 'd3-force';
+import { forceCenter, forceCollide, forceManyBody, forceX, forceY, SimulationNodeDatum } from 'd3-force';
 import { graphApi } from '../../api/graph';
 import { GraphNode, GraphLink } from '../../types/graph';
 import { GraphSidebarFilters } from './GraphSidebarFilters';
@@ -50,12 +50,12 @@ const STAR_BOUNDS = 5000;
 const STAR_COUNT = 640;
 const FRAME_MS = 1000 / 24;
 const SPACE_VOID = '#0a0b10';
-const LINK_GLOW = 'rgba(148, 163, 184, 0.25)';
+const LINK_GLOW = 'rgba(56, 189, 248, 0.25)';
 const LINK_CORE = 'rgba(186, 230, 253, 0.55)';
 
 const ENTITY_CONFIG: Record<string, EntityVisualMeta> = {
   insight:  { color: '#f59e0b', glowRgb: '245, 158, 11',  radius: 9, pulseFreq: 1.8 },
-  decision: { color: '#a855f7', glowRgb: '168, 85, 247',  radius: 7, pulseFreq: 1.2 },
+  decision: { color: '#8b5cf6', glowRgb: '139, 92, 246',  radius: 7, pulseFreq: 1.2 },
   entity:   { color: '#a855f7', glowRgb: '168, 85, 247',  radius: 5.5, pulseFreq: 1.0 },
   claim:    { color: '#38bdf8', glowRgb: '56, 189, 248',  radius: 3.5, pulseFreq: 0.9 },
   source:   { color: '#64748B', glowRgb: '100, 116, 139', radius: 3, pulseFreq: 0.5 },
@@ -244,6 +244,21 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   const lastFrameRef = useRef(0);
   const hasAutoFitRef = useRef(false);
 
+  const filteredData = useMemo(() => {
+    let nodes = data.nodes;
+    if (!showDecisions) {
+      nodes = nodes.filter((n) => n.group !== 'decision' && n.kind !== 'decision');
+    }
+    const nodeIds = new Set(nodes.map((n) => n.id));
+    const links = data.links.filter((l) => {
+      const sId = endpointId(l.source);
+      const tId = endpointId(l.target);
+      return nodeIds.has(sId) && nodeIds.has(tId);
+    });
+
+    return { nodes, links };
+  }, [data, showDecisions]);
+
   useEffect(() => {
     const measure = () => {
       if (containerRef.current) {
@@ -254,39 +269,6 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     measure();
     window.addEventListener('resize', measure);
     return () => window.removeEventListener('resize', measure);
-  }, []);
-
-  useEffect(() => {
-    if (fgRef.current) {
-      fgRef.current.d3Force('center', null); // мягкий радиальный центрирование
-      fgRef.current.d3Force('link', forceLink(data.links).id((d: any) => d.id).distance(45).strength(0.7));
-      fgRef.current.d3Force('charge', forceManyBody().strength(-120).distanceMax(500));
-    }
-  }, [data.links]);
-
-  useEffect(() => {
-    const tick = (now: number) => {
-      rafRef.current = requestAnimationFrame(tick);
-      if (document.hidden) return;
-      const elapsed = now - lastFrameRef.current;
-      if (elapsed < FRAME_MS) return;
-      const dt = Math.min(elapsed, 80) / 1000;
-      lastFrameRef.current = now;
-      phaseRef.current += dt;
-
-      const stars = starsRef.current;
-      for (let i = 0; i < stars.length; i++) {
-        const star = stars[i];
-        star.x = wrapCoord(star.x + star.driftSpeedX * dt, STAR_BOUNDS);
-        star.y = wrapCoord(star.y + star.driftSpeedY * dt, STAR_BOUNDS);
-      }
-
-      fgRef.current?.resumeAnimation();
-    };
-
-    lastFrameRef.current = performance.now();
-    rafRef.current = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(rafRef.current);
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -304,16 +286,6 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   useEffect(() => {
     fetchData();
   }, [fetchData]);
-
-  const sanitizedGraphData = useMemo(() => {
-    const nodeMap = new Set(data.nodes.map((n) => String(n.id)));
-    const validLinks = data.links.filter((link: any) => {
-      const sId = String(typeof link.source === 'object' ? link.source.id : link.source);
-      const tId = String(typeof link.target === 'object' ? link.target.id : link.target);
-      return nodeMap.has(sId) && nodeMap.has(tId);
-    });
-    return { nodes: data.nodes, links: validLinks };
-  }, [data]);
 
   const updateHighlight = useCallback((node: GraphNode | null) => {
     if (!node) {
@@ -398,9 +370,38 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     setSelectedLink(null);
     updateHighlight(null);
     if (fgRef.current) {
-      fgRef.current.zoomToFit(800, 80);
+      fgRef.current.zoomToFit(600, 80);
     }
   }, [updateHighlight]);
+
+  useEffect(() => {
+    if (!fgRef.current) return;
+    const fg = fgRef.current;
+    
+    fg.d3Force('charge', forceManyBody().strength(chargeForNode));
+    fg.d3Force('collide', forceCollide().radius((node: any) => {
+      if (!isGraphNode(node)) return 8;
+      const config = getNodeConfig(node);
+      return config.radius + 5;
+    }));
+    
+    const cx = windowSize.width / 2;
+    const cy = windowSize.height / 2;
+    const spreadX = Math.min(windowSize.width, windowSize.height) * 0.22;
+    const spreadY = Math.min(windowSize.width, windowSize.height) * 0.18;
+    
+    fg.d3Force('x', forceX().strength(0.06).x((node: any) => {
+      if (!isGraphNode(node)) return cx;
+      return domainAnchor(node, cx, cy, spreadX, spreadY).x;
+    }));
+    
+    fg.d3Force('y', forceY().strength(0.06).y((node: any) => {
+      if (!isGraphNode(node)) return cy;
+      return domainAnchor(node, cx, cy, spreadX, spreadY).y;
+    }));
+    
+    fg.d3ReheatSimulation();
+  }, [filteredData, windowSize]);
 
   useImperativeHandle(ref, () => ({
     focusNode: (nodeId: string, zoomLevel = 3.5) => {
@@ -435,18 +436,11 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   }, []);
 
   const paintBackground = useCallback((ctx: CanvasRenderingContext2D, globalScale: number) => {
-    ctx.save();
-    ctx.fillStyle = '#07080d';
-    ctx.fillRect(-STAR_BOUNDS, -STAR_BOUNDS, STAR_BOUNDS * 2, STAR_BOUNDS * 2);
-
     const phase = phaseRef.current;
 
-    const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, 900);
-    gradient.addColorStop(0, 'rgba(30, 27, 75, 0.35)');
-    gradient.addColorStop(1, 'rgba(10, 11, 16, 0)');
-
-    ctx.fillStyle = gradient;
-    ctx.fillRect(-STAR_BOUNDS, -STAR_BOUNDS, STAR_BOUNDS * 2, STAR_BOUNDS * 2);
+    ctx.save();
+    ctx.fillStyle = '#06070B';
+    ctx.fillRect(-STAR_BOUNDS - 1000, -STAR_BOUNDS - 1000, (STAR_BOUNDS + 1000) * 2, (STAR_BOUNDS + 1000) * 2);
 
     const stars = starsRef.current;
     const radiusScale = 1 / Math.max(globalScale, 0.35);
@@ -480,7 +474,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
       ? Math.sin(phase * config.pulseFreq * Math.PI) * 0.5 + 0.5
       : 0;
 
-    const baseRadius = config.radius / Math.max(globalScale, 0.08);
+    const baseRadius = config.radius / Math.max(globalScale * 0.28, 1);
     const visualRadius = isSelected || isHovered ? baseRadius * 1.15 : baseRadius;
 
     ctx.save();
@@ -561,16 +555,43 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     const hasActiveSelection = highlightLinks.size > 0;
     ctx.globalAlpha = isHL ? 0.75 : hasActiveSelection ? 0.03 : 0.12;
 
-    ctx.strokeStyle = LINK_GLOW; // полупрозрачные неоновые нити
-    ctx.lineWidth = 0.8 / globalScale; // толщиной 0.8px
+    const relType = link.type.toLowerCase();
+    const isConflict = relType === 'supersedes' || relType === 'contradicts';
+    ctx.strokeStyle = isHL
+      ? isConflict ? '#EF4444' : '#8B5CF6'
+      : isConflict ? '#7F1D1D' : 'rgba(255, 255, 255, 0.2)';
+
+    ctx.lineWidth = (isHL ? 1.4 : 0.4) / globalScale;
+
+    if (isConflict) {
+      ctx.setLineDash([3 / globalScale, 3 / globalScale]);
+    }
 
     ctx.beginPath();
     ctx.moveTo(sn.x ?? 0, sn.y ?? 0);
     ctx.lineTo(tn.x ?? 0, tn.y ?? 0);
     ctx.stroke();
+    ctx.setLineDash([]);
+
+    if (isHL) {
+      const dx = (tn.x ?? 0) - (sn.x ?? 0);
+      const dy = (tn.y ?? 0) - (sn.y ?? 0);
+      const angle = Math.atan2(dy, dx);
+      const len = 4.5 / globalScale;
+      const mx = ((sn.x ?? 0) + (tn.x ?? 0)) / 2;
+      const my = ((sn.y ?? 0) + (tn.y ?? 0)) / 2;
+
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.beginPath();
+      ctx.moveTo(mx + len * Math.cos(angle), my + len * Math.sin(angle));
+      ctx.lineTo(mx + len * Math.cos(angle - 2.4), my + len * Math.sin(angle - 2.4));
+      ctx.lineTo(mx + len * Math.cos(angle + 2.4), my + len * Math.sin(angle + 2.4));
+      ctx.fill();
+    }
 
     ctx.restore();
   }, [highlightLinks]);
+
 
   if (loading && data.nodes.length === 0) {
     return (
@@ -588,7 +609,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   }
 
   return (
-    <div ref={containerRef} className="w-full h-full min-h-[100vh] relative overflow-hidden bg-[#06070B] flex-1 flex">
+    <div ref={containerRef} className="w-full h-full relative overflow-hidden bg-[#06070B] flex-1 flex">
       <GraphSidebarFilters
         nodes={data.nodes}
         selectedCategory={selectedCategory}
@@ -603,7 +624,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         ref={fgRef}
         width={windowSize.width}
         height={windowSize.height}
-        graphData={sanitizedGraphData} // Используем отфильтрованные данные
+        graphData={filteredData}
         nodeCanvasObject={nodeCanvasObject}
         nodePointerAreaPaint={(node, color, ctx) => {
           if (!isGraphNode(node)) return;
@@ -629,7 +650,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         onEngineStop={() => {
           attemptPendingFocus();
           if (fgRef.current && !selectedNode && !selectedLink && !pendingFocusRef.current) {
-            fgRef.current.zoomToFit(800, 80);
+            fgRef.current.zoomToFit(400, 60);
           }
         }}
         backgroundColor="transparent"

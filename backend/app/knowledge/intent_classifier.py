@@ -1,46 +1,53 @@
 import logging
-from pydantic import BaseModel, Field
-from app.core.llm import model_manager, TaskType
 
 logger = logging.getLogger(__name__)
 
-class IntentResponse(BaseModel):
-    intent: str = Field(description="Must be 'FACTUAL', 'ANALYTICAL', 'TEMPORAL', or 'META'")
 
 async def classify_intent(query: str) -> str:
-    """Classify user query into FACTUAL or ANALYTICAL intent."""
+    """Classify user query into FACTUAL, ANALYTICAL, TEMPORAL, or META using fast deterministic rules (~0 ms)."""
     query_lower = query.lower()
-    
-    # 1. Fast path: keyword matching
+
+    # 0. Personal profile & memory queries
+    personal_keywords = [
+        "обо мне", "мой профиль", "что я", "кто я",
+        "мой персональный", "мои данные", "мой опыт",
+        "про меня", "ты же мой"
+    ]
+    if any(kw in query_lower for kw in personal_keywords):
+        logger.info(f"[IntentClassifier] Deterministic: detected personal query -> ANALYTICAL")
+        return "ANALYTICAL"
+
+    # 1. META: System, architecture, greetings, interface
     meta_keywords = [
         "что ты", "кто ты", "как ты работ", "твои возможн", "что умеешь",
         "взаимосвязан", "устройство", "как устроена память", "структура чат",
-        "помощь", "help", "привет", "здравствуй", "стек агента", "архитектур"
+        "помощь", "help", "привет", "здравствуй", "стек агента", "архитектур",
+        "космос", "вселенн", "метафор", "интерфейс", "граф", "звезд", "планет",
+        "созвезди", "deep space", "universe view", "связь тебя", "о себе", "о системе"
     ]
     if any(kw in query_lower for kw in meta_keywords):
+        logger.info(f"[IntentClassifier] Deterministic: -> META")
         return "META"
 
-    keywords_temporal = ["раньше", "сейчас", "эволюц", "динамик", "изменил", "история"]
+    # 2. TEMPORAL: Time, history, changes, past vs present
+    keywords_temporal = [
+        "когда", "раньше", "сейчас", "после", "до этого", "эволюц",
+        "динамик", "изменил", "история", "хронолог", "таймлайн", "сменили"
+    ]
     if any(kw in query_lower for kw in keywords_temporal):
+        logger.info(f"[IntentClassifier] Deterministic: -> TEMPORAL")
         return "TEMPORAL"
 
-    keywords = ["противореч", "привычк", "паттерн", "что общего", "заметил", "сравни"]
-    if any(kw in query_lower for kw in keywords):
+    # 3. ANALYTICAL: Comparison, patterns, why, contradictions
+    keywords_analytical = [
+        "почему", "противореч", "привычк", "паттерн", "что общего",
+        "заметил", "сравни", "анализ", "коллизи", "связь", "разниц"
+    ]
+    if any(kw in query_lower for kw in keywords_analytical):
+        logger.info(f"[IntentClassifier] Deterministic: -> ANALYTICAL")
         return "ANALYTICAL"
-        
-    # 2. Semantic fallback
-    try:
-        prompt = f"Query: '{query}'\n\nClassify this query. If it asks about you (the system), what you can do, or is a greeting, classify as META. If it asks for specific data points, commands, or facts, classify as FACTUAL. If it asks about history, changes over time, evolution, or past vs present, classify as TEMPORAL. If it asks to compare things, find patterns, or find commonalities, classify as ANALYTICAL."
-        res = await model_manager.generate_structured(
-            task_type=TaskType.EXTRACTION,
-            schema=IntentResponse,
-            prompt=prompt,
-            system_instruction="You are an intent classifier. Respond with exactly FACTUAL, ANALYTICAL, TEMPORAL, or META in the intent field."
-        )
-        intent = res.intent.strip().upper()
-        if intent in ["FACTUAL", "ANALYTICAL", "TEMPORAL", "META"]:
-            return intent
-        return "FACTUAL"
-    except Exception as e:
-        logger.warning(f"[IntentClassifier] LLM fallback failed: {e}. Defaulting to FACTUAL.")
-        return "FACTUAL"
+
+    # 4. Default fast path: FACTUAL (direct search, notes, definitions, files)
+    logger.info(f"[IntentClassifier] Deterministic default: -> FACTUAL")
+    return "FACTUAL"
+

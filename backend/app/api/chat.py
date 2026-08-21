@@ -1,9 +1,10 @@
 import json
 import uuid
-from fastapi import APIRouter, Depends, HTTPException
+import time
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 import logging
 
 logger = logging.getLogger(__name__)
@@ -15,12 +16,20 @@ from ..knowledge.query_condenser import rewrite_query
 from ..knowledge.retrieval import hybrid_search
 from ..schemas.chat import ChatRequest, ChatResponse, Citation
 from ..core.config import settings
-from ..db.models import Pattern, Claim, ClaimRelation, Conversation, ConversationMessage, ConversationMemory, Decision, TimelineEvent
+from ..db.models import (
+    Pattern,
+    Claim,
+    ClaimRelation,
+    Conversation,
+    ConversationMessage,
+    ConversationMemory,
+    Decision,
+    TimelineEvent
+)
 from sqlalchemy.orm import selectinload
 from ..knowledge.conversation_memory import maybe_trigger_memory_update
 from datetime import datetime
 from uuid import UUID
-from fastapi import BackgroundTasks
 
 import httpx
 
@@ -28,14 +37,21 @@ router = APIRouter(prefix="/chat", tags=["Chat"])
 
 META_SYSTEM_PROMPT = """Ты — PKA (Personal Knowledge Agent), персональная система управления знаниями.
 
-Твоя техническая архитектура и возможности:
+Твоя техническая архитектура, интерфейс и концепция:
 1. Архитектура памяти: Двухуровневая система.
-   - Локальная память треда: каждый чат изолирован по контексту текущего диалога и автоматически суммаризируется в ConversationMemory (Summary, Active Decisions, Open Questions).
-   - Глобальная память (L1–L4): общая база знаний для всех чатов (L1 Чанки источников, L2 Долгосрочные факты и решения со скорингом, L3 Кросс-доменные паттерны, L4 Временная эволюция).
-2. Взаимосвязь чатов: Ветки диалогов изолированы друг от друга в плане истории сообщений, но черпают и обогащают единую глобальную память знаний.
+   - Локальная память треда: каждый чат изолирован по контексту текущего диалога и автоматически суммаризируется в ConversationMemory (Problem, Context, Attempts, Decision Summary, Outcome).
+   - Глобальная память (L1–L4): единая база знаний для всех чатов (L1 Чанки источников, L2 Долгосрочные факты и решения со скорингом, L3 Кросс-доменные паттерны, L4 Временная эволюция).
+2. Визуальная метафора — «Вселенная памяти» (Universe View / Deep Space):
+   Интерфейс и граф знаний представлены в виде космического пространства («Вселенной памяти»), где сущности упорядочены как небесные тела:
+   - ⭐ Звезды (Insights) — высший синтез, инсайты и кросс-доменные паттерны с янтарным свечением;
+   - 🪐 Планеты (Decisions) — зафиксированные архитектурные и инженерные решения с фиолетовым ядром;
+   - ✦ Астероиды (Claims) — атомарные факты и проверенные утверждения (голубые);
+   - 📄 Базовые архивы (Sources) — исходные документы, файлы и заметки;
+   - ⚡ Вспышки (Conflicts) — противоречия и конфликты данных.
 3. Поиск и безопасность: Гибридный RAG (векторный BGE-M3 + BM25 с RRF-ранжированием) с механизмом Evidence Gate для защиты от галлюцинаций.
 
 Отвечай кратко, четко, структурировано и строго о себе как о системе PKA."""
+
 
 async def generate_meta_answer(query: str) -> str:
     payload = {
@@ -47,7 +63,10 @@ async def generate_meta_answer(query: str) -> str:
         "stream": False,
         "options": {"temperature": 0.2}
     }
-    async with httpx.AsyncClient(timeout=60.0) as client:
+
+    custom_timeout = httpx.Timeout(300.0, connect=10.0)
+
+    async with httpx.AsyncClient(timeout=custom_timeout) as client:
         resp = await client.post(f"{settings.OLLAMA_BASE_URL}/api/chat", json=payload)
         resp.raise_for_status()
         data = resp.json()
@@ -58,34 +77,71 @@ async def get_thread_context(db: AsyncSession, conversation_id: UUID, limit_mess
     mem_stmt = select(ConversationMemory).where(ConversationMemory.conversation_id == conversation_id)
     res = await db.execute(mem_stmt)
     mem = res.scalar_one_or_none()
-    
+
     thread_state_parts = []
-    if mem and mem.summary:
-        thread_state_parts.append(f"Суть ветки: {mem.summary}")
-    if mem and mem.active_decisions:
-        thread_state_parts.append(f"Принятые решения в ветке: {', '.join(mem.active_decisions)}")
-    if mem and mem.open_questions:
-        thread_state_parts.append(f"Открытые вопросы: {', '.join(mem.open_questions)}")
-    
+    if mem and getattr(mem, "problem", None):
+        thread_state_parts.append(f"Проблема: {mem.problem}")
+    if mem and getattr(mem, "decision_summary", None):
+        thread_state_parts.append(f"Принятое решение: {mem.decision_summary}")
+    if mem and getattr(mem, "attempts", None):
+        thread_state_parts.append(
+            f"Попытки: {', '.join(mem.attempts) if isinstance(mem.attempts, list) else mem.attempts}")
+
     thread_state_str = "\n".join(thread_state_parts)
 
     msg_stmt = (
         select(ConversationMessage)
         .where(ConversationMessage.conversation_id == conversation_id)
-        .order_by(ConversationMessage.created_at.desc())
+        .order_by(ConversationMessage.sequence_num.desc())
         .limit(limit_messages)
     )
     res = await db.execute(msg_stmt)
     recent_messages = list(reversed(res.scalars().all()))
-    
+
     history_list = [{"role": m.role, "content": m.content} for m in recent_messages]
     return thread_state_str, history_list
 
-async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatRequest, intent: str):
-    # 1. Intent Detection & Query Condensation
+
+async def append_chat_messages(
+        db: AsyncSession,
+        conversation_id: UUID,
+        user_query: str,
+        assistant_answer: str,
+        metrics: dict
+):
+    seq_stmt = (
+        select(func.coalesce(func.max(ConversationMessage.sequence_num), 0))
+        .where(ConversationMessage.conversation_id == conversation_id)
+    )
+    res = await db.execute(seq_stmt)
+    current_max_seq = res.scalar_one()
+
+    user_msg = ConversationMessage(
+        conversation_id=conversation_id,
+        role="user",
+        content=user_query,
+        sequence_num=current_max_seq + 1,
+        timestamp=datetime.utcnow(),
+        meta_info={}
+    )
+    assistant_msg = ConversationMessage(
+        conversation_id=conversation_id,
+        role="assistant",
+        content=assistant_answer,
+        sequence_num=current_max_seq + 2,
+        timestamp=datetime.utcnow(),
+        meta_info={"model": settings.OLLAMA_QA_MODEL, "context_used": metrics}
+    )
+    db.add(user_msg)
+    db.add(assistant_msg)
+
+
+async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatRequest, intent: str, timings: dict):
+    # 1. Query Condensation
+    t0 = time.perf_counter()
     is_success, search_query = await rewrite_query(payload.query, payload.history)
-    
-    # Select Thresholds
+    timings["query_condensation"] = time.perf_counter() - t0
+
     if intent in ("ANALYTICAL", "TEMPORAL"):
         min_sim = settings.ANALYTICAL_MIN_TOP1_SIMILARITY
         min_rrf = settings.ANALYTICAL_MIN_TOP_K_RELEVANCE_RRF
@@ -94,25 +150,27 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         min_rrf = settings.FACTUAL_MIN_TOP_K_RELEVANCE_RRF
 
     # 2. Retrieve [L1 CHUNK]
+    t0 = time.perf_counter()
     l1_chunks = await hybrid_search(
-        db=db, 
-        original_query=payload.query, 
-        search_query=search_query, 
+        db=db,
+        original_query=payload.query,
+        search_query=search_query,
         limit=5,
         include_history=False
     )
     for r in l1_chunks:
         if not r["text_content"].startswith("[L1 CHUNK]"):
             r["text_content"] = f"[L1 CHUNK] {r['text_content']}"
-    
-    # Context Layers
+    timings["l1_retrieval"] = time.perf_counter() - t0
+
     l2_claims = []
     l3_patterns = []
     l4_timeline = []
     graph_context = []
-    
-    # ML Enrichment Searches (Decision & Memory)
-    from app.knowledge.embeddings.factory import get_embedding_provider
+
+    # 3. ML Enrichment (Embeddings & Vector Searches)
+    t0 = time.perf_counter()
+    from ..knowledge.embeddings.factory import get_embedding_provider
     provider = get_embedding_provider()
     query_emb = None
     try:
@@ -120,9 +178,8 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         query_emb = emb_res
     except Exception as e:
         logger.warning(f"Failed to embed query for ML Enrichment: {e}")
-        
+
     if query_emb and len(query_emb) == settings.EMBEDDING_DIMENSION:
-        # 1. Search Decisions
         dec_stmt = (
             select(Decision, Decision.embedding.cosine_distance(query_emb).label("distance"))
             .where(Decision.embedding.is_not(None))
@@ -132,12 +189,10 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         dec_res = await db.execute(dec_stmt)
         for dec, dist in dec_res.all():
             sim = 1.0 - float(dist)
-            if sim < 0.45: continue
-            
-            # Temporal Resolution Logic
+            if sim < 0.45:
+                continue
             score_multiplier = 1.5 if dec.status == "active" else 0.1
             final_sim = sim * score_multiplier
-            
             l2_claims.append({
                 "chunk_id": str(dec.id),
                 "source_id": str(dec.memory_id),
@@ -146,8 +201,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 "rrf_score": final_sim,
                 "is_pattern": True
             })
-            
-        # 2. Search Conversation Memories
+
         mem_stmt = (
             select(ConversationMemory, ConversationMemory.embedding.cosine_distance(query_emb).label("distance"))
             .where(ConversationMemory.embedding.is_not(None))
@@ -157,22 +211,25 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         mem_res = await db.execute(mem_stmt)
         for mem, dist in mem_res.all():
             sim = 1.0 - float(dist)
-            if sim < 0.3: continue
+            if sim < 0.3:
+                continue
             l2_claims.append({
                 "chunk_id": str(mem.id),
                 "source_id": str(mem.conversation_id),
-                "text_content": f"=== [CONVERSATION MEMORY] ===\nProblem: {mem.problem}\nAttempts: {', '.join(mem.attempts)}\nOutcome: {mem.outcome}",
+                "text_content": f"=== [CONVERSATION MEMORY] ===\nProblem: {mem.problem}\nAttempts: {', '.join(mem.attempts) if isinstance(mem.attempts, list) else mem.attempts}\nOutcome: {mem.outcome}",
                 "similarity": sim,
                 "rrf_score": sim,
                 "is_pattern": True
             })
-    
-    # 3. Context Builder (L2, L3, L4, Graph)
+    timings["vector_enrichment"] = time.perf_counter() - t0
+
+    # 4. Graph & Deep Retrieval (L2, L3, L4, Graph)
+    t0 = time.perf_counter()
     chunk_ids = [r["chunk_id"] for r in l1_chunks]
-    
+
     if intent in ("ANALYTICAL", "TEMPORAL", "FACTUAL") and chunk_ids:
-        # L2 Claims (Active)
-        claims = (await db.execute(select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))).scalars().all()
+        claims = (await db.execute(
+            select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))).scalars().all()
         claim_ids = [c.id for c in claims]
         for c in claims:
             l2_claims.append({
@@ -183,8 +240,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 "rrf_score": 1.0,
                 "is_pattern": True
             })
-            
-        # L4 Temporal/Conflict (ClaimRelations)
+
         if claim_ids:
             relations = (await db.execute(select(ClaimRelation).where(
                 (ClaimRelation.source_claim_id.in_(claim_ids)) | (ClaimRelation.target_claim_id.in_(claim_ids))
@@ -199,8 +255,6 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "is_pattern": True
                 })
 
-        # Graph Traversal (Multi-Hop)
-        if claim_ids:
             from ..knowledge.graph_traversal import GraphTraversalEngine
             traversal_engine = GraphTraversalEngine(db)
             graph_context_text = await traversal_engine.traverse_from_claims(claim_ids, max_depth=2, limit_neighbors=5)
@@ -214,26 +268,27 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "is_pattern": True
                 })
 
-        # Timeline Evolution (L4)
         if intent in ("TEMPORAL", "ANALYTICAL") and claim_ids:
             timeline_events = (await db.execute(
                 select(TimelineEvent)
                 .options(selectinload(TimelineEvent.old_claim), selectinload(TimelineEvent.new_claim))
                 .where(
-                    (TimelineEvent.old_claim_id.in_(claim_ids)) | 
+                    (TimelineEvent.old_claim_id.in_(claim_ids)) |
                     (TimelineEvent.new_claim_id.in_(claim_ids))
                 ).order_by(TimelineEvent.timestamp.desc()).limit(5)
             )).scalars().all()
-            
+
             if timeline_events:
                 timeline_text_parts = []
                 for ev in timeline_events:
-                    old_date = ev.old_claim.valid_from.strftime("%Y-%m-%d") if (ev.old_claim and ev.old_claim.valid_from) else "Ранее"
-                    new_date = ev.new_claim.valid_from.strftime("%Y-%m-%d") if (ev.new_claim and ev.new_claim.valid_from) else ev.timestamp.strftime("%Y-%m-%d")
+                    old_date = ev.old_claim.valid_from.strftime("%Y-%m-%d") if (
+                            ev.old_claim and ev.old_claim.valid_from) else "Ранее"
+                    new_date = ev.new_claim.valid_from.strftime("%Y-%m-%d") if (
+                            ev.new_claim and ev.new_claim.valid_from) else ev.timestamp.strftime("%Y-%m-%d")
                     timeline_text_parts.append(
                         f"* [{old_date} -> {new_date}] {ev.title}: \"{ev.description}\" (supersedes: Claim #{ev.old_claim_id} -> Claim #{ev.new_claim_id})"
                     )
-                
+
                 timeline_context = "=== [L4 TIMELINE EVOLUTION] ===\n" + "\n".join(timeline_text_parts)
                 l4_timeline.append({
                     "chunk_id": str(uuid.uuid4()),
@@ -244,9 +299,10 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "is_pattern": True
                 })
 
-    # L3 Patterns
     if intent in ("ANALYTICAL", "TEMPORAL", "FACTUAL"):
-        patterns = (await db.execute(select(Pattern).where(Pattern.confidence >= 0.70, Pattern.status == 'accepted').order_by(Pattern.created_at.desc()).limit(3))).scalars().all()
+        patterns = (await db.execute(
+            select(Pattern).where(Pattern.confidence >= 0.70, Pattern.status == 'accepted').order_by(
+                Pattern.created_at.desc()).limit(3))).scalars().all()
         for p in patterns:
             if p.evidence_claim_ids:
                 l3_patterns.append({
@@ -257,24 +313,18 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "rrf_score": 1.0,
                     "is_pattern": True
                 })
+    timings["graph_and_deep_retrieval"] = time.perf_counter() - t0
 
-    # Combine in strict hierarchy
     retrieved = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
-    has_synth_layers = bool(l2_claims or l3_patterns or l4_timeline)
 
-    # 4. Evidence Gate Strict
-    # Фильтрация по порогу уверенности
     RELEVANCE_THRESHOLD = 0.45
-    
-    # We only keep items that explicitly pass similarity, or are structural (graph context)
-    # But we MUST have at least one high-similarity source chunk or decision.
     has_high_sim = any(
-        float(item.get("similarity", 0.0)) >= RELEVANCE_THRESHOLD 
+        float(item.get("similarity", 0.0)) >= RELEVANCE_THRESHOLD
         for item in retrieved if "similarity" in item
     )
-    
+
     valid_evidence = [
-        item for item in retrieved 
+        item for item in retrieved
         if "similarity" not in item or float(item["similarity"]) >= RELEVANCE_THRESHOLD
     ]
 
@@ -283,23 +333,24 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         if not has_high_sim:
             is_sufficient = False
         else:
-            # check the top 1 similarity among those that actually have it
             sims = [float(r["similarity"]) for r in retrieved if "similarity" in r]
             top1_sim = max(sims) if sims else 0.0
-            
+
             if top1_sim < min_sim:
                 is_sufficient = False
-                
-            # For factual, we need enough chunks
-            relevant_chunks = [r for r in valid_evidence if r.get("source_id")] # actual chunks
+
+            relevant_chunks = [r for r in valid_evidence if r.get("source_id")]
             if intent == "FACTUAL" and len(relevant_chunks) < settings.MIN_RELEVANT_CHUNKS:
                 is_sufficient = False
 
     return is_sufficient, valid_evidence if valid_evidence else retrieved, search_query, intent
 
+
 @router.post("/", response_model=ChatResponse)
 @router.post("", response_model=ChatResponse, include_in_schema=False)
 async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+    trace_start = time.perf_counter()
+    timings = {}
     try:
         conv = None
         thread_state = ""
@@ -309,29 +360,24 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 thread_state, history = await get_thread_context(db, payload.conversation_id)
                 payload.history = history
 
+        t0 = time.perf_counter()
         intent = await classify_intent(payload.query)
+        timings["intent_classification"] = time.perf_counter() - t0
 
         if intent == "META":
+            t0 = time.perf_counter()
             answer = await generate_meta_answer(payload.query)
+            timings["llm_generation"] = time.perf_counter() - t0
             metrics = {"l1_count": 0, "l2_count": 0, "l3_count": 0, "intent": "META"}
             if conv:
-                user_msg = Message(conversation_id=conv.id, role="user", content=payload.query)
-                assistant_msg = Message(
-                    conversation_id=conv.id,
-                    role="assistant",
-                    content=answer,
-                    model=settings.OLLAMA_QA_MODEL,
-                    context_used=metrics
-                )
-                db.add(user_msg)
-                db.add(assistant_msg)
-                conv.updated_at = datetime.utcnow()
+                await append_chat_messages(db, conv.id, payload.query, answer, metrics)
+                conv.ended_at = datetime.utcnow()
                 await db.commit()
                 background_tasks.add_task(maybe_trigger_memory_update, conv.id)
             return ChatResponse(answer=answer, citations=[], metrics=metrics)
 
-        is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload, intent)
-        
+        is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload, intent, timings)
+
         if not is_sufficient:
             return ChatResponse(
                 answer="INSUFFICIENT_DATA: Недостаточно данных в вашей базе знаний.",
@@ -347,7 +393,27 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 "rrf_score": 1.0
             })
 
+        t0 = time.perf_counter()
         answer = await generate_rag_response(query=payload.query, retrieved_chunks=retrieved)
+        timings["llm_generation"] = time.perf_counter() - t0
+
+        total_time = time.perf_counter() - trace_start
+
+        log_report = f"""
+┌────────────────────────────────────────────────────────┐
+│ [REQUEST TIMING TRACE REPORT (SYNC)]                   │
+├────────────────────────────────────────────────────────┤
+│ Intent classification:     {timings.get("intent_classification", 0):.3f}s     │
+│ Query condensation:        {timings.get("query_condensation", 0):.3f}s     │
+│ L1 hybrid retrieval:       {timings.get("l1_retrieval", 0):.3f}s     │
+│ Vector ML enrichment:      {timings.get("vector_enrichment", 0):.3f}s     │
+│ Graph & deep retrieval:    {timings.get("graph_and_deep_retrieval", 0):.3f}s     │
+│ LLM generation (sync):     {timings.get("llm_generation", 0):.3f}s     │
+├────────────────────────────────────────────────────────┤
+│ TOTAL TIME:                {total_time:.3f}s     │
+└────────────────────────────────────────────────────────┘
+"""
+        print(log_report)
 
         metrics = {
             "l1_count": int(len([r for r in retrieved if r["text_content"].startswith("[L1")])),
@@ -359,13 +425,13 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
         }
 
         if conv:
-            if conv.title == "Новый диалог":
-                # Auto-generate title
+            if conv.title in ("Новый диалог", "Untitled Conversation"):
                 try:
-                    from app.core.llm import model_manager, TaskType
+                    from ..core.llm import model_manager, TaskType
                     from pydantic import BaseModel, Field
                     class TitleResponse(BaseModel):
                         title: str = Field(description="Short title (max 4-5 words)")
+
                     title_res = await model_manager.generate_structured(
                         task_type=TaskType.EXTRACTION,
                         schema=TitleResponse,
@@ -376,17 +442,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 except Exception:
                     conv.title = payload.query[:30] + ("..." if len(payload.query) > 30 else "")
 
-            user_msg = Message(conversation_id=conv.id, role="user", content=payload.query)
-            assistant_msg = Message(
-                conversation_id=conv.id,
-                role="assistant",
-                content=answer,
-                model=settings.OLLAMA_QA_MODEL,
-                context_used=metrics
-            )
-            db.add(user_msg)
-            db.add(assistant_msg)
-            conv.updated_at = datetime.utcnow()
+            await append_chat_messages(db, conv.id, payload.query, answer, metrics)
+            conv.ended_at = datetime.utcnow()
             await db.commit()
             background_tasks.add_task(maybe_trigger_memory_update, conv.id)
 
@@ -394,7 +451,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
             Citation(
                 chunk_id=str(item["chunk_id"]),
                 source_id=str(item["source_id"]),
-                text_snippet=item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item["text_content"],
+                text_snippet=item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item[
+                    "text_content"],
                 score=round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
             )
             for item in retrieved if not item["text_content"].startswith("[CONVERSATION LOCAL STATE]")
@@ -405,9 +463,13 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
         logger.exception("RAG pipeline failed")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @router.post("/stream")
-async def chat_stream_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+async def chat_stream_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
+                               db: AsyncSession = Depends(get_db)):
     async def event_generator():
+        trace_start = time.perf_counter()
+        timings = {}
         try:
             conv = None
             thread_state = ""
@@ -417,33 +479,30 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
                     thread_state, history = await get_thread_context(db, payload.conversation_id)
                     payload.history = history
 
+            t0 = time.perf_counter()
             intent = await classify_intent(payload.query)
+            timings["intent_classification"] = time.perf_counter() - t0
 
             if intent == "META":
+                t0 = time.perf_counter()
                 answer = await generate_meta_answer(payload.query)
+                timings["llm_generation"] = time.perf_counter() - t0
+
                 yield f"event: message\ndata: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
-                
+
                 if conv:
                     metrics = {"l1_count": 0, "l2_count": 0, "l3_count": 0, "intent": "META"}
-                    user_msg = Message(conversation_id=conv.id, role="user", content=payload.query)
-                    assistant_msg = Message(
-                        conversation_id=conv.id,
-                        role="assistant",
-                        content=answer,
-                        model=settings.OLLAMA_QA_MODEL,
-                        context_used=metrics
-                    )
-                    db.add(user_msg)
-                    db.add(assistant_msg)
-                    conv.updated_at = datetime.utcnow()
+                    await append_chat_messages(db, conv.id, payload.query, answer, metrics)
+                    conv.ended_at = datetime.utcnow()
                     await db.commit()
                     background_tasks.add_task(maybe_trigger_memory_update, conv.id)
-                
+
                 yield "event: done\ndata: [DONE]\n\n"
                 return
 
-            is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload, intent)
-            
+            is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload,
+                                                                                                     intent, timings)
+
             yield f"event: retrieval\ndata: {json.dumps({'status': 'searching', 'query': search_query, 'intent': intent}, ensure_ascii=False)}\n\n"
 
             if not is_sufficient:
@@ -464,29 +523,52 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
                 {
                     "chunk_id": str(item["chunk_id"]),
                     "source_id": str(item["source_id"]),
-                    "text_snippet": item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item["text_content"],
+                    "text_snippet": item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item[
+                        "text_content"],
                     "score": round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
                 }
                 for item in retrieved if not item["text_content"].startswith("[CONVERSATION LOCAL STATE]")
             ]
             yield f"event: citations\ndata: {json.dumps(citations_data, ensure_ascii=False)}\n\n"
 
+            t0 = time.perf_counter()
             full_answer = ""
             async for token in stream_rag_response(payload.query, retrieved):
                 full_answer += token
                 yield f"event: message\ndata: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
+            timings["llm_generation"] = time.perf_counter() - t0
+
+            total_time = time.perf_counter() - trace_start
+
+            log_report = f"""
+┌────────────────────────────────────────────────────────┐
+│ [REQUEST TIMING TRACE REPORT (STREAM)]                 │
+├────────────────────────────────────────────────────────┤
+│ Intent classification:     {timings.get("intent_classification", 0):.3f}s     │
+│ Query condensation:        {timings.get("query_condensation", 0):.3f}s     │
+│ L1 hybrid retrieval:       {timings.get("l1_retrieval", 0):.3f}s     │
+│ Vector ML enrichment:      {timings.get("vector_enrichment", 0):.3f}s     │
+│ Graph & deep retrieval:    {timings.get("graph_and_deep_retrieval", 0):.3f}s     │
+│ LLM generation (stream):   {timings.get("llm_generation", 0):.3f}s     │
+├────────────────────────────────────────────────────────┤
+│ TOTAL TIME:                {total_time:.3f}s     │
+└────────────────────────────────────────────────────────┘
+"""
+            print(log_report)
 
             if conv:
-                if conv.title == "Новый диалог":
+                if conv.title in ("Новый диалог", "Untitled Conversation"):
                     try:
-                        from app.core.llm import model_manager, TaskType
+                        from ..core.llm import model_manager, TaskType
                         from pydantic import BaseModel, Field
+
                         class TitleResponse(BaseModel):
                             title: str = Field(description="Short title (max 4-5 words)")
+
                         title_res = await model_manager.generate_structured(
                             task_type=TaskType.EXTRACTION,
                             schema=TitleResponse,
-                            prompt=f"Generate a very short, concise title (max 4-5 words) summarizing this first message: '{payload.query}'",
+                        prompt=f"Generate a very short, concise title (max 4-5 words) summarizing this first message: '{payload.query}'",
                             system_instruction="You are a title generator. Be brief, use Russian if message is Russian."
                         )
                         conv.title = title_res.title.strip()
@@ -501,17 +583,8 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
                     "graph_hops": int(len([r for r in retrieved if r["text_content"].startswith("=== [GRAPH")])),
                     "intent": str(intent)
                 }
-                user_msg = Message(conversation_id=conv.id, role="user", content=payload.query)
-                assistant_msg = Message(
-                    conversation_id=conv.id,
-                    role="assistant",
-                    content=full_answer,
-                    model=settings.OLLAMA_QA_MODEL,
-                    context_used=metrics
-                )
-                db.add(user_msg)
-                db.add(assistant_msg)
-                conv.updated_at = datetime.utcnow()
+                await append_chat_messages(db, conv.id, payload.query, full_answer, metrics)
+                conv.ended_at = datetime.utcnow()
                 await db.commit()
                 background_tasks.add_task(maybe_trigger_memory_update, conv.id)
 

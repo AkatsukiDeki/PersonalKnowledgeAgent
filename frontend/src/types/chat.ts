@@ -32,3 +32,21 @@ export interface ConversationMemory {
   outcome?: string;
   importance?: number;
 }
+
+/* ── Provenance Tree types ── */
+export interface ProvenanceNode {
+  type: 'decision' | 'claim' | 'source';
+  id: string;
+  label: string;
+  status?: string;       // 'active' | 'superseded'
+  weight?: number;       // decision score
+  snippet?: string;      // source text snippet
+  children?: ProvenanceNode[];
+}
+
+/* ── Memory Orbit live context ── */
+export interface OrbitContext {
+  decisions: Decision[];
+  evidences: Citation[];
+  insights: { id: string; title: string; domain?: string }[];
+}

@@ -1,35 +1,48 @@
-import React, { useState, useEffect } from 'react';
-import { Message, Citation } from '../../types/chat';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { Send } from 'lucide-react';
+import { Send, Loader2 } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
-import { ConversationMemory, Decision } from '../../types/chat';
-import { ConversationExperiencePanel } from './ConversationExperiencePanel';
 
-export function ChatWorkspace() {
+interface Props {
+  onOrbitUpdate?: (ctx: OrbitContext | null) => void;
+  seedPrompt?: string | null;
+  onSeedConsumed?: () => void;
+}
+
+export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
-  const [memory, setMemory] = useState<ConversationMemory | null>(null);
-  const [decisions, setDecisions] = useState<Decision[]>([]);
-  
+
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCooldown, setIsCooldown] = useState(false);
   const [loadingStatus, setLoadingStatus] = useState('');
-  
+
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
-  const [showExperiencePanel, setShowExperiencePanel] = useState(true);
+
+  const messagesEndRef = React.useRef<HTMLDivElement| null>(null);
+
+  // Auto-scroll on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   useEffect(() => {
     if (activeConvId) {
       loadConversation(activeConvId);
     } else {
       setMessages([]);
-      setMemory(null);
-      setDecisions([]);
+      pushOrbit(null);
     }
   }, [activeConvId]);
+
+  useEffect(() => {
+    if (!seedPrompt) return;
+    setInput(seedPrompt);
+    onSeedConsumed?.();
+  }, [seedPrompt, onSeedConsumed]);
 
   useEffect(() => {
     const handleOpenConv = (e: Event) => {
@@ -43,13 +56,14 @@ export function ChatWorkspace() {
     return () => window.removeEventListener('openConversation', handleOpenConv);
   }, []);
 
+  const pushOrbit = useCallback((ctx: OrbitContext | null) => {
+    onOrbitUpdate?.(ctx);
+  }, [onOrbitUpdate]);
+
   const loadConversation = async (id: string) => {
     try {
       const data = await conversationsApi.getConversationDetail(id);
-      
-      setMemory(data.memory || null);
-      setDecisions(data.decisions || []);
-      
+
       const formatted = data.messages.map(m => {
         let r: 'user' | 'assistant' = 'user';
         if (m.role === 'assistant' || m.role === 'system') r = 'assistant';
@@ -58,10 +72,17 @@ export function ChatWorkspace() {
           role: r,
           content: m.content,
           timestamp: m.created_at,
-          citations: [] // TODO: Load citations if needed
+          citations: [] as Citation[],
         };
       });
       setMessages(formatted);
+
+      // Push decisions to orbit
+      pushOrbit({
+        decisions: data.decisions || [],
+        evidences: [],
+        insights: [],
+      });
     } catch (err) {
       console.error("Failed to load conversation", err);
     }
@@ -135,6 +156,12 @@ export function ChatWorkspace() {
             msg.id === assistantId ? { ...msg, citations } : msg
           )
         );
+        // Push evidences to orbit
+        pushOrbit({
+          decisions: [],
+          evidences: citations,
+          insights: [],
+        });
       },
       (token) => {
         streamBuffer += token;
@@ -173,72 +200,87 @@ export function ChatWorkspace() {
     );
   };
 
+  // Handle Shift+Enter for multiline
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSubmit(e as unknown as React.FormEvent);
+    }
+  };
+
   return (
-    <div className="flex h-full w-full">
-      <ConversationSidebar 
+    <div className="flex h-full w-full bg-transparent">
+      <ConversationSidebar
         activeConversationId={activeConvId}
         onSelectConversation={setActiveConvId}
         onNewConversation={handleNewConversation}
       />
-      <div className="flex flex-col flex-1 h-full bg-zinc-950 text-zinc-100 min-w-0">
-        
-        {/* Header */}
-        {activeConvId && (memory || decisions.length > 0) && (
-          <div className="h-12 border-b border-zinc-800 flex items-center justify-end px-4 shrink-0">
-            <button 
-              onClick={() => setShowExperiencePanel(!showExperiencePanel)}
-              className={`text-xs font-medium px-3 py-1.5 rounded-md transition-colors ${showExperiencePanel ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/50'}`}
-            >
-              {showExperiencePanel ? 'Скрыть опыт' : 'Показать опыт'}
-            </button>
-          </div>
-        )}
 
-        <div className="flex-1 overflow-y-auto p-4 max-w-3xl w-full mx-auto">
+      <div className="flex flex-col flex-1 h-full bg-transparent text-slate-200 min-w-0 relative">
+
+        {/* Message stream */}
+        <div className="flex-1 overflow-y-auto p-6 max-w-3xl w-full mx-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col gap-4 items-center justify-center text-zinc-500 text-sm">
-              <p>Задайте вопрос агенту по вашей базе знаний...</p>
+            <div className="h-full flex flex-col gap-4 items-center justify-center text-white/40 text-sm">
+              <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-1">
+                ✦
+              </div>
+              <p className="font-light">Задайте вопрос агенту по вашей базе знаний…</p>
               {!activeConvId && (
-                <button onClick={handleNewConversation} className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded shadow-sm text-xs transition-colors">
-                  Начать новый диалог
+                <button
+                  onClick={handleNewConversation}
+                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white/90 border border-white/10 rounded-xl text-xs font-mono transition-all"
+                >
+                  [ Начать новый диалог ]
                 </button>
               )}
             </div>
           ) : (
-            messages.map((msg) => <MessageView key={msg.id} message={msg} />)
+            <div className="space-y-6">
+              {messages.map((msg) => (
+                <MessageView key={msg.id} message={msg} />
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
           )}
         </div>
 
+        {/* Loading status */}
         {loadingStatus && (
-          <div className="max-w-3xl w-full mx-auto px-4 pb-2 text-xs text-emerald-500/70 font-medium animate-pulse">
-            {loadingStatus}
+          <div className="max-w-3xl w-full mx-auto px-6 pb-2">
+            <div className="flex items-center gap-2.5 text-xs text-indigo-400/80 font-mono">
+              <Loader2 size={13} className="animate-spin" />
+              <span>{loadingStatus}</span>
+            </div>
           </div>
         )}
 
-        <div className="p-4 border-t border-zinc-800 max-w-3xl w-full mx-auto shrink-0">
-          <form onSubmit={handleSubmit} className="flex gap-2">
-            <input
-              type="text"
+        {/* Glass Input Bar */}
+        <div className="p-4 max-w-3xl w-full mx-auto shrink-0">
+          <form
+            onSubmit={handleSubmit}
+            className="bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-3 p-3 shadow-2xl transition-all focus-within:border-white/20"
+          >
+            <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder={isCooldown ? 'Подождите...' : 'Введите запрос...'}
+              onKeyDown={handleKeyDown}
+              placeholder={isCooldown ? 'Подождите…' : 'Введите запрос... (Shift+Enter — новая строка)'}
               disabled={isLoading || isCooldown}
-              className="flex-1 bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-100 focus:outline-none focus:border-emerald-500 disabled:opacity-50 transition-all"
+              rows={1}
+              className="flex-1 bg-transparent border-none text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-2 px-2 disabled:opacity-40 font-light"
+              style={{ minHeight: '38px' }}
             />
             <button
               type="submit"
               disabled={isLoading || isCooldown || !input.trim()}
-              className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-800 disabled:text-zinc-600 text-white px-4 py-2.5 rounded-lg flex items-center justify-center transition-colors"
+              className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white p-2.5 rounded-xl flex items-center justify-center transition-all shrink-0 shadow-lg shadow-indigo-500/20 disabled:shadow-none"
             >
-              <Send size={16} />
+              {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} strokeWidth={1.5} />}
             </button>
           </form>
         </div>
       </div>
-      
-      {showExperiencePanel && (memory || decisions.length > 0) && (
-        <ConversationExperiencePanel memory={memory} decisions={decisions} />
-      )}
     </div>
   );
 }

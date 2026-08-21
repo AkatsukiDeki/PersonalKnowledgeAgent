@@ -1,44 +1,60 @@
 import json
 import logging
-from uuid import UUID
 from datetime import datetime
-from pydantic import BaseModel, Field
-from sqlalchemy import select, func
-from sqlalchemy.dialects.postgresql import insert
-from app.db.session import async_session_factory
-from app.db.models import ConversationMessage, ConversationMemory
-from app.core.config import settings
+from typing import List, Optional
+from uuid import UUID
+
 import httpx
+from pydantic import BaseModel, Field
+from sqlalchemy import func, select
+from sqlalchemy.dialects.postgresql import insert
+
+from ..core.config import settings
+from ..db.models import ConversationMemory, ConversationMessage
+from ..db.session import async_session_factory
 
 logger = logging.getLogger("conversation_memory")
 
+
 class ExtractedConversationState(BaseModel):
-    summary: str = Field(description="Краткое резюме сути текущей ветки (2-3 предложения)")
-    active_decisions: list[str] = Field(default_factory=list, description="Принятые технические/архитектурные решения")
-    open_questions: list[str] = Field(default_factory=list, description="Открытые вопросы или задачи, оставшиеся без ответа")
+    problem: str = Field(default="", description="Какая проблема или задача решалась в ветке")
+    context: Optional[str] = Field(default="", description="Вводные данные, архитектурный контекст и ограничения")
+    attempts: List[str] = Field(default_factory=list, description="Рассмотренные варианты, гипотезы и попытки")
+    decision_summary: str = Field(default="", description="Итоговое зафиксированное решение и договоренности")
+    outcome: Optional[str] = Field(default="", description="Результат, статус или открытые вопросы")
+
 
 SUMMARY_PROMPT = """Ты — аналитический компонент персонального агента знаний (PKA).
-Твоя задача — проанализировать историю сообщений диалога и обновить его сжатое состояние.
+Твоя задача — проанализировать историю сообщений диалога и сформировать консолидированный опыт (ConversationMemory).
 
 Выдели:
-1. summary: Краткая суть того, что обсуждается в диалоге (2-3 предложения).
-2. active_decisions: Список зафиксированных инженерных/архитектурных решений и договоренностей.
-3. open_questions: Список вопросов или задач, которые пока остались открытыми.
+1. problem: Какая ключевая проблема или задача решается в диалоге (1-2 предложения).
+2. context: Архитектурные ограничения и вводные контекста.
+3. attempts: Список вариантов, которые пробовали или рассматривали.
+4. decision_summary: Итоговое зафиксированное техническое решение.
+5. outcome: Текущий результат, артефакты или оставшиеся открытые вопросы.
 
 Верни строго валидный JSON следующего формата:
 {
-  "summary": "...",
-  "active_decisions": ["...", "..."],
-  "open_questions": ["...", "..."]
+  "problem": "...",
+  "context": "...",
+  "attempts": ["...", "..."],
+  "decision_summary": "...",
+  "outcome": "..."
 }
 """
+
 
 async def update_conversation_memory(conversation_id: UUID) -> None:
     """Анализирует историю сообщений ветки и обновляет ConversationMemory."""
     try:
         async with async_session_factory() as db:
-            # Получаем все сообщения ветки
-            stmt = select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc())
+            # Извлекаем все сообщения ветки в хронологическом порядке
+            stmt = (
+                select(ConversationMessage)
+                .where(ConversationMessage.conversation_id == conversation_id)
+                .order_by(ConversationMessage.sequence_num.asc())
+            )
             res = await db.execute(stmt)
             messages = res.scalars().all()
 
@@ -47,7 +63,7 @@ async def update_conversation_memory(conversation_id: UUID) -> None:
 
             dialogue_text = "\n".join([f"{m.role.upper()}: {m.content}" for m in messages])
 
-            # Запрос к локальной LLM для суммаризации
+            # Запрос к локальной LLM для структурированной суммаризации
             payload = {
                 "model": settings.OLLAMA_EXTRACTION_MODEL,
                 "messages": [
@@ -67,27 +83,30 @@ async def update_conversation_memory(conversation_id: UUID) -> None:
                 parsed = json.loads(raw_json)
 
             state = ExtractedConversationState(
-                summary=parsed.get("summary", ""),
-                active_decisions=parsed.get("active_decisions", []),
-                open_questions=parsed.get("open_questions", [])
+                problem=parsed.get("problem", "Обсуждение технической задачи"),
+                context=parsed.get("context", ""),
+                attempts=parsed.get("attempts", []),
+                decision_summary=parsed.get("decision_summary", "Решение в процессе выработки"),
+                outcome=parsed.get("outcome", "")
             )
 
-            now = datetime.utcnow()
+            # Upsert в таблицу conversation_memories строго по схеме модели
             upsert_stmt = insert(ConversationMemory).values(
                 conversation_id=conversation_id,
-                summary=state.summary,
-                active_decisions=state.active_decisions,
-                open_questions=state.open_questions,
-                message_count_at_summary=len(messages),
-                updated_at=now
+                problem=state.problem,
+                context=state.context,
+                attempts=state.attempts,
+                decision_summary=state.decision_summary,
+                outcome=state.outcome,
+                created_at=datetime.utcnow()
             ).on_conflict_do_update(
                 index_elements=[ConversationMemory.conversation_id],
                 set_={
-                    "summary": state.summary,
-                    "active_decisions": state.active_decisions,
-                    "open_questions": state.open_questions,
-                    "message_count_at_summary": len(messages),
-                    "updated_at": now
+                    "problem": state.problem,
+                    "context": state.context,
+                    "attempts": state.attempts,
+                    "decision_summary": state.decision_summary,
+                    "outcome": state.outcome,
                 }
             )
             await db.execute(upsert_stmt)
@@ -97,19 +116,18 @@ async def update_conversation_memory(conversation_id: UUID) -> None:
     except Exception as e:
         logger.error(f"Failed to update conversation memory for {conversation_id}: {e}")
 
+
 async def maybe_trigger_memory_update(conversation_id: UUID, threshold: int = 4) -> None:
-    """Запускает обновление памяти ветки, если накопилось >= threshold новых сообщений."""
-    async with async_session_factory() as db:
-        mem_res = await db.execute(
-            select(ConversationMemory).where(ConversationMemory.conversation_id == conversation_id)
-        )
-        mem = mem_res.scalar_one_or_none()
-        last_count = mem.message_count_at_summary if mem else 0
+    """Запускает обновление памяти ветки при накоплении достаточного количества сообщений."""
+    try:
+        async with async_session_factory() as db:
+            msg_count_res = await db.execute(
+                select(func.count(ConversationMessage.id))
+                .where(ConversationMessage.conversation_id == conversation_id)
+            )
+            total_msgs = msg_count_res.scalar() or 0
 
-        msg_count_res = await db.execute(
-            select(func.count(Message.id)).where(Message.conversation_id == conversation_id)
-        )
-        total_msgs = msg_count_res.scalar() or 0
-
-        if total_msgs - last_count >= threshold:
-            await update_conversation_memory(conversation_id)
+            if total_msgs >= threshold and total_msgs % 2 == 0:
+                await update_conversation_memory(conversation_id)
+    except Exception as e:
+        logger.error(f"Error in maybe_trigger_memory_update for {conversation_id}: {e}")

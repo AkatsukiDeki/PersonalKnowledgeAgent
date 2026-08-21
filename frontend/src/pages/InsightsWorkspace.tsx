@@ -30,7 +30,6 @@ export function InsightsWorkspace() {
     setGenerating(true);
     try {
       await insightsApi.generateInsights();
-      // Generation is async, so we just show a message or wait a bit and refresh
       setTimeout(fetchInsights, 5000);
     } catch (e) {
       console.error(e);
@@ -40,37 +39,41 @@ export function InsightsWorkspace() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-zinc-950">
-      <div className="p-6 pb-4 border-b border-zinc-800 bg-zinc-900/30 flex justify-between items-center">
+    <div className="h-full flex flex-col bg-transparent text-slate-200">
+      {/* Header */}
+      <div className="p-6 pb-5 border-b border-white/5 bg-[#0a0a0a]/50 backdrop-blur-md flex justify-between items-center shrink-0">
         <div>
-          <h1 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
-            <Sparkles className="text-indigo-400" size={24} /> 
+          <h1 className="text-xl font-light tracking-tight text-white/95 flex items-center gap-3">
+            <Sparkles className="text-fuchsia-400" size={20} strokeWidth={1.5} /> 
             Insights Review Board
           </h1>
-          <p className="text-sm text-zinc-400 mt-1">
+          <p className="text-xs text-white/50 font-light mt-1">
             Кандидатные паттерны и инсайты (L3), синтезированные на основе долговечных фактов
           </p>
         </div>
         <button
           onClick={handleGenerate}
           disabled={generating}
-          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors"
+          className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white px-4 py-2.5 rounded-xl font-medium text-xs transition-all shadow-lg shadow-indigo-500/20 disabled:shadow-none"
         >
-          {generating ? <Loader2 size={16} className="animate-spin" /> : <Sparkles size={16} />}
+          {generating ? <Loader2 size={15} className="animate-spin" /> : <Sparkles size={15} strokeWidth={1.5} />}
           {generating ? 'Анализ графа...' : 'Сгенерировать'}
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6">
+      {/* Content */}
+      <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
         {loading ? (
-          <div className="flex items-center justify-center h-full text-zinc-500 gap-3">
-            <Loader2 className="animate-spin" /> Загрузка инсайтов...
+          <div className="flex items-center justify-center h-full text-white/40 gap-3 font-mono text-xs">
+            <Loader2 className="animate-spin text-fuchsia-400" size={16} /> Загрузка инсайтов...
           </div>
         ) : insights.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-zinc-500">
-            <Sparkles size={48} className="mb-4 opacity-20" />
-            <p>Нет инсайтов</p>
-            <p className="text-sm mt-1">Попробуйте сгенерировать новые на основе последних знаний</p>
+          <div className="flex flex-col items-center justify-center h-full text-white/40">
+            <div className="w-12 h-12 rounded-2xl bg-fuchsia-500/10 border border-fuchsia-500/20 flex items-center justify-center text-fuchsia-400 mb-4">
+              <Sparkles size={22} strokeWidth={1.5} />
+            </div>
+            <p className="text-sm font-light text-white/80">Нет инсайтов</p>
+            <p className="text-xs font-light text-white/40 mt-1">Попробуйте сгенерировать новые на основе последних знаний</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">

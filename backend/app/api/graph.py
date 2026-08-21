@@ -101,8 +101,9 @@ async def get_graph_topology(
             superseded_by=str(c.superseded_by) if getattr(c, 'superseded_by', None) else None,
             content=c.content,
             kind=getattr(c, 'kind', None),
-            domain=getattr(c, 'domain', None),
-            memory_score=getattr(c, 'memory_score', None)
+            domain=getattr(c, 'domain', None) or c.category,
+            memory_score=getattr(c, 'memory_score', None),
+            importance=getattr(c, 'importance', None),
         ))
         
         for e in c.entities:

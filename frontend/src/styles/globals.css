@@ -2,8 +2,127 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ── Deep Space Base ── */
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: #0B0D13;
+  color: #e4e4e7;
+}
+
+/* ── Surface Glass (overlays, modals) ── */
+@layer utilities {
+  .surface-glass {
+    background: rgba(24, 30, 46, 0.75);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  .surface-high-border {
+    border: 1px solid rgba(255, 255, 255, 0.08);
+  }
+
+  /* ── Entity Glow Rings (hover/focus) ── */
+  .glow-ring-insight {
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.4), 0 0 16px rgba(245, 158, 11, 0.15);
+  }
+  .glow-ring-decision {
+    box-shadow: 0 0 0 1px rgba(139, 92, 246, 0.4), 0 0 16px rgba(139, 92, 246, 0.15);
+  }
+  .glow-ring-claim {
+    box-shadow: 0 0 0 1px rgba(56, 189, 248, 0.3), 0 0 12px rgba(56, 189, 248, 0.1);
+  }
+  .glow-ring-conflict {
+    box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.4), 0 0 16px rgba(239, 68, 68, 0.2);
+  }
+
+  /* ── Scrollbar styling ── */
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+
+  /* ── Line clamp ── */
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+}
+
+/* ── Markdown Prose: Deep Space ── */
+.prose-deep-space {
+  line-height: 1.7;
+}
+.prose-deep-space p {
+  margin-bottom: 0.5rem;
+}
+.prose-deep-space strong {
+  color: #F59E0B;
+  font-weight: 600;
+}
+.prose-deep-space em {
+  color: #a1a1aa;
+}
+.prose-deep-space code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 0.15em 0.4em;
+  border-radius: 4px;
+  font-size: 0.85em;
+  color: #38BDF8;
+}
+.prose-deep-space pre {
+  background: #0B0D13;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+}
+.prose-deep-space pre code {
+  background: none;
+  padding: 0;
+  color: #e4e4e7;
+}
+.prose-deep-space ul {
+  list-style-type: disc;
+  padding-left: 1.25rem;
+}
+.prose-deep-space ol {
+  list-style-type: decimal;
+  padding-left: 1.25rem;
+}
+.prose-deep-space li {
+  margin-bottom: 0.25rem;
+}
+.prose-deep-space h1, .prose-deep-space h2, .prose-deep-space h3 {
+  color: #fafafa;
+  font-weight: 600;
+  margin-top: 1rem;
+  margin-bottom: 0.5rem;
+}
+.prose-deep-space blockquote {
+  border-left: 3px solid #8B5CF6;
+  padding-left: 0.75rem;
+  color: #a1a1aa;
+  font-style: italic;
+  margin: 0.5rem 0;
+}
+.prose-deep-space a {
+  color: #38BDF8;
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }

@@ -7,6 +7,7 @@ export interface GraphNode extends NodeObject {
   category?: string;
   is_active?: boolean;
   confidence?: number;
+  importance?: number;
   created_at?: string;
   source_id?: string;
   chunk_id?: string;
@@ -17,6 +18,9 @@ export interface GraphNode extends NodeObject {
   rationale?: string;
   alternatives?: string[];
   memory_id?: string;
+  kind?: string;
+  domain?: string;
+  memory_score?: number;
 }
 
 export interface GraphLink extends LinkObject {
@@ -33,3 +37,5 @@ export interface GraphTopologyResponse {
   nodes: GraphNode[];
   links: GraphLink[];
 }
+
+export type GraphData = GraphTopologyResponse;

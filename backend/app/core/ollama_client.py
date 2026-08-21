@@ -10,12 +10,21 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
+
 class OllamaClient:
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         self.timeout = httpx.Timeout(3000.0, connect=10.0)
 
-    async def generate(self, model: str, prompt: str, system: Optional[str] = None, format_schema: Optional[Dict[str, Any]] = None) -> str:
+    async def generate(
+            self,
+            model: str,
+            prompt: str,
+            system: Optional[str] = None,
+            format_schema: Optional[Dict[str, Any]] = None,
+            num_predict: int = 3072
+            # Увеличен дефолт для больших JSON-экстракций (можно ставить -1 для безлимита до num_ctx)
+    ) -> str:
         """
         Raw text generation via Ollama with optional JSON schema.
         """
@@ -24,17 +33,17 @@ class OllamaClient:
             "prompt": prompt,
             "stream": False,
             "options": {
-                "num_predict": 768,
+                "num_predict": num_predict,
                 "temperature": 0.1,
-                "num_ctx": 4096,
+                "num_ctx": 8192,  # Расширен контекст, чтобы вмещать длинные графы и ретраи
             }
         }
         if system:
             payload["system"] = system
-            
+
         if format_schema:
             payload["format"] = format_schema
-            
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
                 response = await client.post(f"{self.base_url}/api/generate", json=payload)
@@ -48,23 +57,23 @@ class OllamaClient:
                 logger.error(f"Ollama request error: {repr(e)}")
                 raise
 
-    async def generate_structured(self, model: str, prompt: str, schema_cls: Type[T], system: Optional[str] = None) -> T:
+    async def generate_structured(self, model: str, prompt: str, schema_cls: Type[T],
+                                  system: Optional[str] = None) -> T:
         """
         Generate structured output using Pydantic schema.
         Includes a 1-retry mechanism if JSON validation fails.
         """
         json_schema = schema_cls.model_json_schema()
-        # Some versions of ollama accept format=schema, some accept simple "json". We pass the schema.
-        
-        # First attempt
+
+        # Первая попытка
         raw_response = await self.generate(model, prompt, system=system, format_schema=json_schema)
         try:
             parsed = json.loads(raw_response)
             return schema_cls(**parsed)
         except (json.JSONDecodeError, ValidationError) as e:
             logger.warning(f"Ollama validation failed on first attempt: {e}. Retrying...")
-            
-            # Second attempt with error feedback
+
+            # Вторая попытка: промпт стал длиннее, поэтому накидываем сверху больше токенов для ответа
             retry_prompt = (
                 f"{prompt}\n\n"
                 f"--- SYSTEM WARNING ---\n"
@@ -72,6 +81,18 @@ class OllamaClient:
                 f"Error: {str(e)}\n"
                 f"Please fix the error and output valid JSON exactly matching the schema."
             )
-            raw_response_2 = await self.generate(model, retry_prompt, system=system, format_schema=json_schema)
-            parsed_2 = json.loads(raw_response_2)
-            return schema_cls(**parsed_2)
+            raw_response_2 = await self.generate(
+                model,
+                retry_prompt,
+                system=system,
+                format_schema=json_schema,
+                num_predict=4096  # Запас для ретрая
+            )
+
+            # Финальный перехват: если модель снова сломалась, мы не крашим поток, а отдаем внятную ошибку
+            try:
+                parsed_2 = json.loads(raw_response_2)
+                return schema_cls(**parsed_2)
+            except (json.JSONDecodeError, ValidationError) as fatal_e:
+                logger.error(f"Ollama EXTRACTION fatal failure after retry: {fatal_e}. Raw response: {raw_response_2}")
+                raise ValueError(f"Failed to extract structured JSON after retry. Error: {fatal_e}") from fatal_e
