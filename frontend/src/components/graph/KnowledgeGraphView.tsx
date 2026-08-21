@@ -232,7 +232,10 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   const [highlightNodes, setHighlightNodes] = useState<Set<string>>(new Set());
   const [highlightLinks, setHighlightLinks] = useState<Set<GraphLink>>(new Set());
 
-  const [windowSize, setWindowSize] = useState({ width: 800, height: 600 });
+  const [windowSize, setWindowSize] = useState(() => ({
+    width: typeof window !== 'undefined' ? window.innerWidth : 800,
+    height: typeof window !== 'undefined' ? window.innerHeight : 600,
+  }));
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [showSuperseded, setShowSuperseded] = useState(false);
   const [showDecisions, setShowDecisions] = useState(true);
@@ -260,15 +263,20 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   }, [data, showDecisions]);
 
   useEffect(() => {
-    const measure = () => {
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        setWindowSize({ width: rect.width, height: rect.height });
+    if (!containerRef.current) return;
+    const container = containerRef.current;
+    
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width, height } = entry.contentRect;
+        if (width > 0 && height > 0) {
+          setWindowSize({ width, height });
+        }
       }
-    };
-    measure();
-    window.addEventListener('resize', measure);
-    return () => window.removeEventListener('resize', measure);
+    });
+    
+    observer.observe(container);
+    return () => observer.disconnect();
   }, []);
 
   const fetchData = useCallback(async () => {
@@ -389,6 +397,8 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     const cy = windowSize.height / 2;
     const spreadX = Math.min(windowSize.width, windowSize.height) * 0.22;
     const spreadY = Math.min(windowSize.width, windowSize.height) * 0.18;
+    
+    fg.d3Force('center', forceCenter(cx, cy));
     
     fg.d3Force('x', forceX().strength(0.06).x((node: any) => {
       if (!isGraphNode(node)) return cx;
