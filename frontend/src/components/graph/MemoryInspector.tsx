@@ -4,15 +4,15 @@ import {
   ExternalLink,
   X,
   History,
-  GitBranch,
-  FileText,
   MessageSquare,
-  Sparkles,
-  Zap,
+  Compass,
   CircleDot,
-  Compass
+  Zap
 } from 'lucide-react';
 import { endpointId, endpointLabel } from './graphEndpoints';
+import { ENTITY_TOKENS, resolveEntityGroup } from '../../utils/entityTokens';
+import { LearningModal } from '../learning/LearningModal';
+import { useState } from 'react';
 
 export interface MemoryInspectorProps {
   node: GraphNode;
@@ -22,25 +22,7 @@ export interface MemoryInspectorProps {
   onSelectNode: (nodeId: string) => void;
   onViewSource?: (sourceId: string) => void;
   onNavigateToChatWithContext?: (contextText: string) => void;
-}
-
-// Семантическая палитра PKA UI 2.0
-const GROUP_CONFIG: Record<string, { label: string; color: string; icon: React.ReactNode }> = {
-  insight:  { label: 'Insight',  color: 'text-indigo-400',  icon: <Sparkles size={13} /> },
-  decision: { label: 'Decision', color: 'text-sky-400',     icon: <GitBranch size={13} /> },
-  entity:   { label: 'Entity',   color: 'text-zinc-400',    icon: <CircleDot size={13} /> },
-  claim:    { label: 'Claim',    color: 'text-zinc-400',    icon: <CircleDot size={13} /> },
-  source:   { label: 'Source',   color: 'text-emerald-400', icon: <FileText size={13} /> },
-  conflict: { label: 'Conflict', color: 'text-rose-400',    icon: <Zap size={13} /> },
-};
-
-function resolveGroup(node: GraphNode): string {
-  if (node.is_active === false) return 'conflict';
-  if (node.group === 'insight' || node.kind === 'insight') return 'insight';
-  if (node.group === 'decision' || node.kind === 'decision') return 'decision';
-  if (node.group === 'source') return 'source';
-  if (node.group === 'entity') return 'entity';
-  return 'claim';
+  onUpdateStatus?: (nodeId: string, isActive: boolean) => void;
 }
 
 function Divider() {
@@ -55,13 +37,16 @@ export const MemoryInspector: React.FC<MemoryInspectorProps> = ({
   onSelectNode,
   onViewSource,
   onNavigateToChatWithContext,
+  onUpdateStatus,
 }) => {
   const incomingLinks = links.filter((l) => endpointId(l.target) === node.id);
   const outgoingLinks = links.filter((l) => endpointId(l.source) === node.id);
   const supportingLinks = [...outgoingLinks, ...incomingLinks];
+  
+  const [isLearningModalOpen, setIsLearningModalOpen] = useState(false);
 
-  const groupKey = resolveGroup(node);
-  const config = GROUP_CONFIG[groupKey] ?? GROUP_CONFIG.claim;
+  const groupKey = resolveEntityGroup(node);
+  const config = ENTITY_TOKENS[groupKey] ?? ENTITY_TOKENS.claim;
   const importance = node.importance ?? node.memory_score;
   const contextText = (node.content || node.label || '').trim();
 
@@ -71,7 +56,13 @@ export const MemoryInspector: React.FC<MemoryInspectorProps> = ({
   };
 
   return (
-    <div className="absolute top-0 right-0 h-full w-80 bg-[#06070B]/60 backdrop-blur-2xl border-l border-white/[0.06] shadow-2xl flex flex-col z-20">
+    <div className="absolute top-0 right-0 h-full w-80 bg-[#06070B]/60 backdrop-blur-2xl border-l border-white/[0.06] shadow-2xl flex flex-col z-20 animate-[slideInRight_0.3s_ease-out_forwards]">
+      <style>{`
+        @keyframes slideInRight {
+          from { transform: translateX(100%); }
+          to { transform: translateX(0); }
+        }
+      `}</style>
 
       {/* HEADER */}
       <div className="flex justify-between items-center px-5 py-4 border-b border-white/[0.04]">
@@ -114,9 +105,9 @@ export const MemoryInspector: React.FC<MemoryInspectorProps> = ({
         )}
 
         {/* METRICS */}
-        {(node.confidence !== undefined || importance !== undefined) && (
+        {(node.confidence != null || importance != null) && (
           <div className="flex items-center gap-8 mb-4">
-            {node.confidence !== undefined && (
+            {node.confidence != null && (
               <div>
                 <div className="text-[9px] text-zinc-600 uppercase tracking-widest font-semibold mb-1">
                   Confidence
@@ -126,7 +117,7 @@ export const MemoryInspector: React.FC<MemoryInspectorProps> = ({
                 </div>
               </div>
             )}
-            {importance !== undefined && (
+            {importance != null && (
               <div>
                 <div className="text-[9px] text-zinc-600 uppercase tracking-widest font-semibold mb-1">
                   Importance
@@ -213,27 +204,49 @@ export const MemoryInspector: React.FC<MemoryInspectorProps> = ({
               Source
             </button>
           )}
-          {onNavigateToChatWithContext && contextText && (
+          {onNavigateToChatWithContext && (
             <button
-              onClick={() => onNavigateToChatWithContext?.(`Контекст из нейропамяти:\n\n${contextText}\n\nПроанализируй этот узел и его влияние.`)}
+              onClick={() => {
+                const prompt = `Расскажи подробнее про сущность: ${node.label} (Тип: ${node.category}). Контекст: ${contextText}`;
+                window.dispatchEvent(new CustomEvent('injectChatPrompt', { detail: prompt }));
+                window.dispatchEvent(new CustomEvent('switchTab', { detail: 'chat' }));
+                onNavigateToChatWithContext?.(prompt);
+              }}
               className="flex-1 py-1.5 flex items-center justify-center gap-1.5 bg-transparent border border-white/[0.08] hover:bg-white/[0.04] text-zinc-300 text-[10px] uppercase tracking-wider font-semibold rounded transition-colors"
             >
               <MessageSquare size={12} />
               Open Chat
             </button>
           )}
-          {!node.source_id && (
+          <button
+            onClick={() => setIsLearningModalOpen(true)}
+            className="flex-1 py-1.5 flex items-center justify-center gap-1.5 bg-transparent border border-white/[0.08] hover:bg-white/[0.04] text-zinc-300 text-[10px] uppercase tracking-wider font-semibold rounded transition-colors"
+          >
+            <Compass size={12} />
+            Learn
+          </button>
+          {onUpdateStatus && (
             <button
-              onClick={() => onSelectNode(node.id)}
-              className="flex-1 py-1.5 flex items-center justify-center gap-1.5 bg-transparent border border-white/[0.08] hover:bg-white/[0.04] text-zinc-300 text-[10px] uppercase tracking-wider font-semibold rounded transition-colors"
+              onClick={() => onUpdateStatus(node.id, !node.is_active)}
+              className={`flex-1 py-1.5 flex items-center justify-center gap-1.5 border hover:bg-white/[0.04] text-[10px] uppercase tracking-wider font-semibold rounded transition-colors ${
+                node.is_active 
+                  ? 'border-rose-500/20 text-rose-400 hover:bg-rose-500/10' 
+                  : 'border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/10'
+              }`}
             >
-              <Compass size={12} />
-              Explore
+              <History size={12} />
+              {node.is_active ? 'Deactivate' : 'Activate'}
             </button>
           )}
         </div>
 
       </div>
+      
+      <LearningModal 
+        isOpen={isLearningModalOpen}
+        onClose={() => setIsLearningModalOpen(false)}
+        topic={node.label}
+      />
     </div>
   );
 };

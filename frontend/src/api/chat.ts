@@ -6,17 +6,20 @@ export async function streamChat(
   query: string,
   history: { role: string; content: string }[],
   conversation_id: string | null,
+  attached_source_ids: string[],
+  onConversationCreated: (id: string) => void,
   onStatus: (status: string) => void,
   onCitations: (citations: Citation[]) => void,
   onToken: (token: string) => void,
   onError: (error: string) => void,
-  onDone: () => void
+  onDone: () => void,
+  mode: string = 'rag'
 ) {
   try {
     const response = await fetch(`${BASE_URL}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, history, conversation_id }),
+      body: JSON.stringify({ query, history, conversation_id, attached_source_ids, mode }),
     });
 
     if (!response.ok) {
@@ -52,7 +55,12 @@ export async function streamChat(
           }
         }
 
-        if (eventType === 'query_rewrite') {
+        if (eventType === 'metadata') {
+          const payload = JSON.parse(dataStr);
+          if (payload.conversation_id) {
+            onConversationCreated(payload.conversation_id);
+          }
+        } else if (eventType === 'query_rewrite') {
           const payload = JSON.parse(dataStr);
           if (payload.original !== payload.condensed) {
             onStatus(`Уточнение запроса: ${payload.condensed}`);
@@ -72,12 +80,18 @@ export async function streamChat(
         } else if (eventType === 'error') {
           const payload = JSON.parse(dataStr);
           onError(payload.error || 'Unknown error');
+          return;
         } else if (eventType === 'done') {
           onStatus('');
           onDone();
+          return;
         }
       }
     }
+    
+    // Fallback if stream ends without 'done' event
+    onStatus('');
+    onDone();
   } catch (err: any) {
     onError(err.message || 'Stream error');
   }

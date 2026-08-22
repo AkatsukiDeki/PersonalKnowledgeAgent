@@ -1,35 +1,17 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Search, FileText, GitCommit, Brain, Network, CornerDownLeft } from 'lucide-react';
-import { SearchResult } from '../../api/search'; // Оставь свой импорт, если он есть
+import { searchApi, SearchResult } from '../../api/search';
 
-// Моковые данные для демонстрации верстки
-const MOCK_RESULTS = [
-  {
-    id: '1',
-    type: 'decision',
-    title: 'GitFlow for feature isolation',
-    excerpt: 'Isolate risky changes from main branch to maintain stable deployment pipeline...',
-    score: 0.92,
-    date: '2026-08-15'
-  },
-  {
-    id: '2',
-    type: 'claim',
-    title: 'IPv4 constraint for networking labs',
-    excerpt: 'Strict focus on IPv4 protocol. IPv6 should be ignored unless explicitly specified.',
-    score: 0.99,
-    date: '2026-05-20'
-  },
-  {
-    id: '3',
-    type: 'source',
-    title: 'StudyMatch Architecture Diagram',
-    excerpt: 'React + Django stack description with PostgreSQL pgvector extension.',
-    score: 0.85,
-    date: '2026-06-10'
-  }
-];
+// Debounce hook
+function useDebounce<T>(value: T, delay: number): T {
+  const [debouncedValue, setDebouncedValue] = useState<T>(value);
+  useEffect(() => {
+    const handler = setTimeout(() => setDebouncedValue(value), delay);
+    return () => clearTimeout(handler);
+  }, [value, delay]);
+  return debouncedValue;
+}
 
 interface Props {
   isOpen: boolean;
@@ -39,8 +21,31 @@ interface Props {
 
 export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) {
   const [query, setQuery] = useState('');
+  const [results, setResults] = useState<SearchResult[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [isSearching, setIsSearching] = useState(false);
   const inputRef = useRef<HTMLInputElement| null>(null);
+  const debouncedQuery = useDebounce(query, 300);
+
+  useEffect(() => {
+    if (!debouncedQuery.trim()) {
+      setResults([]);
+      setIsSearching(false);
+      return;
+    }
+    let active = true;
+    setIsSearching(true);
+    searchApi.query(debouncedQuery).then(res => {
+      if (active) {
+        setResults(res.results || []);
+        setIsSearching(false);
+        setSelectedIndex(0);
+      }
+    }).catch(() => {
+      if (active) setIsSearching(false);
+    });
+    return () => { active = false; };
+  }, [debouncedQuery]);
 
   // Фокус на инпут при открытии
   useEffect(() => {
@@ -60,14 +65,21 @@ export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) 
         onClose();
       } else if (e.key === 'ArrowDown') {
         e.preventDefault();
-        setSelectedIndex((prev) => (prev + 1) % MOCK_RESULTS.length);
+        setSelectedIndex((prev) => (prev + 1) % Math.max(1, results.length));
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
-        setSelectedIndex((prev) => (prev - 1 + MOCK_RESULTS.length) % MOCK_RESULTS.length);
+        setSelectedIndex((prev) => (prev - 1 + results.length) % Math.max(1, results.length));
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (MOCK_RESULTS[selectedIndex]) {
-          onSelectResult(MOCK_RESULTS[selectedIndex]);
+        if (results[selectedIndex]) {
+          const res = results[selectedIndex];
+          onSelectResult(res);
+          const targetId = res.claim_id || res.chunk_id || res.source_id;
+          
+          window.dispatchEvent(new CustomEvent('switchFilter', { detail: 'all' }));
+          window.dispatchEvent(new CustomEvent('switchTab', { detail: 'universe' }));
+          window.dispatchEvent(new CustomEvent('focusNode', { detail: targetId }));
+          
           onClose();
         }
       }
@@ -75,7 +87,7 @@ export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) 
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, selectedIndex, onClose, onSelectResult]);
+  }, [isOpen, selectedIndex, onClose, onSelectResult, results]);
 
   // Рендер иконки в зависимости от типа сущности
   const getTypeIcon = (type: string) => {
@@ -129,14 +141,22 @@ export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) 
 
               {/* Results List */}
               <div className="max-h-[60vh] overflow-y-auto p-2 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
-                {MOCK_RESULTS.map((result, index) => {
+                {results.map((result, index) => {
                   const isActive = index === selectedIndex;
+                  const type = result.claim_id ? 'claim' : (result.chunk_id ? 'source' : 'decision');
+                  const title = result.text_content.substring(0, 60).replace(/\n/g, ' ') + (result.text_content.length > 60 ? '...' : '');
+                  const excerpt = result.text_content.substring(0, 150).replace(/\n/g, ' ') + '...';
+                  
                   return (
                     <div
-                      key={result.id}
+                      key={result.chunk_id}
                       onMouseEnter={() => setSelectedIndex(index)}
                       onClick={() => {
                         onSelectResult(result);
+                        const targetId = result.claim_id || result.chunk_id || result.source_id;
+                        window.dispatchEvent(new CustomEvent('switchFilter', { detail: 'all' }));
+                        window.dispatchEvent(new CustomEvent('switchTab', { detail: 'universe' }));
+                        window.dispatchEvent(new CustomEvent('focusNode', { detail: targetId }));
                         onClose();
                       }}
                       className={`
@@ -149,21 +169,18 @@ export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) 
                         p-2 rounded-lg mt-0.5
                         ${isActive ? 'bg-white/10 shadow-sm' : 'bg-white/5'}
                       `}>
-                        {getTypeIcon(result.type)}
+                        {getTypeIcon(type)}
                       </div>
 
                       {/* Content */}
                       <div className="flex-1 min-w-0 flex flex-col gap-1">
                         <div className="flex items-center justify-between gap-4">
                           <span className={`font-medium truncate ${isActive ? 'text-white/95' : 'text-white/80'}`}>
-                            {result.title}
-                          </span>
-                          <span className="text-[10px] font-mono text-white/30 shrink-0">
-                            {result.date}
+                            {title}
                           </span>
                         </div>
                         <p className="text-xs text-white/50 truncate">
-                          {result.excerpt}
+                          {excerpt}
                         </p>
                       </div>
 
@@ -171,7 +188,7 @@ export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) 
                       <div className="flex flex-col items-end gap-2 shrink-0 ml-2">
                         <div className="flex items-center gap-1">
                           <span className="text-[10px] font-mono text-white/40">SCORE</span>
-                          <span className="text-xs font-mono text-emerald-400/80">{result.score.toFixed(2)}</span>
+                          <span className="text-xs font-mono text-emerald-400/80">{(result.rrf_score || result.similarity || 0).toFixed(2)}</span>
                         </div>
                         {isActive && (
                           <CornerDownLeft className="w-3.5 h-3.5 text-indigo-400 mt-1" />
@@ -185,7 +202,7 @@ export function SemanticSearchModal({ isOpen, onClose, onSelectResult }: Props) 
               {/* Footer / Status Bar */}
               <div className="h-8 border-t border-white/5 bg-black/40 flex items-center justify-between px-4">
                 <span className="text-[10px] font-mono text-white/30">
-                  {query.length > 0 ? 'Searching across local memory...' : 'Ready'}
+                  {isSearching ? 'Searching...' : (query.length > 0 ? `Found ${results.length} results` : 'Ready')}
                 </span>
                 <div className="flex items-center gap-3 text-[10px] text-white/30 font-mono">
                   <span className="flex items-center gap-1">

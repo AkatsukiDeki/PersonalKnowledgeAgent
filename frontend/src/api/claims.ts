@@ -6,4 +6,13 @@ export const claimsApi = {
     if (!res.ok) throw new Error('Failed to fetch claims');
     return res.json();
   },
+  update: async (claimId: string, data: { is_active: boolean }) => {
+    const res = await fetch(`${API_URL}/claims/${claimId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Failed to update claim');
+    return res.json();
+  }
 };

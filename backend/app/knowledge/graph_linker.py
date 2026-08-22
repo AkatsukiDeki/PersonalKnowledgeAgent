@@ -12,6 +12,7 @@ from .retrieval import hybrid_search
 
 logger = logging.getLogger(__name__)
 
+
 class ExtractedRelation(BaseModel):
     source_claim_id: uuid.UUID
     target_claim_id: uuid.UUID
@@ -26,8 +27,10 @@ class ExtractedRelation(BaseModel):
     confidence: float
     evidence_summary: str = Field(description="Краткое объяснение связи (1 предложение)")
 
+
 class RelationsList(BaseModel):
     relations: List[ExtractedRelation]
+
 
 async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Claim]] = None) -> None:
     """

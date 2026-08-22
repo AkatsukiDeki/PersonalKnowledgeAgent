@@ -13,11 +13,13 @@ export interface ConversationDetailOut {
   title: string;
   domain: string | null;
   status: string;
+  is_pinned: boolean;
+  folder: string | null;
   created_at: string;
   updated_at: string;
-  summary: string | null;
-  active_decisions: string[];
-  open_questions: string[];
+  summary?: string | null;
+  active_decisions?: string[];
+  open_questions?: string[];
   memory: any;
   decisions: any[];
   messages: MessageOut[];
@@ -28,36 +30,68 @@ export interface ConversationOut {
   title: string;
   domain: string | null;
   status: string;
+  is_pinned: boolean;
+  folder: string | null;
   created_at: string;
   updated_at: string;
 }
 
 export const conversationsApi = {
-  createConversation: async (title: string = "Новый диалог", domain: string | null = null): Promise<ConversationOut> => {
+  createConversation: async (
+    title: string = "Новый диалог",
+    domain: string | null = null,
+    folder: string | null = null,
+    subject_id: string | null = null
+  ): Promise<ConversationOut> => {
     return fetchApi<ConversationOut>('/conversations', {
       method: 'POST',
-      body: JSON.stringify({ title, domain })
+      body: JSON.stringify({
+        title,
+        domain,
+        folder: folder === "" || folder === "root" ? null : folder,
+        subject_id
+      }),
     });
   },
-  
-  getConversations: async (): Promise<ConversationOut[]> => {
-    return fetchApi<ConversationOut[]>('/conversations');
+
+  getConversations: async (params?: { folder?: string; status?: string }): Promise<ConversationOut[]> => {
+    const searchParams = new URLSearchParams();
+    if (params?.folder) searchParams.append('folder', params.folder);
+    if (params?.status) searchParams.append('status', params.status);
+
+    const query = searchParams.toString();
+    const url = `/conversations${query ? `?${query}` : ''}`;
+    return fetchApi<ConversationOut[]>(url);
   },
-  
+
   getConversationDetail: async (id: string): Promise<ConversationDetailOut> => {
     return fetchApi<ConversationDetailOut>(`/conversations/${id}`);
   },
 
-  updateConversation: async (id: string, updates: { title?: string; domain?: string; status?: string }): Promise<void> => {
-    await fetchApi(`/conversations/${id}`, {
+  updateConversation: async (
+    id: string,
+    updates: {
+      title?: string;
+      domain?: string | null;
+      status?: string;
+      is_pinned?: boolean;
+      folder?: string | null;
+    }
+  ): Promise<ConversationOut> => {
+    const payload = {
+      ...updates,
+      folder: updates.folder === "" || updates.folder === "root" || updates.folder === "none" ? null : updates.folder,
+    };
+
+    return fetchApi<ConversationOut>(`/conversations/${id}`, {
       method: 'PATCH',
-      body: JSON.stringify(updates)
+      body: JSON.stringify(payload),
     });
   },
 
-  deleteConversation: async (id: string): Promise<void> => {
-    await fetchApi(`/conversations/${id}`, {
-      method: 'DELETE'
+  deleteConversation: async (id: string): Promise<{ status: string; id: string }> => {
+    return fetchApi<{ status: string; id: string }>(`/conversations/${id}`, {
+      method: 'DELETE',
     });
-  }
+  },
 };

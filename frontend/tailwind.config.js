@@ -9,17 +9,18 @@ const config: Config = {
     extend: {
       colors: {
         // ── Background & Surfaces ──
-        'space-void': '#0B0D13',
-        'surface-low': '#111520',
-        'surface-high': '#181E2E',
-        'surface-border': 'rgba(255, 255, 255, 0.08)',
+        'space-void': 'var(--color-space-void)',
+        'surface-low': 'var(--color-surface-low)',
+        'surface-high': 'var(--color-surface-high)',
+        'surface-border': 'var(--color-surface-border)',
 
         // ── Entity Palette ──
-        'entity-insight': '#F59E0B',
-        'entity-decision': '#8B5CF6',
-        'entity-claim': '#38BDF8',
-        'entity-source': '#64748B',
-        'entity-conflict': '#EF4444',
+        'entity-insight': 'var(--color-entity-insight)',
+        'entity-decision': 'var(--color-entity-decision)',
+        'entity-claim': 'var(--color-entity-claim)',
+        'entity-source': 'var(--color-entity-source)',
+        'entity-timeline': 'var(--color-entity-timeline)',
+        'entity-conflict': 'var(--color-entity-conflict)',
       },
       boxShadow: {
         'glow-insight': '0 0 16px rgba(245, 158, 11, 0.3)',

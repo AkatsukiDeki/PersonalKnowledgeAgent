@@ -69,7 +69,7 @@ Generate a timeline event describing this shift."""
                 task_type=TaskType.EXTRACTION,
                 schema=TimelineEventExtraction,
                 prompt=prompt,
-                system_instruction="You are a knowledge evolution tracker. Explain what changed and why."
+                system_instruction="Ты — аналитик эволюции персональной базы знаний.\nПРАВИЛА:\n1. ЯЗЫК: Все заголовки и описания сдвигов знаний пиши СТРОГО на русском языке (или выбранном в настройках).\n2. Обосновывай, ЧТО изменилось в понимании, КАКОЙ старый клейм устарел и ПОЧЕМУ новый вывод предпочтительнее."
             )
             
             # Determine source_id (usually from the new claim)

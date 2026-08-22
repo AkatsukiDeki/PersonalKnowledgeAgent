@@ -15,6 +15,9 @@ from .endpoints.insights import router as insights_router
 from .system import router as system_router
 from .endpoints import conversations
 from .endpoints import timeline
+from .endpoints import subjects
+from .profile import router as profile_router
+from .learning import router as learning_router
 
 api_router = APIRouter()
 
@@ -32,3 +35,6 @@ api_router.include_router(chat_import_router, prefix="/connectors/chats", tags=[
 api_router.include_router(insights_router, prefix="/insights", tags=["insights"])
 api_router.include_router(system_router, prefix="/system", tags=["system"])
 api_router.include_router(timeline.router)
+api_router.include_router(profile_router)
+api_router.include_router(learning_router)
+api_router.include_router(subjects.router)

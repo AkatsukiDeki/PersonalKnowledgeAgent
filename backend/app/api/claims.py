@@ -1,6 +1,7 @@
 import uuid
 from typing import List, Optional
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,3 +29,26 @@ async def list_claims(
     result = await db.execute(stmt)
     claims = result.scalars().all()
     return claims
+
+
+class ClaimUpdate(BaseModel):
+    is_active: bool
+
+
+@router.patch("/{claim_id}", response_model=ClaimResponse)
+async def update_claim(
+    claim_id: uuid.UUID,
+    payload: ClaimUpdate,
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(Claim).where(Claim.id == claim_id).options(selectinload(Claim.entities))
+    result = await db.execute(stmt)
+    claim = result.scalar_one_or_none()
+    
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+        
+    claim.is_active = payload.is_active
+    await db.commit()
+    await db.refresh(claim)
+    return claim

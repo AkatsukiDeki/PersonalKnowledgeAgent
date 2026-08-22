@@ -16,7 +16,7 @@ from .graph_extractor import extract_and_save_entities_batch, extract_and_save_r
 from ..core.config import settings
 from ..db.models import Claim
 from ..core.error_tracker import record_error, resolve_granular_error
-
+from ..core.queue import task_queue
 import uuid
 
 async def create_source_db(
@@ -56,7 +56,7 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             source.started_at = datetime.utcnow()
             await db.commit()
 
-            raw_chunks: Sequence[str] = create_chunks(source.content)
+            raw_chunks: Sequence[str] = await task_queue.run_cpu_bound(create_chunks, source.content)
 
             provider = get_embedding_provider()
             embeddings = await provider.embed_documents(list(raw_chunks)) if raw_chunks else []

@@ -11,19 +11,36 @@ import { SearchResult } from './api/search';
 import { InsightsWorkspace } from './pages/InsightsWorkspace';
 import { TimelineWorkspace } from './pages/TimelineWorkspace';
 import { GraphWorkspace } from './pages/GraphWorkspace';
+import { LearningDashboard } from './pages/LearningDashboard';
 import { KnowledgeGraphRef } from './components/graph/KnowledgeGraphView';
 import { SemanticSearchModal } from './components/search/SemanticSearchModal';
 import { DocumentEditorModal } from './components/sources/DocumentEditorModal';
+import { SettingsModal } from './components/settings/SettingsModal';
 
 import { Search, PanelRightOpen, Settings } from 'lucide-react';
+import { useLanguage } from './context/LanguageContext';
+import clsx from 'clsx';
 
 export function App() {
+  const { t } = useLanguage();
   const [isUploaderOpen, setIsUploaderOpen] = useState(false);
   const [isManagerOpen, setIsManagerOpen] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
-  const [activeView, setActiveView] = useState<ViewType>('chat');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [activeView, setActiveView] = useState<ViewType>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('pka_active_view');
+      if (saved) return saved as ViewType;
+    }
+    return 'chat';
+  });
+  const [semanticFilter, setSemanticFilter] = useState<'all' | 'insights' | 'decisions'>('all');
 
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  useEffect(() => {
+    localStorage.setItem('pka_active_view', activeView);
+  }, [activeView]);
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   const [orbitOpen, setOrbitOpen] = useState(() => {
     if (typeof window !== 'undefined') {
@@ -58,8 +75,44 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (activeView !== 'universe' || !universeFocusId) return;
-    graphRef.current?.focusNode(universeFocusId, 3.5);
+    const handleSwitchTab = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        setActiveView(customEvent.detail);
+      }
+    };
+    
+    const handleFocusNode = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        setUniverseFocusId(customEvent.detail);
+        if (activeView === 'universe') {
+          graphRef.current?.focusNode(customEvent.detail, 3.5);
+        }
+      }
+    };
+    
+    const handleSwitchFilter = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        setSemanticFilter(customEvent.detail);
+      }
+    };
+
+    window.addEventListener('switchTab', handleSwitchTab);
+    window.addEventListener('focusNode', handleFocusNode);
+    window.addEventListener('switchFilter', handleSwitchFilter);
+    return () => {
+      window.removeEventListener('switchTab', handleSwitchTab);
+      window.removeEventListener('focusNode', handleFocusNode);
+      window.removeEventListener('switchFilter', handleSwitchFilter);
+    };
+  }, [activeView]);
+
+  useEffect(() => {
+    if (activeView === 'universe' && universeFocusId) {
+      setTimeout(() => graphRef.current?.focusNode(universeFocusId, 3.5), 100);
+    }
   }, [activeView, universeFocusId]);
 
   const handleSelectSearchResult = (result: SearchResult) => {
@@ -77,46 +130,67 @@ export function App() {
       {/* 2. Тот самый космический градиент на фоне всего приложения */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/10 via-transparent to-transparent -z-10 pointer-events-none" />
 
-      {/* 3. Хедер (функциональное стекло) */}
-      <header className="h-14 border-b border-white/5 flex items-center px-5 justify-between shrink-0 bg-[#0a0a0a]/50 backdrop-blur-md z-20">
+      {/* 3. Плавающий Command Bar (HUD) */}
+      <header className="absolute top-6 left-1/2 -translate-x-1/2 h-12 px-4 rounded-2xl border border-white/10 flex items-center gap-6 bg-[#0a0a0a]/60 backdrop-blur-md z-40 shadow-2xl">
+        {/* Кнопка Меню */}
+        <button
+          onClick={() => setSidebarOpen(true)}
+          className="p-1.5 rounded-lg text-white/50 hover:text-white/90 hover:bg-white/10 transition-colors"
+          title="Open Nav"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+        </button>
 
-        {/* Логотип: Строгий, мерцающий, моноширинный */}
-        <div className="flex items-center gap-3">
-          <div className="relative flex items-center justify-center w-5 h-5">
-            <div className="absolute inset-0 rounded-full bg-indigo-500/20 animate-pulse" />
-            <div className="w-1.5 h-1.5 rounded-full bg-indigo-400 shadow-[0_0_8px_rgba(129,140,248,0.8)]" />
-          </div>
-          <span className="font-mono text-[11px] tracking-[0.2em] text-white/80 uppercase mt-0.5">
-            PKA Engine
-          </span>
-        </div>
-
-        {/* Триггер поиска: Имитация Command Palette */}
+        {/* Триггер поиска */}
         <button
           type="button"
           onClick={() => setIsSearchOpen(true)}
-          className="flex items-center gap-3 px-4 py-1.5 rounded-lg bg-white/[0.03] border border-white/5 text-white/40 hover:text-white/80 hover:bg-white/[0.06] hover:border-white/10 transition-all text-[13px] font-light group"
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-white/[0.04] border border-white/5 text-white/40 hover:text-white/80 hover:bg-white/[0.08] transition-all text-sm font-light group"
         >
           <Search size={14} className="opacity-60 group-hover:opacity-100 transition-opacity" />
-          <span>Semantic Search...</span>
-          <kbd className="ml-8 font-mono text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 group-hover:text-white/50 transition-colors">
+          <span>{t('nav.dialogs') === 'Chat' ? 'Search memory...' : 'Поиск по памяти...'}</span>
+          <kbd className="ml-4 font-mono text-[10px] text-white/30 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 group-hover:text-white/50 transition-colors">
             Ctrl+K
           </kbd>
         </button>
 
-        {/* Элементы управления */}
-        <div className="flex items-center gap-1.5">
+        {activeView === 'universe' && (
+          <div className="flex items-center gap-1 bg-white/[0.04] p-1 rounded-xl border border-white/5">
+            <button
+              onClick={() => setSemanticFilter('all')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${semanticFilter === 'all' ? 'bg-white/10 text-white' : 'text-white/40 hover:text-white/80'}`}
+            >
+              ✦ All
+            </button>
+            <button
+              onClick={() => setSemanticFilter('insights')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${semanticFilter === 'insights' ? 'bg-indigo-500/20 text-indigo-300' : 'text-white/40 hover:text-white/80'}`}
+            >
+              ⭐ Insights
+            </button>
+            <button
+              onClick={() => setSemanticFilter('decisions')}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-all ${semanticFilter === 'decisions' ? 'bg-sky-500/20 text-sky-300' : 'text-white/40 hover:text-white/80'}`}
+            >
+              🪐 Decisions
+            </button>
+          </div>
+        )}
+
+        {/* Управление орбитой */}
+        <div className="flex items-center gap-1.5 border-l border-white/10 pl-4">
           {activeView === 'chat' && !orbitOpen && (
             <button
               onClick={() => setOrbitOpen(true)}
-              className="p-2 rounded-lg text-white/40 hover:text-white/90 hover:bg-white/5 transition-all"
+              className="p-1.5 rounded-lg text-white/40 hover:text-white/90 hover:bg-white/5 transition-all"
               title="Open Memory Orbit"
             >
               <PanelRightOpen size={16} strokeWidth={1.5} />
             </button>
           )}
           <button
-            className="p-2 rounded-lg text-white/40 hover:text-white/90 hover:bg-white/5 transition-all"
+            onClick={() => setIsSettingsOpen(true)}
+            className="p-1.5 rounded-lg text-white/40 hover:text-white/90 hover:bg-white/5 transition-all"
             title="Settings"
           >
             <Settings size={16} strokeWidth={1.5} />
@@ -124,64 +198,75 @@ export function App() {
         </div>
       </header>
 
-      {/* 4. Воркспейс */}
-      <div className="flex-1 flex overflow-hidden relative z-10">
-        <Sidebar
-          onOpenUploader={() => setIsUploaderOpen(true)}
-          onOpenManager={() => setIsManagerOpen(true)}
-          activeView={activeView}
-          onChangeView={setActiveView}
-          collapsed={sidebarCollapsed}
-          onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        />
+      {/* 4. Воркспейс (Canvas) */}
+      <div className="absolute inset-0 z-10 flex flex-col">
+        <main className={clsx("flex-1 h-screen overflow-y-auto w-full", 
+          (activeView !== 'chat' && activeView !== 'universe') ? "pt-24 px-8 pb-12" : ""
+        )}>
+          <div className={clsx("mx-auto w-full h-full relative", 
+            (activeView !== 'chat' && activeView !== 'universe') ? "max-w-7xl" : ""
+          )}>
+            {activeView === 'chat' && (
+              <ChatWorkspace
+                onOrbitUpdate={setOrbitContext}
+                seedPrompt={chatSeed}
+                onSeedConsumed={() => setChatSeed(null)}
+              />
+            )}
 
-        <div className="flex-1 min-w-0 overflow-hidden relative flex flex-col bg-transparent">
-          {activeView === 'chat' && (
-            <ChatWorkspace
-              onOrbitUpdate={setOrbitContext}
-              seedPrompt={chatSeed}
-              onSeedConsumed={() => setChatSeed(null)}
-            />
-          )}
-
-          {activeView === 'universe' && (
-            <div className="w-full h-full relative">
+            {activeView === 'universe' && (
               <GraphWorkspace
                 ref={graphRef}
                 focusNodeId={universeFocusId}
+                semanticFilter={semanticFilter}
                 onSelectSource={(sourceId) => setInspectSourceId(sourceId)}
                 onNavigateToChatWithContext={(contextText) => {
                   setChatSeed(contextText);
                   setActiveView('chat');
                 }}
               />
-            </div>
-          )}
+            )}
 
-          {activeView === 'conflicts' && (
-            <div className="w-full h-full relative flex flex-col">
+            {activeView === 'conflicts' && (
               <ConflictResolutionCenter />
-            </div>
-          )}
+            )}
 
-          {activeView === 'insights' && (
-            <div className="w-full h-full">
+            {activeView === 'insights' && (
               <InsightsWorkspace />
-            </div>
-          )}
+            )}
 
-          {activeView === 'timeline' && (
-            <div className="w-full h-full">
+            {activeView === 'timeline' && (
               <TimelineWorkspace />
-            </div>
-          )}
-        </div>
+            )}
 
-        <MemoryOrbit
-          isOpen={showOrbit}
-          onClose={() => setOrbitOpen(false)}
-          context={orbitContext}
-        />
+            {activeView === 'learning' && (
+              <LearningDashboard />
+            )}
+          </div>
+        </main>
+      </div>
+
+      {/* Плавающие панели */}
+      <Sidebar
+        onOpenUploader={() => setIsUploaderOpen(true)}
+        onOpenManager={() => setIsManagerOpen(true)}
+        activeView={activeView}
+        onChangeView={(view) => {
+          setActiveView(view);
+          setSidebarOpen(false);
+        }}
+        isOpen={sidebarOpen}
+        onClose={() => setSidebarOpen(false)}
+      />
+
+      <div className="absolute top-0 right-0 h-full z-30 pointer-events-none">
+        <div className="pointer-events-auto h-full">
+          <MemoryOrbit
+            isOpen={showOrbit}
+            onClose={() => setOrbitOpen(false)}
+            context={orbitContext}
+          />
+        </div>
       </div>
 
       {/* Модалки */}
@@ -208,6 +293,11 @@ export function App() {
           onSaved={() => setInspectSourceId(null)}
         />
       )}
+
+      <SettingsModal
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </main>
   );
 }

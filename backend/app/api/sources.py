@@ -3,43 +3,195 @@
 import os
 import uuid
 import logging
-from typing import List, Optional
+import re
+import asyncio
+import urllib.request
+from typing import List, Optional, Any
+from html.parser import HTMLParser
+from pydantic import BaseModel
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, UploadFile, File, Form, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    HTTPException,
+    status,
+    BackgroundTasks,
+    UploadFile,
+    File,
+    Form,
+    Query,
+)
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.models import Source, Chunk, Claim
-from ..db.session import get_db
-from ..knowledge.ingestion import create_source_db, process_source_chunks_bg
+from ..db.session import get_db, async_session_factory
+from ..knowledge.ingestion import process_source_chunks_bg
 from ..knowledge.file_ingestion import ingest_file_revision
-from ..schemas.source import SourceCreate, SourceResponse, SourceDetailResponse, SourceUpdateContent
-from ..parsers.factory import parse_file, is_supported, get_file_extension
+from ..schemas.source import (
+    SourceCreate,
+    SourceResponse,
+    SourceDetailResponse,
+    SourceUpdateContent,
+)
+from ..parsers.factory import is_supported
+from ..core.queue import task_queue
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/sources", tags=["Sources"])
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "sources")
+DATA_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "data",
+    "sources",
+)
+
+
+class MLStripper(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.reset()
+        self.strict = False
+        self.convert_charrefs = True
+        self.text = []
+        self.skip = False
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ["script", "style", "nav", "header", "footer"]:
+            self.skip = True
+
+    def handle_endtag(self, tag):
+        if tag in ["script", "style", "nav", "header", "footer"]:
+            self.skip = False
+
+    def handle_data(self, d):
+        if not self.skip:
+            self.text.append(d)
+
+    def get_data(self):
+        return "".join(self.text)
+
+
+class URLUpload(BaseModel):
+    url: str
+    title: Optional[str] = None
+    domain: Optional[str] = None
+    importance: str = "normal"
+    folder: Optional[str] = None
 
 
 def _ensure_data_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
 
 
-# ──────────────────────────────────────────────
-#  POST /sources/upload  — multipart file upload
-# ──────────────────────────────────────────────
-@router.post("/upload", status_code=status.HTTP_202_ACCEPTED)
+async def _count(db: AsyncSession, model: Any, *filters) -> int:
+    stmt = select(func.count()).select_from(model).where(*filters)
+    return (await db.scalar(stmt)) or 0
+
+
+def _enrich_source_response(source: Source, chunks_count: int, claims_count: int) -> SourceResponse:
+    return SourceResponse(
+        id=source.id,
+        title=source.title,
+        content=source.content,
+        source_type=source.source_type,
+        meta_info=source.meta_info or {},
+        file_type=source.file_type,
+        original_file_path=source.original_file_path,
+        raw_content=source.raw_content,
+        domain=source.domain,
+        folder=getattr(source, "folder", None),
+        version=source.version,
+        is_deleted=source.is_deleted,
+        metadata_info=source.metadata_info or {},
+        status=source.status,
+        error_message=source.error_message,
+        started_at=source.started_at,
+        completed_at=source.completed_at,
+        created_at=source.created_at,
+        updated_at=source.updated_at,
+        chunks_count=chunks_count,
+        claims_count=claims_count,
+    )
+
+
+@router.post("/url", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
+async def upload_url(
+    payload: URLUpload,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    req = urllib.request.Request(
+        payload.url,
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    try:
+        loop = asyncio.get_event_loop()
+
+        def fetch():
+            with urllib.request.urlopen(req, timeout=15) as response:
+                return response.read().decode("utf-8", errors="ignore")
+
+        html = await loop.run_in_executor(None, fetch)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to fetch URL: {str(e)}")
+
+    s = MLStripper()
+    s.feed(html)
+    text_content = s.get_data().strip()
+    text_content = re.sub(r"\n\s*\n", "\n\n", text_content)
+
+    if not text_content:
+        raise HTTPException(status_code=400, detail="Could not extract text from URL.")
+
+    title = payload.title or payload.url.split("//")[-1].split("/")[0]
+    filename = f"{title[:30]}.txt"
+
+    try:
+        source, ingest_status = await ingest_file_revision(
+            db=db,
+            filename=filename,
+            file_bytes=text_content.encode("utf-8"),
+            title=title,
+            domain=payload.domain,
+            importance=payload.importance,
+            original_path=None,
+        )
+
+        source.source_type = "web_page"
+        if not source.meta_info:
+            source.meta_info = {}
+        source.meta_info["url"] = payload.url
+        source.is_deleted = False
+
+        if payload.folder is not None:
+            source.folder = None if payload.folder in ("", "root", "none") else payload.folder
+
+        await db.commit()
+        await db.refresh(source)
+
+        if ingest_status != "unchanged" or source.status == "pending":
+            task_queue.enqueue(process_source_chunks_bg, source.id)
+
+        chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
+        claims_count = await _count(db, Claim, Claim.source_id == source.id)
+        return _enrich_source_response(source, chunks_count, claims_count)
+    except Exception as e:
+        logger.error(f"[Sources] Parse/Ingest error for URL {payload.url}: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to ingest URL: {e}")
+
+
+@router.post("/upload", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_source(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     domain: Optional[str] = Form(None),
     importance: str = Form("normal"),
+    folder: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
 ):
-    """Upload a file, parse it, persist the original binary, and kick off the ingestion pipeline."""
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
@@ -50,142 +202,77 @@ async def upload_source(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
 
-    # 1. Save the original binary to disk temporarily or permanently
-    # (We can use a random uuid for the temp path if it's new, but we'll store it under Source ID)
     _ensure_data_dir()
-    
-    # 2. Call idempotency ingestion
-    title = os.path.splitext(file.filename)[0]
-    
-    # Helper for background chat pipeline execution
-    async def _process_chat_bg(chat_data: dict):
-        from ..db.session import async_session_factory
-        from ..knowledge.chat_pipeline import process_chat_pipeline
-        chat_title = chat_data.get("title", "Imported Chat")
-        async with async_session_factory() as session:
-            try:
-                await process_chat_pipeline(session, chat_data, title=chat_title, platform="chatgpt")
-            except Exception as e:
-                logger.error(f"[Sources] Failed to process chat session {chat_title}: {e}")
-
-    # Check if this is an AI chat export using Magic Bytes
-    import gzip
-    import io
-    import json
-    import zipfile
-    from ..knowledge.parsers.chat_parser import parse_chatgpt_json, safe_decode
-
-    # 1. Check for ZIP archive (Magic bytes: PK\x03\x04)
-    if file_bytes.startswith(b"PK\x03\x04") or file.filename.lower().endswith(".zip"):
-        try:
-            with zipfile.ZipFile(io.BytesIO(file_bytes), "r") as z:
-                found_chats = []
-                for name in z.namelist():
-                    if name.endswith(".json") and not name.startswith("__MACOSX"):
-                        raw = z.read(name)
-                        text = safe_decode(raw)
-                        try:
-                            data = json.loads(text)
-                            chats = list(parse_chatgpt_json(data))
-                            found_chats.extend(chats)
-                        except Exception:
-                            continue
-                
-                if found_chats:
-                    for chat in found_chats:
-                        background_tasks.add_task(_process_chat_bg, chat)
-                    return {"status": "ok", "message": f"Архив принят: найдено {len(found_chats)} диалогов"}
-        except zipfile.BadZipFile:
-            logger.error("ZIP parse error: BadZipFile")
-
-    # 2. Check for GZIP (.gz)
-    elif file_bytes.startswith(b"\x1f\x8b"):
-        try:
-            decompressed = gzip.decompress(file_bytes)
-            text = safe_decode(decompressed)
-            data = json.loads(text)
-            chats = list(parse_chatgpt_json(data))
-            if chats:
-                for chat in chats:
-                    background_tasks.add_task(_process_chat_bg, chat)
-                return {"status": "ok", "message": f"GZ-архив обработан: {len(chats)} диалогов"}
-        except Exception as e:
-            logger.error(f"GZIP parse error: {e}")
-
-    # 3. Handle as plain JSON if starts with { or [
-    elif file_bytes.lstrip().startswith(b"{") or file_bytes.lstrip().startswith(b"["):
-        text = safe_decode(file_bytes)
-        try:
-            data = json.loads(text)
-            chats = list(parse_chatgpt_json(data)) if isinstance(data, (list, dict)) else []
-            if chats:
-                for chat in chats:
-                    background_tasks.add_task(_process_chat_bg, chat)
-                return {"status": "ok", "message": f"JSON принят: {len(chats)} диалогов"}
-        except json.JSONDecodeError:
-            pass
+    source_title = title.strip() if (title and title.strip()) else os.path.splitext(file.filename)[0]
 
     try:
         source, ingest_status = await ingest_file_revision(
             db=db,
             filename=file.filename,
             file_bytes=file_bytes,
-            title=title,
+            title=source_title,
             domain=domain,
             importance=importance,
-            original_path=None # We will update this below
+            original_path=None,
         )
     except Exception as e:
         logger.error(f"[Sources] Parse/Ingest error for {file.filename}: {e}")
         raise HTTPException(status_code=422, detail=f"Failed to ingest file: {e}")
 
-    # Now that we have a source_id, save the file properly
+    source.is_deleted = False
+    if folder is not None:
+        source.folder = None if folder in ("", "root", "none") else folder
+
     source_dir = os.path.join(DATA_DIR, str(source.id))
     os.makedirs(source_dir, exist_ok=True)
     original_path = os.path.join(source_dir, file.filename)
-    if ingest_status != "unchanged":
-        with open(original_path, "wb") as f:
-            f.write(file_bytes)
-        source.original_file_path = original_path
-        await db.commit()
-        await db.refresh(source)
 
-    # 3. Kick off background ingestion only if changed
-    if ingest_status != "unchanged":
-        background_tasks.add_task(process_source_chunks_bg, source.id)
+    with open(original_path, "wb") as f:
+        f.write(file_bytes)
+    source.original_file_path = original_path
+
+    await db.commit()
+    await db.refresh(source)
+
+    if ingest_status != "unchanged" or source.status == "pending":
+        task_queue.enqueue(process_source_chunks_bg, source.id)
 
     chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
     claims_count = await _count(db, Claim, Claim.source_id == source.id)
     return _enrich_source_response(source, chunks_count, claims_count)
 
 
-# ──────────────────────────────────────────────
-#  POST /sources/  — legacy JSON text create
-# ──────────────────────────────────────────────
 @router.post("/", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
 @router.post("", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED, include_in_schema=False)
-async def create_source(payload: SourceCreate, background_tasks: BackgroundTasks, db: AsyncSession = Depends(get_db)):
+async def create_source(
+    payload: SourceCreate,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
     try:
         source, ingest_status = await ingest_file_revision(
             db=db,
             filename=payload.title + ".txt",
-            file_bytes=payload.content.encode('utf-8'),
+            file_bytes=payload.content.encode("utf-8"),
             title=payload.title,
-            domain=payload.meta_info.get("domain", None),
-            importance=payload.meta_info.get("importance", "normal"),
-            original_path=None
+            domain=payload.domain,
+            importance=payload.importance,
+            original_path=None,
         )
-        
+
         source.source_type = payload.source_type
+        source.is_deleted = False
         if payload.meta_info:
             source.meta_info = payload.meta_info
-            
+        if payload.folder is not None:
+            source.folder = None if payload.folder in ("", "root", "none") else payload.folder
+
         await db.commit()
         await db.refresh(source)
 
-        if ingest_status != "unchanged":
-            background_tasks.add_task(process_source_chunks_bg, source.id)
-            
+        if ingest_status != "unchanged" or source.status == "pending":
+            task_queue.enqueue(process_source_chunks_bg, source.id)
+
         chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
         claims_count = await _count(db, Claim, Claim.source_id == source.id)
         return _enrich_source_response(source, chunks_count, claims_count)
@@ -193,25 +280,24 @@ async def create_source(payload: SourceCreate, background_tasks: BackgroundTasks
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ──────────────────────────────────────────────
-#  GET /sources/  — list with filters
-# ──────────────────────────────────────────────
 @router.get("/", response_model=List[SourceResponse])
 @router.get("", response_model=List[SourceResponse], include_in_schema=False)
 async def list_sources(
     domain: Optional[str] = Query(None),
     file_type: Optional[str] = Query(None),
+    folder: Optional[str] = Query(None),
     search: Optional[str] = Query(None),
     include_deleted: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ):
-    """List sources with optional filtering."""
     stmt = select(Source).order_by(Source.created_at.desc())
 
     if not include_deleted:
         stmt = stmt.where(Source.is_deleted == False)
     if domain:
         stmt = stmt.where(Source.domain == domain)
+    if folder:
+        stmt = stmt.where(Source.folder == folder)
     if file_type:
         stmt = stmt.where(Source.file_type == file_type)
     if search:
@@ -221,7 +307,6 @@ async def list_sources(
     result = await db.execute(stmt)
     sources = result.scalars().all()
 
-    # Batch fetch counts
     enriched = []
     for src in sources:
         chunks_count = await _count(db, Chunk, Chunk.source_id == src.id)
@@ -231,37 +316,32 @@ async def list_sources(
     return enriched
 
 
-# ──────────────────────────────────────────────
-#  GET /sources/{id}  — detail view
-# ──────────────────────────────────────────────
 @router.get("/{source_id}", response_model=SourceDetailResponse)
 async def get_source_detail(source_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Full detail of a source including chunks and claims."""
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    # Fetch chunks
     chunks_stmt = select(Chunk).where(Chunk.source_id == source_id).order_by(Chunk.chunk_index)
     chunks = (await db.execute(chunks_stmt)).scalars().all()
 
-    # Fetch claims
     claims_stmt = select(Claim).where(Claim.source_id == source_id).order_by(Claim.created_at.desc())
     claims = (await db.execute(claims_stmt)).scalars().all()
 
-    resp = SourceDetailResponse(
+    return SourceDetailResponse(
         id=source.id,
         title=source.title,
         content=source.content,
         source_type=source.source_type,
-        meta_info=source.meta_info,
+        meta_info=source.meta_info or {},
         file_type=source.file_type,
         original_file_path=source.original_file_path,
         raw_content=source.raw_content,
         domain=source.domain,
+        folder=getattr(source, "folder", None),
         version=source.version,
         is_deleted=source.is_deleted,
-        metadata_info={},
+        metadata_info=source.metadata_info or {},
         status=source.status,
         error_message=source.error_message,
         started_at=source.started_at,
@@ -271,22 +351,21 @@ async def get_source_detail(source_id: uuid.UUID, db: AsyncSession = Depends(get
         chunks_count=len(chunks),
         claims_count=len(claims),
         chunks=[{"id": str(c.id), "chunk_index": c.chunk_index, "text_content": c.text_content[:300]} for c in chunks],
-        claims=[{
-            "id": str(c.id),
-            "content": c.content,
-            "claim_type": c.claim_type,
-            "category": c.category,
-            "confidence": c.confidence,
-            "is_active": c.is_active,
-            "superseded_by": str(c.superseded_by) if c.superseded_by else None,
-        } for c in claims],
+        claims=[
+            {
+                "id": str(c.id),
+                "content": c.content,
+                "claim_type": c.claim_type,
+                "category": c.category,
+                "confidence": c.confidence,
+                "is_active": c.is_active,
+                "superseded_by": str(c.superseded_by) if c.superseded_by else None,
+            }
+            for c in claims
+        ],
     )
-    return resp
 
 
-# ──────────────────────────────────────────────
-#  PUT /sources/{id}  — edit & safe re-index
-# ──────────────────────────────────────────────
 @router.put("/{source_id}", response_model=SourceResponse)
 async def update_source_content(
     source_id: uuid.UUID,
@@ -294,45 +373,37 @@ async def update_source_content(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Save edited normalised text and trigger safe re-index pipeline."""
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.is_deleted:
         raise HTTPException(status_code=400, detail="Cannot edit a deleted source")
 
-    # Bump version
     source.version += 1
     source.raw_content = payload.raw_content
-    source.content = payload.raw_content  # normalised text becomes the new content
+    source.content = payload.raw_content
     if payload.domain is not None:
         source.domain = payload.domain
-    source.status = "pending"  # will be re-processed
+    source.status = "pending"
 
     await db.commit()
     await db.refresh(source)
 
-    # Kick off safe re-index: mark old claims as inactive, re-chunk, re-extract
-    background_tasks.add_task(_safe_reindex, source.id)
+    task_queue.enqueue(_safe_reindex, source.id)
 
     chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
     claims_count = await _count(db, Claim, Claim.source_id == source.id)
     return _enrich_source_response(source, chunks_count, claims_count)
 
 
-# ──────────────────────────────────────────────
-#  DELETE /sources/{id}  — soft delete
-# ──────────────────────────────────────────────
 @router.delete("/{source_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_source(source_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    """Soft-delete a source and deactivate its claims (preserving graph history)."""
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
 
     source.is_deleted = True
 
-    # Deactivate all claims from this source
     claims_stmt = select(Claim).where(Claim.source_id == source_id, Claim.is_active == True)
     claims = (await db.execute(claims_stmt)).scalars().all()
     for claim in claims:
@@ -342,36 +413,24 @@ async def delete_source(source_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     logger.info(f"[Sources] Soft-deleted source {source_id}, deactivated {len(claims)} claims")
 
 
-# ──────────────────────────────────────────────
-#  Safe Re-index Pipeline
-# ──────────────────────────────────────────────
 async def _safe_reindex(source_id: uuid.UUID):
-    """Background task: deactivate old claims, delete old chunks, re-run ingestion."""
-    from ..db.session import async_session_factory
-
     async with async_session_factory() as db:
         try:
             source = await db.get(Source, source_id)
             if not source:
                 return
 
-            logger.info(f"[ReIndex] Starting safe re-index for source {source_id} v{source.version}")
-
-            # 1. Mark all existing claims from this source as inactive
             old_claims_stmt = select(Claim).where(Claim.source_id == source_id, Claim.is_active == True)
             old_claims = (await db.execute(old_claims_stmt)).scalars().all()
             for claim in old_claims:
                 claim.is_active = False
             await db.flush()
-            logger.info(f"[ReIndex] Deactivated {len(old_claims)} old claims")
 
-            # 2. Deactivate old chunks (they are superseded by the new ones)
             old_chunks_stmt = select(Chunk).where(Chunk.source_id == source_id, Chunk.is_active == True)
             old_chunks = (await db.execute(old_chunks_stmt)).scalars().all()
             for chunk in old_chunks:
                 chunk.is_active = False
             await db.flush()
-            logger.info(f"[ReIndex] Deactivated {len(old_chunks)} old chunks")
 
             await db.commit()
         except Exception as e:
@@ -379,40 +438,5 @@ async def _safe_reindex(source_id: uuid.UUID):
             logger.error(f"[ReIndex] Error during pre-cleanup for {source_id}: {e}")
             return
 
-    # 3. Run the standard ingestion pipeline on the updated content
     await process_source_chunks_bg(source_id)
     logger.info(f"[ReIndex] Safe re-index completed for source {source_id}")
-
-
-# ──────────────────────────────────────────────
-#  Helpers
-# ──────────────────────────────────────────────
-async def _count(db: AsyncSession, model, *filters) -> int:
-    stmt = select(func.count()).select_from(model).where(*filters)
-    return (await db.scalar(stmt)) or 0
-
-
-def _enrich_source_response(source: Source, chunks_count: int, claims_count: int) -> SourceResponse:
-    """Build a SourceResponse with computed counts."""
-    return SourceResponse(
-        id=source.id,
-        title=source.title,
-        content=source.content,
-        source_type=source.source_type,
-        meta_info=source.meta_info,
-        file_type=source.file_type,
-        original_file_path=source.original_file_path,
-        raw_content=source.raw_content,
-        domain=source.domain,
-        version=source.version,
-        is_deleted=source.is_deleted,
-        metadata_info={},
-        status=source.status,
-        error_message=source.error_message,
-        started_at=source.started_at,
-        completed_at=source.completed_at,
-        created_at=source.created_at,
-        updated_at=source.updated_at,
-        chunks_count=chunks_count,
-        claims_count=claims_count,
-    )

@@ -5,8 +5,10 @@ import { ConflictCard } from './ConflictCard';
 import { SupersedeConfirmationModal } from './SupersedeConfirmationModal';
 import { CoexistContextModal } from './CoexistContextModal';
 import { VersionEditModal } from './VersionEditModal';
+import { useLanguage } from '../../context/LanguageContext';
 
 export const ConflictResolutionCenter: React.FC = () => {
+  const { t } = useLanguage();
   const [conflicts, setConflicts] = useState<ConflictResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'unresolved' | 'resolved'>('unresolved');
@@ -120,15 +122,15 @@ export const ConflictResolutionCenter: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 flex flex-col bg-zinc-950 overflow-hidden h-full">
-      <div className="bg-zinc-900/40 px-6 py-4 border-b border-zinc-800 shrink-0 flex justify-between items-center">
+    <div className="flex flex-col text-slate-200">
+      <div className="flex items-center justify-between pb-6 mb-8 border-b border-white/5">
         <div>
-          <h1 className="text-xl font-bold text-zinc-100 flex items-center gap-2">
-            <ShieldAlert className="text-amber-500" />
-            Conflict Resolution Center
+          <h1 className="text-2xl font-semibold text-white flex items-center gap-2.5">
+            <ShieldAlert className="w-6 h-6 text-amber-500" />
+            {t('contradictions.title')}
           </h1>
           <p className="text-sm text-zinc-400 mt-1">
-            Review and safely resolve contradictions found in L4 graph.
+            {t('contradictions.subtitle')}
           </p>
         </div>
         
@@ -154,7 +156,7 @@ export const ConflictResolutionCenter: React.FC = () => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-zinc-700 scrollbar-track-transparent">
+      <div className="flex-1">
         {isLoading ? (
           <div className="flex justify-center items-center h-32 text-zinc-500">
             <Clock className="animate-spin mr-2" size={18} /> Loading conflicts...

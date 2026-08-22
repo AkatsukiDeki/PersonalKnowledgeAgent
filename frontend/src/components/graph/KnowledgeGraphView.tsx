@@ -10,11 +10,13 @@ import React, {
 import ForceGraph2D, { ForceGraphMethods, NodeObject, LinkObject } from 'react-force-graph-2d';
 import { forceCenter, forceCollide, forceManyBody, forceX, forceY, SimulationNodeDatum } from 'd3-force';
 import { graphApi } from '../../api/graph';
+import { claimsApi } from '../../api/claims';
 import { GraphNode, GraphLink } from '../../types/graph';
 import { GraphSidebarFilters } from './GraphSidebarFilters';
 import { MemoryInspector } from './MemoryInspector';
 import { LinkInspector } from './LinkInspector';
 import { endpointId, isPositionedNode, resolveGraphNode } from './graphEndpoints';
+import { ENTITY_TOKENS, resolveEntityGroup } from '../../utils/entityTokens';
 
 export interface KnowledgeGraphRef {
   focusNode: (nodeId: string, zoomLevel?: number) => void;
@@ -52,15 +54,6 @@ const FRAME_MS = 1000 / 24;
 const SPACE_VOID = '#0a0b10';
 const LINK_GLOW = 'rgba(56, 189, 248, 0.25)';
 const LINK_CORE = 'rgba(186, 230, 253, 0.55)';
-
-const ENTITY_CONFIG: Record<string, EntityVisualMeta> = {
-  insight:  { color: '#f59e0b', glowRgb: '245, 158, 11',  radius: 9, pulseFreq: 1.8 },
-  decision: { color: '#8b5cf6', glowRgb: '139, 92, 246',  radius: 7, pulseFreq: 1.2 },
-  entity:   { color: '#a855f7', glowRgb: '168, 85, 247',  radius: 5.5, pulseFreq: 1.0 },
-  claim:    { color: '#38bdf8', glowRgb: '56, 189, 248',  radius: 3.5, pulseFreq: 0.9 },
-  source:   { color: '#64748B', glowRgb: '100, 116, 139', radius: 3, pulseFreq: 0.5 },
-  conflict: { color: '#EF4444', glowRgb: '239, 68, 68',   radius: 5, pulseFreq: 2.5 },
-};
 
 interface D3LinkForce {
   distance: (value: number) => D3LinkForce;
@@ -169,17 +162,15 @@ function screenRadius(node: GraphNode, globalScale: number): number {
   return config.radius / Math.max(globalScale, 0.08);
 }
 
-function getNodeConfig(node: GraphNode): EntityVisualMeta {
-  if (node.group === 'decision' || node.kind === 'decision') return ENTITY_CONFIG.decision;
-  if (node.group === 'entity') return ENTITY_CONFIG.entity;
-  if (node.group === 'insight' || node.kind === 'insight') return ENTITY_CONFIG.insight;
-  if (node.group === 'claim') {
-    if (node.is_active === false) {
-      return { color: '#475569', glowRgb: '71, 85, 105', radius: 3, pulseFreq: 0 };
-    }
-    return ENTITY_CONFIG.claim;
+function getNodeConfig(node: GraphNode) {
+  const groupKey = resolveEntityGroup(node);
+  const config = ENTITY_TOKENS[groupKey] ?? ENTITY_TOKENS.claim;
+  
+  if (node.is_active === false && groupKey === 'claim') {
+    return { ...config, hex: '#475569', glowRgb: '71, 85, 105', pulseFreq: 0 };
   }
-  return ENTITY_CONFIG.source;
+  
+  return { ...config, color: config.hex }; // Ensure color maps to hex for canvas usage if needed
 }
 
 function generateStars(bounds: number, count: number): Star[] {
@@ -209,12 +200,14 @@ function wrapCoord(value: number, bounds: number): number {
 
 interface KnowledgeGraphViewProps {
   focusNodeId?: string | null;
+  semanticFilter?: 'all' | 'insights' | 'decisions';
   onSelectSource?: (sourceId: string) => void;
   onNavigateToChatWithContext?: (contextText: string) => void;
 }
 
 export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphViewProps>(({
   focusNodeId,
+  semanticFilter = 'all',
   onSelectSource,
   onNavigateToChatWithContext,
 }, ref) => {
@@ -317,13 +310,15 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     setHighlightLinks(links);
   }, [data.links]);
 
-  const applyFocus = useCallback((target: GraphNode, zoomLevel: number, duration = 1000) => {
+  const applyFocus = useCallback((target: GraphNode, zoomLevel?: number, duration = 1200) => {
     setSelectedNode(target);
     setSelectedLink(null);
     updateHighlight(target);
     if (fgRef.current && isPositionedNode(target)) {
+      const isMajor = isMassiveNode(target);
+      const targetZoom = zoomLevel ?? (isMajor ? 1.2 : 2.0);
       fgRef.current.centerAt(target.x ?? 0, target.y ?? 0, duration);
-      fgRef.current.zoom(zoomLevel, duration);
+      fgRef.current.zoom(targetZoom, duration);
       return true;
     }
     return false;
@@ -356,7 +351,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
 
   const handleNodeClick = useCallback((node: GraphNode) => {
     pendingFocusRef.current = null;
-    applyFocus(node, 3.5, 800);
+    applyFocus(node);
   }, [applyFocus]);
 
   const handleNodeHover = useCallback((node: GraphNode | null) => {
@@ -371,6 +366,29 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     setSelectedLink(null);
     updateHighlight(null);
   }, [updateHighlight]);
+
+  const handleUpdateStatus = useCallback(async (nodeId: string, isActive: boolean) => {
+    // Optimistic UI update
+    setData((prev) => {
+      const nodes = prev.nodes.map(n => n.id === nodeId ? { ...n, is_active: isActive } : n);
+      return { ...prev, nodes };
+    });
+    // Find node and update selected
+    setSelectedNode(prev => prev?.id === nodeId ? { ...prev, is_active: isActive } : prev);
+
+    try {
+      await claimsApi.update(nodeId, { is_active: isActive });
+    } catch (err) {
+      console.error("Failed to update status", err);
+      // Revert optimistic update
+      setData((prev) => {
+        const nodes = prev.nodes.map(n => n.id === nodeId ? { ...n, is_active: !isActive } : n);
+        return { ...prev, nodes };
+      });
+      setSelectedNode(prev => prev?.id === nodeId ? { ...prev, is_active: !isActive } : prev);
+      alert('Ошибка при смене статуса');
+    }
+  }, []);
 
   const resetView = useCallback(() => {
     pendingFocusRef.current = null;
@@ -472,30 +490,46 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   const nodeCanvasObject = useCallback((node: NodeObject, ctx: CanvasRenderingContext2D, globalScale: number) => {
     if (!isGraphNode(node)) return;
     const config = getNodeConfig(node);
+    
+    const isMajor = isMassiveNode(node);
+    if (semanticFilter === 'insights' && node.group !== 'insight' && node.kind !== 'insight') return;
+    if (semanticFilter === 'decisions' && node.group !== 'decision' && node.kind !== 'decision') return;
+
+    // Semantic Zoom: Hide 'claim' and 'source' at macro level
+    if (globalScale < 0.8 && (node.group === 'claim' || node.group === 'source' || config.radius <= 3.5)) {
+      return;
+    }
+
     const hasFocus = highlightNodes.size === 0 || highlightNodes.has(node.id);
     const isSelected = selectedNode?.id === node.id;
     const isHovered = hoverNode?.id === node.id;
 
-    const baseAlpha = hasFocus ? 1 : 0.08;
+    // Dimming non-neighbors more aggressively when there is an active selection
+    const hasActiveSelection = highlightNodes.size > 0;
+    const baseAlpha = hasFocus ? 1 : (hasActiveSelection ? 0.03 : 0.08);
     const x = node.x ?? 0;
     const y = node.y ?? 0;
     const phase = phaseRef.current;
-    const pulse = config.pulseFreq > 0
-      ? Math.sin(phase * config.pulseFreq * Math.PI) * 0.5 + 0.5
+    
+    // Enhanced pulse logic for orbital glow
+    const pulseFreq = config.pulseFreq * (isSelected ? 1.5 : 1);
+    const phaseShift = (hashString(node.id) % 100) / 10;
+    const pulse = pulseFreq > 0
+      ? Math.sin(phase * pulseFreq * Math.PI + phaseShift) * 0.5 + 0.5
       : 0;
 
     const baseRadius = config.radius / Math.max(globalScale * 0.28, 1);
-    const visualRadius = isSelected || isHovered ? baseRadius * 1.15 : baseRadius;
+    const visualRadius = isSelected || isHovered ? baseRadius * 1.25 : baseRadius;
 
     ctx.save();
     ctx.globalAlpha = baseAlpha;
 
     if (hasFocus) {
-      const auraMultiplier = isSelected ? 2.8 : isHovered ? 2.2 : 1.4;
-      const auraRadius = visualRadius * (auraMultiplier + pulse * 0.4);
+      const auraMultiplier = isSelected ? 3.5 : isHovered ? 2.5 : (hasActiveSelection ? 1.8 : 1.4);
+      const auraRadius = visualRadius * (auraMultiplier + pulse * 0.6);
 
       const auraGradient = ctx.createRadialGradient(x, y, visualRadius * 0.5, x, y, auraRadius);
-      const innerOpacity = isSelected ? 0.45 : isHovered ? 0.35 : 0.18 + pulse * 0.12;
+      const innerOpacity = isSelected ? 0.55 : isHovered ? 0.45 : 0.22 + pulse * 0.15;
       auraGradient.addColorStop(0, `rgba(${config.glowRgb}, ${innerOpacity})`);
       auraGradient.addColorStop(1, `rgba(${config.glowRgb}, 0)`);
 
@@ -536,7 +570,8 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
       ctx.setLineDash([]);
     }
 
-    if (globalScale > 1.6 && hasFocus) {
+    // Semantic Zoom: Text labels only on medium/micro zoom
+    if (globalScale >= 0.9 && hasFocus) {
       const label = node.label || '';
       const truncated = label.length > 32 ? `${label.slice(0, 32)}…` : label;
       const fontSize = Math.max(9 / globalScale, 2.2);
@@ -561,9 +596,21 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
     const tn = canvasEndpoint(link.target);
     if (!sn || !tn) return;
 
+    // Apply semantic filter to links
+    if (semanticFilter === 'insights' && ((sn.group !== 'insight' && sn.kind !== 'insight') || (tn.group !== 'insight' && tn.kind !== 'insight'))) return;
+    if (semanticFilter === 'decisions' && ((sn.group !== 'decision' && sn.kind !== 'decision') || (tn.group !== 'decision' && tn.kind !== 'decision'))) return;
+
+    // Semantic Zoom for links
+    if (globalScale < 0.8 && !isHL) {
+       const snConfig = getNodeConfig(sn);
+       const tnConfig = getNodeConfig(tn);
+       // Hide links to small nodes at macro level
+       if (snConfig.radius <= 3.5 || tnConfig.radius <= 3.5) return;
+    }
+
     ctx.save();
     const hasActiveSelection = highlightLinks.size > 0;
-    ctx.globalAlpha = isHL ? 0.75 : hasActiveSelection ? 0.03 : 0.12;
+    ctx.globalAlpha = isHL ? 0.85 : hasActiveSelection ? 0.02 : 0.12;
 
     const relType = link.type.toLowerCase();
     const isConflict = relType === 'supersedes' || relType === 'contradicts';
@@ -681,6 +728,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
           }}
           onViewSource={onSelectSource}
           onNavigateToChatWithContext={onNavigateToChatWithContext}
+          onUpdateStatus={handleUpdateStatus}
         />
       )}
 

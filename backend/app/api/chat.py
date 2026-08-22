@@ -4,7 +4,7 @@ import time
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, text
 import logging
 
 logger = logging.getLogger(__name__)
@@ -24,7 +24,8 @@ from ..db.models import (
     ConversationMessage,
     ConversationMemory,
     Decision,
-    TimelineEvent
+    TimelineEvent,
+    Source
 )
 from sqlalchemy.orm import selectinload
 from ..knowledge.conversation_memory import maybe_trigger_memory_update
@@ -32,6 +33,32 @@ from datetime import datetime
 from uuid import UUID
 
 import httpx
+
+async def generate_conversation_title_bg(conv_id: UUID, query: str):
+    from app.db.session import async_session_factory
+    from app.db.models import Conversation
+    from ..core.llm import model_manager, TaskType
+    from pydantic import BaseModel, Field
+
+    class TitleResponse(BaseModel):
+        title: str = Field(description="Short title (max 4-5 words)")
+
+    try:
+        title_res = await model_manager.generate_structured(
+            task_type=TaskType.EXTRACTION,
+            schema=TitleResponse,
+            prompt=f"Generate a very short, concise title (max 4-5 words) summarizing this first message: '{query}'",
+            system_instruction="You are a title generator. Be brief, use Russian if message is Russian."
+        )
+        new_title = title_res.title.strip()
+        
+        async with async_session_factory() as session:
+            conv = await session.get(Conversation, conv_id)
+            if conv:
+                conv.title = new_title
+                await session.commit()
+    except Exception as e:
+        logger.error(f"Failed to generate title in background: {e}")
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -102,12 +129,10 @@ async def get_thread_context(db: AsyncSession, conversation_id: UUID, limit_mess
     return thread_state_str, history_list
 
 
-async def append_chat_messages(
+async def append_user_message(
         db: AsyncSession,
         conversation_id: UUID,
-        user_query: str,
-        assistant_answer: str,
-        metrics: dict
+        user_query: str
 ):
     seq_stmt = (
         select(func.coalesce(func.max(ConversationMessage.sequence_num), 0))
@@ -124,16 +149,32 @@ async def append_chat_messages(
         timestamp=datetime.utcnow(),
         meta_info={}
     )
+    db.add(user_msg)
+    await db.commit()
+
+async def append_assistant_message(
+        db: AsyncSession,
+        conversation_id: UUID,
+        assistant_answer: str,
+        metrics: dict
+):
+    seq_stmt = (
+        select(func.coalesce(func.max(ConversationMessage.sequence_num), 0))
+        .where(ConversationMessage.conversation_id == conversation_id)
+    )
+    res = await db.execute(seq_stmt)
+    current_max_seq = res.scalar_one()
+
     assistant_msg = ConversationMessage(
         conversation_id=conversation_id,
         role="assistant",
         content=assistant_answer,
-        sequence_num=current_max_seq + 2,
+        sequence_num=current_max_seq + 1,
         timestamp=datetime.utcnow(),
         meta_info={"model": settings.OLLAMA_QA_MODEL, "context_used": metrics}
     )
-    db.add(user_msg)
     db.add(assistant_msg)
+    await db.commit()
 
 
 async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatRequest, intent: str, timings: dict):
@@ -161,6 +202,25 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     for r in l1_chunks:
         if not r["text_content"].startswith("[L1 CHUNK]"):
             r["text_content"] = f"[L1 CHUNK] {r['text_content']}"
+            
+    if payload.attached_source_ids:
+        src_stmt = select(Source).where(Source.id.in_(payload.attached_source_ids))
+        src_res = await db.execute(src_stmt)
+        sources = src_res.scalars().all()
+        for src in sources:
+            content = src.content or src.raw_content or ""
+            if len(content) > 20000:
+                content = content[:20000] + "... (truncated)"
+            
+            l1_chunks.insert(0, {
+                "chunk_id": str(uuid.uuid4()),
+                "source_id": str(src.id),
+                "text_content": f"=== [ATTACHED FILE: {src.title}] ===\n{content}",
+                "score": 1.0,
+                "rrf_score": 1.0,
+                "is_pattern": False
+            })
+            
     timings["l1_retrieval"] = time.perf_counter() - t0
 
     l2_claims = []
@@ -370,7 +430,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
             timings["llm_generation"] = time.perf_counter() - t0
             metrics = {"l1_count": 0, "l2_count": 0, "l3_count": 0, "intent": "META"}
             if conv:
-                await append_chat_messages(db, conv.id, payload.query, answer, metrics)
+                await append_user_message(db, conv.id, payload.query)
+                await append_assistant_message(db, conv.id, answer, metrics)
                 conv.ended_at = datetime.utcnow()
                 await db.commit()
                 background_tasks.add_task(maybe_trigger_memory_update, conv.id)
@@ -394,7 +455,26 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
             })
 
         t0 = time.perf_counter()
-        answer = await generate_rag_response(query=payload.query, retrieved_chunks=retrieved)
+        # Fetch user profile
+        profile_text = ""
+        profile_res = await db.execute(select(text("*")).select_from(text("user_profiles")).order_by(text("created_at DESC")).limit(1))
+        row = profile_res.fetchone()
+        if row:
+            from .profile import generate_primary_seed
+            from ..schemas.profile import UserProfileCreate
+            try:
+                prof_schema = UserProfileCreate(
+                    role=row.role,
+                    stack=row.stack if isinstance(row.stack, list) else json.loads(row.stack),
+                    invariants=row.invariants,
+                    learning_style=row.learning_style,
+                    projects=row.projects
+                )
+                profile_text = generate_primary_seed(prof_schema)
+            except Exception as e:
+                logger.error(f"Error parsing profile: {e}")
+
+        answer = await generate_rag_response(query=payload.query, retrieved_chunks=retrieved, user_profile=profile_text, mode=payload.mode)
         timings["llm_generation"] = time.perf_counter() - t0
 
         total_time = time.perf_counter() - trace_start
@@ -425,24 +505,12 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
         }
 
         if conv:
-            if conv.title in ("Новый диалог", "Untitled Conversation"):
-                try:
-                    from ..core.llm import model_manager, TaskType
-                    from pydantic import BaseModel, Field
-                    class TitleResponse(BaseModel):
-                        title: str = Field(description="Short title (max 4-5 words)")
+            msg_count = await db.scalar(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
+            if msg_count == 0:
+                background_tasks.add_task(generate_conversation_title_bg, conv.id, payload.query)
 
-                    title_res = await model_manager.generate_structured(
-                        task_type=TaskType.EXTRACTION,
-                        schema=TitleResponse,
-                        prompt=f"Generate a very short, concise title (max 4-5 words) summarizing this first message: '{payload.query}'",
-                        system_instruction="You are a title generator. Be brief, use Russian if message is Russian."
-                    )
-                    conv.title = title_res.title.strip()
-                except Exception:
-                    conv.title = payload.query[:30] + ("..." if len(payload.query) > 30 else "")
-
-            await append_chat_messages(db, conv.id, payload.query, answer, metrics)
+            await append_user_message(db, conv.id, payload.query)
+            await append_assistant_message(db, conv.id, answer, metrics)
             conv.ended_at = datetime.utcnow()
             await db.commit()
             background_tasks.add_task(maybe_trigger_memory_update, conv.id)
@@ -470,14 +538,26 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
     async def event_generator():
         trace_start = time.perf_counter()
         timings = {}
+        import asyncio
+        full_answer = ""
+        metrics = {"l1_count": 0, "l2_count": 0, "l3_count": 0, "intent": "UNKNOWN"}
+        conv = None
         try:
-            conv = None
             thread_state = ""
-            if payload.conversation_id:
+            if not payload.conversation_id:
+                conv = Conversation(title="Новый диалог")
+                db.add(conv)
+                await db.commit()
+                await db.refresh(conv)
+                payload.conversation_id = conv.id
+            else:
                 conv = await db.get(Conversation, payload.conversation_id)
-                if conv:
-                    thread_state, history = await get_thread_context(db, payload.conversation_id)
-                    payload.history = history
+                
+            if conv:
+                thread_state, history = await get_thread_context(db, payload.conversation_id)
+                payload.history = history
+                await append_user_message(db, conv.id, payload.query)
+                yield f"event: metadata\ndata: {json.dumps({'conversation_id': str(conv.id)}, ensure_ascii=False)}\n\n"
 
             t0 = time.perf_counter()
             intent = await classify_intent(payload.query)
@@ -491,11 +571,8 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
                 yield f"event: message\ndata: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
 
                 if conv:
-                    metrics = {"l1_count": 0, "l2_count": 0, "l3_count": 0, "intent": "META"}
-                    await append_chat_messages(db, conv.id, payload.query, answer, metrics)
-                    conv.ended_at = datetime.utcnow()
-                    await db.commit()
-                    background_tasks.add_task(maybe_trigger_memory_update, conv.id)
+                    metrics["intent"] = "META"
+                    full_answer = answer
 
                 yield "event: done\ndata: [DONE]\n\n"
                 return
@@ -531,9 +608,27 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
             ]
             yield f"event: citations\ndata: {json.dumps(citations_data, ensure_ascii=False)}\n\n"
 
+            # Fetch user profile for streaming
+            profile_text = ""
+            profile_res = await db.execute(select(text("*")).select_from(text("user_profiles")).order_by(text("created_at DESC")).limit(1))
+            row = profile_res.fetchone()
+            if row:
+                from .profile import generate_primary_seed
+                from ..schemas.profile import UserProfileCreate
+                try:
+                    prof_schema = UserProfileCreate(
+                        role=row.role,
+                        stack=row.stack if isinstance(row.stack, list) else json.loads(row.stack),
+                        invariants=row.invariants,
+                        learning_style=row.learning_style,
+                        projects=row.projects
+                    )
+                    profile_text = generate_primary_seed(prof_schema)
+                except Exception as e:
+                    logger.error(f"Error parsing profile: {e}")
+
             t0 = time.perf_counter()
-            full_answer = ""
-            async for token in stream_rag_response(payload.query, retrieved):
+            async for token in stream_rag_response(payload.query, retrieved, user_profile=profile_text, mode=payload.mode):
                 full_answer += token
                 yield f"event: message\ndata: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
             timings["llm_generation"] = time.perf_counter() - t0
@@ -557,41 +652,35 @@ async def chat_stream_endpoint(payload: ChatRequest, background_tasks: Backgroun
             print(log_report)
 
             if conv:
-                if conv.title in ("Новый диалог", "Untitled Conversation"):
-                    try:
-                        from ..core.llm import model_manager, TaskType
-                        from pydantic import BaseModel, Field
+                msg_count = await db.scalar(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
+                if msg_count == 0:
+                    background_tasks.add_task(generate_conversation_title_bg, conv.id, payload.query)
 
-                        class TitleResponse(BaseModel):
-                            title: str = Field(description="Short title (max 4-5 words)")
-
-                        title_res = await model_manager.generate_structured(
-                            task_type=TaskType.EXTRACTION,
-                            schema=TitleResponse,
-                        prompt=f"Generate a very short, concise title (max 4-5 words) summarizing this first message: '{payload.query}'",
-                            system_instruction="You are a title generator. Be brief, use Russian if message is Russian."
-                        )
-                        conv.title = title_res.title.strip()
-                    except Exception:
-                        conv.title = payload.query[:30] + ("..." if len(payload.query) > 30 else "")
-
-                metrics = {
+                metrics.update({
                     "l1_count": int(len([r for r in retrieved if r["text_content"].startswith("[L1")])),
                     "l2_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L2")])),
                     "l3_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L3")])),
                     "l4_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L4")])),
                     "graph_hops": int(len([r for r in retrieved if r["text_content"].startswith("=== [GRAPH")])),
                     "intent": str(intent)
-                }
-                await append_chat_messages(db, conv.id, payload.query, full_answer, metrics)
-                conv.ended_at = datetime.utcnow()
-                await db.commit()
-                background_tasks.add_task(maybe_trigger_memory_update, conv.id)
+                })
 
             yield "event: done\ndata: [DONE]\n\n"
+        except asyncio.CancelledError:
+            logger.warning("Stream cancelled by client.")
+            raise
         except Exception as exc:
             logger.exception("RAG streaming pipeline failed")
             yield f"event: error\ndata: {json.dumps({'error': str(exc)}, ensure_ascii=False)}\n\n"
+        finally:
+            if conv and full_answer:
+                try:
+                    await append_assistant_message(db, conv.id, full_answer, metrics)
+                    conv.ended_at = datetime.utcnow()
+                    await db.commit()
+                    background_tasks.add_task(maybe_trigger_memory_update, conv.id)
+                except Exception as e:
+                    logger.error(f"Failed to save assistant message on stream close: {e}")
 
     return StreamingResponse(
         event_generator(),

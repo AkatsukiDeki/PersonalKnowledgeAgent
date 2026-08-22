@@ -3,8 +3,10 @@ import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { Send, Loader2 } from 'lucide-react';
+import { Send, Loader2, Paperclip, X } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
+import { sourcesApi } from '../../api/sources';
+import { profileApi } from '../../api/profile';
 
 interface Props {
   onOrbitUpdate?: (ctx: OrbitContext | null) => void;
@@ -21,6 +23,13 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [loadingStatus, setLoadingStatus] = useState('');
 
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [isSeeded, setIsSeeded] = useState(false);
+
+  const [attachedFiles, setAttachedFiles] = useState<{id: string, name: string}[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const skipLoadRef = React.useRef(false);
 
   const messagesEndRef = React.useRef<HTMLDivElement| null>(null);
 
@@ -31,7 +40,11 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
   useEffect(() => {
     if (activeConvId) {
-      loadConversation(activeConvId);
+      if (skipLoadRef.current) {
+        skipLoadRef.current = false;
+      } else {
+        loadConversation(activeConvId);
+      }
     } else {
       setMessages([]);
       pushOrbit(null);
@@ -52,8 +65,28 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         setActiveConvId(convId);
       }
     };
+    
+    const handleInjectPrompt = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        setInput(customEvent.detail);
+      }
+    };
+    
     window.addEventListener('openConversation', handleOpenConv);
-    return () => window.removeEventListener('openConversation', handleOpenConv);
+    window.addEventListener('injectChatPrompt', handleInjectPrompt);
+    
+    // Check if user is already seeded
+    profileApi.getProfile().then(profile => {
+      if (profile && profile.is_seeded) {
+        setIsSeeded(true);
+      }
+    }).catch(err => console.error("Failed to fetch profile", err));
+    
+    return () => {
+      window.removeEventListener('openConversation', handleOpenConv);
+      window.removeEventListener('injectChatPrompt', handleInjectPrompt);
+    };
   }, []);
 
   const pushOrbit = useCallback((ctx: OrbitContext | null) => {
@@ -97,15 +130,18 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent, overrideInput?: string) => {
     e.preventDefault();
-    if (!input.trim() || isLoading || isCooldown) return;
+    const textToSend = overrideInput || input;
+    if (!textToSend.trim() || isLoading || isCooldown) return;
 
     let targetConvId = activeConvId;
     if (!targetConvId) {
       try {
-        const conv = await conversationsApi.createConversation("Новый диалог");
+        const optimisticTitle = textToSend.trim().substring(0, 35) + (textToSend.length > 35 ? '...' : '');
+        const conv = await conversationsApi.createConversation(optimisticTitle);
         targetConvId = conv.id;
+        skipLoadRef.current = true;
         setActiveConvId(conv.id);
       } catch (err) {
         console.error("Failed to create first conversation", err);
@@ -116,7 +152,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     const userMsg: Message = {
       id: crypto.randomUUID(),
       role: 'user',
-      content: input.trim(),
+      content: textToSend.trim(),
       timestamp: new Date().toISOString(),
     };
 
@@ -142,10 +178,19 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     let streamBuffer = '';
     let currentCitations: Citation[] = [];
 
+    const sourceIds = attachedFiles.map(f => f.id);
+    setAttachedFiles([]);
+    
     await streamChat(
       userMsg.content,
       history,
       targetConvId,
+      sourceIds,
+      (convId) => {
+        if (!activeConvId) {
+          setActiveConvId(convId);
+        }
+      },
       (status) => {
         setLoadingStatus(status);
       },
@@ -200,11 +245,41 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     );
   };
 
-  // Handle Shift+Enter for multiline
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e as unknown as React.FormEvent);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+  
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+  
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await handleFileUpload(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileUpload = async (file: File) => {
+    setIsUploading(true);
+    try {
+      const source = await sourcesApi.upload(file);
+      setAttachedFiles(prev => [...prev, { id: source.id, name: file.name }]);
+    } catch (err) {
+      console.error("Failed to upload file", err);
+      alert("Ошибка при загрузке файла");
+    } finally {
+      setIsUploading(false);
     }
   };
 
@@ -216,25 +291,47 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         onNewConversation={handleNewConversation}
       />
 
-      <div className="flex flex-col flex-1 h-full bg-transparent text-slate-200 min-w-0 relative">
+      <div 
+        className="flex flex-col flex-1 h-full min-w-0 relative bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#050510] to-[#0a0a0a] text-slate-200"
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        {isDragging && (
+          <div className="absolute inset-0 z-50 bg-indigo-500/10 backdrop-blur-sm border-2 border-dashed border-indigo-500/50 flex items-center justify-center rounded-2xl m-4">
+            <p className="text-indigo-400 font-medium text-lg">Перетащите файл сюда для загрузки</p>
+          </div>
+        )}
 
         {/* Message stream */}
-        <div className="flex-1 overflow-y-auto p-6 max-w-3xl w-full mx-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+        <div 
+          className="flex-1 overflow-y-auto pt-24 p-6 pb-32 max-w-3xl w-full mx-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+          style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)' }}
+        >
           {messages.length === 0 ? (
-            <div className="h-full flex flex-col gap-4 items-center justify-center text-white/40 text-sm">
-              <div className="w-8 h-8 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-1">
-                ✦
+            !isSeeded && (
+              <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm">
+                <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
+                  🪐
+                </div>
+                <div className="text-center space-y-2">
+                  <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
+                  <p className="font-light max-w-sm">База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).</p>
+                </div>
+                {!activeConvId && (
+                  <button
+                    onClick={(e) => {
+                      const seedText = 'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
+                      setInput(seedText);
+                      handleSubmit(e as any, seedText);
+                    }}
+                    className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
+                  >
+                    Начать инициализацию (Primary Seed)
+                  </button>
+                )}
               </div>
-              <p className="font-light">Задайте вопрос агенту по вашей базе знаний…</p>
-              {!activeConvId && (
-                <button
-                  onClick={handleNewConversation}
-                  className="px-4 py-2 bg-white/5 hover:bg-white/10 text-white/90 border border-white/10 rounded-xl text-xs font-mono transition-all"
-                >
-                  [ Начать новый диалог ]
-                </button>
-              )}
-            </div>
+            )
           ) : (
             <div className="space-y-6">
               {messages.map((msg) => (
@@ -256,11 +353,39 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         )}
 
         {/* Glass Input Bar */}
-        <div className="p-4 max-w-3xl w-full mx-auto shrink-0">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-3xl w-[calc(100%-3rem)] shrink-0 z-10">
+          {attachedFiles.length > 0 && (
+            <div className="flex flex-wrap gap-2 mb-2 px-1">
+              {attachedFiles.map(file => (
+                <div key={file.id} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-200 text-xs px-2.5 py-1 rounded-md border border-indigo-500/30">
+                  <span className="truncate max-w-[150px]">{file.name}</span>
+                  <button onClick={() => setAttachedFiles(prev => prev.filter(f => f.id !== file.id))} className="hover:text-white transition-colors">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          
           <form
+            id="chat-input-form"
             onSubmit={handleSubmit}
             className="bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-3 p-3 shadow-2xl transition-all focus-within:border-white/20"
           >
+            <input 
+              type="file" 
+              ref={fileInputRef} 
+              className="hidden" 
+              onChange={(e) => e.target.files && e.target.files.length > 0 && handleFileUpload(e.target.files[0])}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isUploading}
+              className="text-white/40 hover:text-white/80 transition-colors p-2 shrink-0 disabled:opacity-50"
+            >
+              {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+            </button>
             <textarea
               value={input}
               onChange={(e) => setInput(e.target.value)}
@@ -268,11 +393,12 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
               placeholder={isCooldown ? 'Подождите…' : 'Введите запрос... (Shift+Enter — новая строка)'}
               disabled={isLoading || isCooldown}
               rows={1}
-              className="flex-1 bg-transparent border-none text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-2 px-2 disabled:opacity-40 font-light"
+              className="flex-1 bg-transparent border-none text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-2 px-2 disabled:opacity-40 font-light scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent [&::-webkit-scrollbar-button]:hidden"
               style={{ minHeight: '38px' }}
             />
             <button
               type="submit"
+              onClick={handleSubmit}
               disabled={isLoading || isCooldown || !input.trim()}
               className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white p-2.5 rounded-xl flex items-center justify-center transition-all shrink-0 shadow-lg shadow-indigo-500/20 disabled:shadow-none"
             >

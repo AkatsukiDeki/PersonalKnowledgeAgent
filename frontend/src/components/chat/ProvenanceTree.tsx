@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
-import { ChevronRight, ChevronDown, GitBranch, Atom, FileText } from 'lucide-react';
+import { ChevronRight, ChevronDown } from 'lucide-react';
 import { Citation } from '../../types/chat';
+import { ENTITY_TOKENS } from '../../utils/entityTokens';
 
 interface Props {
   citations: Citation[];
 }
 
 interface TreeNode {
+  id?: string;
   type: 'decision' | 'claim' | 'source';
   label: string;
   detail?: string;
@@ -32,7 +34,9 @@ function buildTree(citations: Citation[]): TreeNode[] {
     const sourceNode: TreeNode = {
       type: 'source',
       label: sourceId.length > 20 ? `📄 ${sourceId.slice(0, 8)}…` : `📄 ${sourceId}`,
+      id: sourceId,
       children: cites.map((c) => ({
+        id: c.chunk_id,
         type: 'claim' as const,
         label: c.text_snippet.length > 80 ? c.text_snippet.slice(0, 80) + '…' : c.text_snippet,
         detail: c.text_snippet,
@@ -45,40 +49,22 @@ function buildTree(citations: Citation[]): TreeNode[] {
   return roots;
 }
 
-const typeConfig = {
-  decision: {
-    icon: <GitBranch size={13} />,
-    color: 'text-entity-decision',
-    bg: 'bg-entity-decision/10',
-    ring: 'glow-ring-decision',
-  },
-  claim: {
-    icon: <Atom size={13} />,
-    color: 'text-entity-claim',
-    bg: 'bg-entity-claim/10',
-    ring: 'glow-ring-claim',
-  },
-  source: {
-    icon: <FileText size={13} />,
-    color: 'text-entity-source',
-    bg: 'bg-white/[0.03]',
-    ring: '',
-  },
-};
-
 function TreeNodeView({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
   const [expanded, setExpanded] = useState(depth < 1);
-  const config = typeConfig[node.type];
+  const config = ENTITY_TOKENS[node.type] ?? ENTITY_TOKENS.claim;
   const hasChildren = node.children.length > 0;
 
   return (
-    <div className={depth > 0 ? 'ml-4 border-l border-white/[0.06] pl-3' : ''}>
-      <button
-        onClick={() => hasChildren && setExpanded(!expanded)}
-        className={`group flex items-start gap-2 w-full text-left py-1.5 px-2 rounded-md transition-colors hover:bg-white/[0.04] ${
-          hasChildren ? 'cursor-pointer' : 'cursor-default'
+    <div className={depth > 0 ? 'ml-4 border-l border-white/[0.06] pl-3 relative group/node' : 'relative group/node'}>
+      <div
+        className={`flex items-start gap-2 w-full text-left py-1.5 px-2 rounded-md transition-colors hover:bg-white/[0.04] ${
+          hasChildren ? '' : 'cursor-default'
         }`}
       >
+        <button
+          onClick={() => hasChildren && setExpanded(!expanded)}
+          className={`group flex items-start gap-2 w-full text-left flex-1 min-w-0 ${hasChildren ? 'cursor-pointer' : 'cursor-default'}`}
+        >
         {/* Expand chevron */}
         <span className="mt-0.5 w-3.5 shrink-0">
           {hasChildren ? (
@@ -106,7 +92,23 @@ function TreeNodeView({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
             {node.score.toFixed(3)}
           </span>
         )}
-      </button>
+        </button>
+
+        {/* Telescope Action */}
+        {node.id && (
+          <button
+            onClick={() => {
+              window.dispatchEvent(new CustomEvent('switchFilter', { detail: 'all' }));
+              window.dispatchEvent(new CustomEvent('switchTab', { detail: 'universe' }));
+              window.dispatchEvent(new CustomEvent('focusNode', { detail: node.id }));
+            }}
+            title="Найти в орбитальной системе"
+            className="opacity-0 group-hover/node:opacity-100 transition-opacity p-1 hover:bg-white/10 rounded-md shrink-0 text-sky-400/80 hover:text-sky-300"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m10.065 12.493-6.18 1.318a.934.934 0 0 1-1.108-.952l.11-1.59a.89.89 0 0 1 .677-.816L9.68 9M18.338 7.156l-3.215 3.215M10.875 14.82l3.415 3.414a.8.8 0 0 0 1.132 0l3.782-3.783a.8.8 0 0 0 0-1.132l-3.415-3.414M15.42 10.275l4.316-4.317a.798.798 0 0 0 0-1.13l-1.39-1.39a.798.798 0 0 0-1.13 0l-4.317 4.316"/></svg>
+          </button>
+        )}
+      </div>
 
       {/* Children */}
       {expanded && hasChildren && (
@@ -152,7 +154,7 @@ export function ProvenanceTree({ citations }: Props) {
       </button>
 
       {isOpen && (
-        <div className="mt-1 bg-surface-high/30 rounded-lg p-2 surface-high-border">
+        <div className="mt-1 bg-[#0a0a0a]/40 border border-white/5 rounded-lg p-2">
           {tree.map((node, i) => (
             <TreeNodeView key={i} node={node} depth={0} />
           ))}

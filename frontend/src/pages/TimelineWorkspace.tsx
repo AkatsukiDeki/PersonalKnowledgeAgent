@@ -1,8 +1,10 @@
 import React, { useEffect, useState } from 'react';
 import { timelineApi, TimelineEvent } from '../api/timeline';
-import { Clock, RefreshCw, GitMerge, AlertCircle, Wrench, Shield, ChevronDown } from 'lucide-react';
+import { Clock, RefreshCw, GitMerge, AlertCircle, Wrench, Shield, ChevronDown, HelpCircle, FileText, ArrowRight } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 export function TimelineWorkspace() {
+  const { t } = useLanguage();
   const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [rebuilding, setRebuilding] = useState(false);
@@ -73,30 +75,40 @@ export function TimelineWorkspace() {
   };
 
   return (
-    <div className="h-full flex flex-col bg-transparent text-slate-200 overflow-hidden">
+    <div className="flex flex-col text-slate-200">
       {/* Header */}
-      <div className="p-6 pb-4 border-b border-white/5 bg-[#0a0a0a]/50 backdrop-blur-md flex justify-between items-center shrink-0">
+      <div className="flex items-center justify-between pb-6 mb-8 border-b border-white/5">
         <div>
-          <h1 className="text-xl font-light tracking-tight text-white/95 flex items-center gap-3">
-            <Clock className="text-emerald-400" size={20} strokeWidth={1.5} />
-            Хроника решений (Timeline 2.0)
+          <h1 className="text-2xl font-semibold text-white flex items-center gap-2.5">
+            <Clock className="w-6 h-6 text-emerald-400" />
+            {t('timeline.title')}
           </h1>
-          <p className="text-xs text-white/50 font-light mt-1">
-            Эволюция знаний, смена инструментов и архитектурные сдвиги во времени.
+          <p className="text-sm text-zinc-400 mt-1">
+            {t('timeline.subtitle')}
           </p>
         </div>
-        <button
-          onClick={handleRebuild}
-          disabled={rebuilding}
-          className="flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] disabled:opacity-50 text-white px-4 py-2 rounded-xl font-medium text-xs transition-all border border-white/10 shadow-sm"
-        >
-          <RefreshCw size={15} strokeWidth={1.5} className={rebuilding ? "animate-spin" : ""} />
-          {rebuilding ? 'Анализ...' : 'Синхронизировать'}
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleRebuild}
+            disabled={rebuilding}
+            className="flex items-center gap-2 bg-white/[0.04] hover:bg-white/[0.08] disabled:opacity-50 text-white px-4 py-2 rounded-xl font-medium text-xs transition-all border border-white/10 shadow-sm"
+          >
+            <RefreshCw size={15} strokeWidth={1.5} className={rebuilding ? "animate-spin" : ""} />
+            {rebuilding ? t('timeline.syncing') : t('timeline.sync')}
+          </button>
+        </div>
+      </div>
+
+      {/* Info Banner */}
+      <div className="mx-6 mt-6 p-4 bg-indigo-500/10 border border-indigo-500/20 rounded-xl flex gap-3 text-indigo-200">
+        <HelpCircle className="shrink-0 mt-0.5 text-indigo-400" size={18} />
+        <p className="text-sm font-light">
+          {t('timeline.infoBox')}
+        </p>
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto p-6 lg:px-12 xl:px-24 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+      <div className="flex-1 lg:px-12 xl:px-24">
         {loading ? (
           <div className="flex items-center justify-center h-full text-white/40 gap-3 font-mono text-xs">
             <RefreshCw className="animate-spin text-emerald-400" size={16} /> Загрузка событий...
@@ -170,6 +182,23 @@ export function TimelineWorkspace() {
                         <p className={`text-white/70 text-xs font-light leading-relaxed ${isExpanded ? '' : 'line-clamp-2'}`}>
                           {ev.description}
                         </p>
+
+                        <div className="mt-4 pt-3 border-t border-white/5 flex flex-col sm:flex-row items-start sm:items-center gap-3">
+                          <span className="text-[10px] uppercase font-mono text-white/40 tracking-wider">Основано на:</span>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            {ev.old_claim_id && (
+                              <button className="flex items-center gap-1.5 px-2 py-1 bg-white/5 hover:bg-white/10 rounded border border-white/10 text-xs text-white/60 transition-colors">
+                                <FileText size={12} /> Предыдущий подход
+                              </button>
+                            )}
+                            <ArrowRight size={12} className="text-white/20" />
+                            {ev.new_claim_id && (
+                              <button className="flex items-center gap-1.5 px-2 py-1 bg-indigo-500/10 hover:bg-indigo-500/20 rounded border border-indigo-500/20 text-xs text-indigo-300 transition-colors">
+                                <FileText size={12} /> Новый подход
+                              </button>
+                            )}
+                          </div>
+                        </div>
 
                         <button
                           onClick={() => toggleDesc(ev.id)}

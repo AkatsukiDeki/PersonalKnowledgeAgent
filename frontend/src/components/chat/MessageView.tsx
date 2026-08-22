@@ -24,8 +24,8 @@ export function MessageView({ message }: Props) {
       <div
         className={`max-w-[80%] rounded-xl text-sm leading-relaxed ${
           isUser
-            ? 'bg-surface-high border border-entity-claim/20 text-zinc-100 px-4 py-3 rounded-br-sm'
-            : 'bg-surface-high/50 border border-white/[0.06] text-zinc-200 px-4 py-3 rounded-bl-sm'
+            ? 'bg-white/5 border border-white/10 text-zinc-100 px-4 py-3 rounded-br-sm'
+            : 'bg-[#0B0D13]/60 backdrop-blur-sm border border-white/5 text-zinc-200 px-4 py-3 rounded-bl-sm'
         }`}
       >
         {isUser ? (

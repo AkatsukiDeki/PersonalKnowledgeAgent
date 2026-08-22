@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { sourcesApi } from '../../api/sources';
 import { SourceDetail } from '../../types/source';
-import { X, Save, RefreshCw, Loader2, CheckCircle2, XCircle, FileText, ExternalLink } from 'lucide-react';
+import { X, Save, RefreshCw, Loader2, CheckCircle2, XCircle, FileText, ExternalLink, GraduationCap } from 'lucide-react';
+import { LearningModal } from '../learning/LearningModal';
 
 interface Props {
   sourceId: string;
@@ -16,6 +17,7 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isLearningModalOpen, setIsLearningModalOpen] = useState(false);
 
   const loadDetail = useCallback(async () => {
     try {
@@ -90,7 +92,13 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
                 Save & Re-index
               </button>
             )}
-            <button onClick={onClose} className="text-zinc-400 hover:text-zinc-100 transition-colors p-1">
+            <button
+              onClick={() => setIsLearningModalOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/50 text-indigo-300 text-xs font-medium rounded-lg transition-colors"
+            >
+              <GraduationCap size={14} /> Учить этот источник
+            </button>
+            <button onClick={onClose} className="text-zinc-400 hover:text-zinc-100 transition-colors p-1 ml-2">
               <X size={18} />
             </button>
           </div>
@@ -188,6 +196,12 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
           </div>
         ) : null}
       </div>
+      
+      <LearningModal 
+        isOpen={isLearningModalOpen} 
+        onClose={() => setIsLearningModalOpen(false)} 
+        sourceId={sourceId} 
+      />
     </div>
   );
 }

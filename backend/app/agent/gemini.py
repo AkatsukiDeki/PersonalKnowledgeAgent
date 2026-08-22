@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 from ..core.config import settings
 from ..core.llm import tenacity_retry_llm, tenacity_retry_reasoning_llm, model_manager
-from .prompts import RAG_SYSTEM_INSTRUCTION, QUERY_REWRITE_PROMPT, build_rag_prompt
+from .prompts import get_rag_system_instruction, QUERY_REWRITE_PROMPT, build_rag_prompt
 from ..core.ollama_client import OllamaClient
 
 _client = None
@@ -58,7 +58,7 @@ async def _generate_rewrite(prompt: str) -> str:
 
 
 @tenacity_retry_reasoning_llm
-async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any]]) -> str:
+async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any]], user_profile: str = "", mode: str = "assistant") -> str:
     """Генерация ответа на базе извлеченных чанков (RAG)."""
     if not retrieved_chunks:
         return "К сожалению, я не нашел информации по вашему вопросу."
@@ -71,7 +71,12 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
     prompt = build_rag_prompt(query, context_text)
 
     # Формируем итоговый промпт с директивой-взломщиком
-    active_system_prompt = f"{RAG_SYSTEM_INSTRUCTION}{PKA_JAILBREAK}"
+    base_instruction = get_rag_system_instruction(user_profile)
+    
+    if mode == "learning_tutor":
+        base_instruction += "\n\n--- СОКРАТОВСКИЙ ТЬЮТОР ---\nТы выступаешь в роли Сократовского ментора. Не давай прямых ответов сразу. Задавай наводящие вопросы, приводи инженерные аналогии и предлагай практические задачки для размышления. Поощряй пользователя думать самостоятельно."
+        
+    active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
 
     if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your_gemini_api_key_here":
         ollama = OllamaClient()
@@ -116,6 +121,8 @@ async def _do_stream(prompt: str, system_instruction: str):
 async def stream_rag_response(
         query: str,
         retrieved_chunks: List[Dict[str, Any]],
+        user_profile: str = "",
+        mode: str = "assistant"
 ) -> AsyncGenerator[str, None]:
     """Потоковая генерация ответа на базе чанков."""
     if not retrieved_chunks:
@@ -130,7 +137,12 @@ async def stream_rag_response(
     prompt = build_rag_prompt(query, context_text)
 
     # Формируем итоговый промпт с директивой-взломщиком для стриминга
-    active_system_prompt = f"{RAG_SYSTEM_INSTRUCTION}{PKA_JAILBREAK}"
+    base_instruction = get_rag_system_instruction(user_profile)
+    
+    if mode == "learning_tutor":
+        base_instruction += "\n\n--- СОКРАТОВСКИЙ ТЬЮТОР ---\nТы выступаешь в роли Сократовского ментора. Не давай прямых ответов сразу. Задавай наводящие вопросы, приводи инженерные аналогии и предлагай практические задачки для размышления. Поощряй пользователя думать самостоятельно."
+
+    active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
 
     try:
         response_stream = await _do_stream(prompt, system_instruction=active_system_prompt)
