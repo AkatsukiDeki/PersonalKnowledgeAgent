@@ -6,7 +6,7 @@ import { ObsidianImportModal } from '../connectors/ObsidianImportModal';
 import {
   X, Database, Trash2, Loader2, RefreshCw, Upload, Search,
   FileText, FileSpreadsheet, FileType, FileCode, FileJson,
-  CheckCircle2, AlertCircle, Clock, Eye, RotateCcw
+  CheckCircle2, AlertCircle, Clock, Eye, RotateCcw, Image
 } from 'lucide-react';
 
 interface Props {
@@ -22,6 +22,11 @@ const FILE_ICONS: Record<string, React.ReactNode> = {
   xlsx: <FileSpreadsheet size={16} className="text-emerald-400" />,
   csv: <FileSpreadsheet size={16} className="text-lime-400" />,
   json: <FileJson size={16} className="text-amber-400" />,
+  png: <Image size={16} className="text-purple-400" />,
+  jpg: <Image size={16} className="text-purple-400" />,
+  jpeg: <Image size={16} className="text-purple-400" />,
+  webp: <Image size={16} className="text-purple-400" />,
+  heic: <Image size={16} className="text-purple-400" />,
 };
 
 const STATUS_BADGE: Record<string, { className: string; icon: React.ReactNode }> = {
@@ -31,7 +36,7 @@ const STATUS_BADGE: Record<string, { className: string; icon: React.ReactNode }>
   failed: { className: 'bg-red-900/30 text-red-400 border-red-800/50', icon: <AlertCircle size={10} /> },
 };
 
-const ACCEPTED_EXTENSIONS = '.md,.txt,.pdf,.docx,.xlsx,.csv,.json';
+const ACCEPTED_EXTENSIONS = '.md,.txt,.pdf,.docx,.xlsx,.csv,.json,.png,.jpg,.jpeg,.webp,.heic';
 
 export function SourceManager({ isOpen, onClose }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
@@ -240,7 +245,7 @@ export function SourceManager({ isOpen, onClose }: Props) {
               <div className="flex flex-col items-center gap-1 text-zinc-500">
                 <Upload size={24} />
                 <span className="text-xs">Drop files here or click to upload</span>
-                <span className="text-[10px] text-zinc-600">Supported: MD, TXT, PDF, DOCX, XLSX, CSV, JSON</span>
+                <span className="text-[10px] text-zinc-600">Supported: MD, TXT, PDF, DOCX, XLSX, CSV, JSON, PNG, JPG, WEBP, HEIC</span>
               </div>
             )}
           </div>

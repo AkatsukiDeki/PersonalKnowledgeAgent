@@ -80,6 +80,7 @@ class OllamaClient:
             prompt: str = "",
             system: Optional[str] = None,
             format_schema: Optional[Any] = None,
+            images: Optional[list[str]] = None,
             num_predict: int = 4096
     ) -> str:
         target_model = model or self.default_model
@@ -101,6 +102,9 @@ class OllamaClient:
 
         if format_schema:
             payload["format"] = format_schema
+            
+        if images:
+            payload["images"] = images
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:

@@ -15,6 +15,11 @@ SUPPORTED_EXTENSIONS: Dict[str, str] = {
     ".xlsx": "xlsx",
     ".csv": "csv",
     ".json": "json",
+    ".png": "image",
+    ".jpg": "image",
+    ".jpeg": "image",
+    ".webp": "image",
+    ".heic": "image",
 }
 
 
@@ -104,5 +109,10 @@ def parse_file(filename: str, file_bytes: bytes) -> tuple[str, str, Dict[str, An
         text = json.dumps(data, ensure_ascii=False, indent=2)
         metadata["json_keys"] = list(data.keys()) if isinstance(data, dict) else None
         return text, "json", metadata
+        
+    if ext in (".png", ".jpg", ".jpeg", ".webp", ".heic"):
+        from .image_parser import parse_image
+        text = parse_image(file_bytes, filename)
+        return text, "image", metadata
 
     raise ValueError(f"No parser available for extension: {ext}")

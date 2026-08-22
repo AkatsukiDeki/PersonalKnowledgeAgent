@@ -124,8 +124,47 @@ class ModelManager:
                     return response.text or ""
                 return ""
         
+        
         raise ValueError(f"Unsupported text task type: {task_type}")
 
+    async def generate_vision(self, prompt: str, image_bytes: bytes, mime_type: str, allow_cloud_fallback: bool = True) -> str:
+        """
+        Обработка изображений через Vision-модель (Ollama -> Gemini Fallback).
+        """
+        import base64
+        b64_image = base64.b64encode(image_bytes).decode("utf-8")
+        
+        # 1. Ollama (Local)
+        vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5-vl")
+        try:
+            return await self.ollama_client.generate(
+                model=vision_model,
+                prompt=prompt,
+                images=[b64_image]
+            )
+        except Exception as e:
+            logger.error(f"[ModelManager] Ollama Vision failed ({e}).")
+            
+            # 2. Cloud Fallback (Gemini)
+            if allow_cloud_fallback and self.cloud_available and self._cloud_client:
+                logger.warning("[ModelManager] Falling back to Gemini for Vision.")
+                try:
+                    from google.genai import types
+                    config = types.GenerateContentConfig(temperature=0.2)
+                    response = await self._cloud_client.aio.models.generate_content(
+                        model=self.fast_model,
+                        contents=[
+                            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                            prompt
+                        ],
+                        config=config
+                    )
+                    return response.text or ""
+                except Exception as cloud_err:
+                    logger.error(f"[ModelManager] Gemini Vision fallback failed: {cloud_err}")
+            
+            # Если оба упали, возвращаем дефолтный текст ошибки
+            return "[Ошибка обработки изображения: Vision-провайдер недоступен]"
 
 model_manager = ModelManager()
 
