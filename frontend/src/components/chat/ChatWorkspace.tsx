@@ -3,7 +3,7 @@ import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { Send, Loader2, Paperclip, X, Sparkles } from 'lucide-react';
+import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
 import { profileApi } from '../../api/profile';
@@ -20,6 +20,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [isCooldown, setIsCooldown] = useState(false);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('');
 
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
@@ -285,11 +286,13 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
   return (
     <div className="flex h-full w-full bg-transparent">
-      <ConversationSidebar
-        activeConversationId={activeConvId}
-        onSelectConversation={setActiveConvId}
-        onNewConversation={handleNewConversation}
-      />
+      {isSidebarOpen && (
+        <ConversationSidebar
+          activeConversationId={activeConvId}
+          onSelectConversation={setActiveConvId}
+          onNewConversation={handleNewConversation}
+        />
+      )}
 
       <div 
         className="flex flex-col flex-1 h-full min-w-0 relative bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#050510] to-[#0a0a0a] text-slate-200"
@@ -304,6 +307,16 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         )}
 
         {/* Action Header */}
+        <div className="absolute top-6 left-6 z-20">
+          <button
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="p-2 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 rounded-xl transition-colors shadow-lg"
+            title="Переключить боковую панель"
+          >
+            {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
+          </button>
+        </div>
+
         {activeConvId && messages.length > 0 && (
           <div className="absolute top-6 right-8 z-20">
             <button
@@ -319,41 +332,43 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
         {/* Message stream */}
         <div 
-          className="flex-1 overflow-y-auto pt-24 p-6 pb-32 max-w-3xl w-full mx-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+          className="flex-1 overflow-y-auto pt-24 pb-32 w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
           style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)' }}
         >
-          {messages.length === 0 ? (
-            !isSeeded && (
-              <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm">
-                <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
-                  🪐
+          <div className="max-w-3xl w-full mx-auto px-6 h-full">
+            {messages.length === 0 ? (
+              !isSeeded && (
+                <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm">
+                  <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
+                    🪐
+                  </div>
+                  <div className="text-center space-y-2">
+                    <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
+                    <p className="font-light max-w-sm">База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).</p>
+                  </div>
+                  {!activeConvId && (
+                    <button
+                      onClick={(e) => {
+                        const seedText = 'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
+                        setInput(seedText);
+                        handleSubmit(e as any, seedText);
+                      }}
+                      className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
+                    >
+                      Начать инициализацию (Primary Seed)
+                    </button>
+                  )}
                 </div>
-                <div className="text-center space-y-2">
-                  <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
-                  <p className="font-light max-w-sm">База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).</p>
-                </div>
-                {!activeConvId && (
-                  <button
-                    onClick={(e) => {
-                      const seedText = 'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
-                      setInput(seedText);
-                      handleSubmit(e as any, seedText);
-                    }}
-                    className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
-                  >
-                    Начать инициализацию (Primary Seed)
-                  </button>
-                )}
+              )
+            ) : (
+              <div className="space-y-6">
+                {messages.map((msg) => (
+                  <MessageView key={msg.id} message={msg} />
+                ))}
+                <div ref={messagesEndRef} />
               </div>
-            )
-          ) : (
-            <div className="space-y-6">
-              {messages.map((msg) => (
-                <MessageView key={msg.id} message={msg} />
-              ))}
-              <div ref={messagesEndRef} />
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Loading status */}
