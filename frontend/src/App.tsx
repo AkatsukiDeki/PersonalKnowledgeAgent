@@ -10,10 +10,8 @@ import { SearchResult } from './api/search';
 
 import { InsightsWorkspace } from './pages/InsightsWorkspace';
 import { TimelineWorkspace } from './pages/TimelineWorkspace';
-import { GraphWorkspace } from './pages/GraphWorkspace';
 import { UniverseCanvas } from './components/universe/UniverseCanvas';
 import { LearningDashboard } from './pages/LearningDashboard';
-import { KnowledgeGraphRef } from './components/graph/KnowledgeGraphView';
 import { SemanticSearchModal } from './components/search/SemanticSearchModal';
 import { DocumentEditorModal } from './components/sources/DocumentEditorModal';
 import { SettingsModal } from './components/settings/SettingsModal';
@@ -59,7 +57,7 @@ export function App() {
   const [learningSubjectId, setLearningSubjectId] = useState<string | null>(null);
   const [learningInitialTab, setLearningInitialTab] = useState<'roadmap' | 'sources' | 'tutor' | 'stats'>('roadmap');
 
-  const graphRef = useRef<KnowledgeGraphRef | null>(null);
+
   
   const handleOpenSubjectFromUniverse = (subjectId: string, initialTab: 'roadmap' | 'sources' | 'tutor' | 'stats' = 'roadmap') => {
     setLearningSubjectId(subjectId);
@@ -99,7 +97,7 @@ export function App() {
         setUniverseFocusId(customEvent.detail);
         setActiveView('universe'); // Force view change
         if (activeView === 'universe') {
-          graphRef.current?.focusNode(customEvent.detail, 3.5);
+          // UniverseCanvas handles focus automatically via its internal effect
         }
       }
     };
@@ -122,9 +120,7 @@ export function App() {
   }, [activeView]);
 
   useEffect(() => {
-    if (activeView === 'universe' && universeFocusId) {
-      setTimeout(() => graphRef.current?.focusNode(universeFocusId, 3.5), 100);
-    }
+    // UniverseCanvas handles focus via focusNodeId prop / Context
   }, [activeView, universeFocusId]);
 
   const handleSelectSearchResult = (result: SearchResult) => {
@@ -229,19 +225,6 @@ export function App() {
 
             {activeView === 'universe' && (
               <UniverseCanvas onOpenSubject={handleOpenSubjectFromUniverse} />
-            )}
-
-            {activeView === 'graph' && (
-              <GraphWorkspace
-                ref={graphRef}
-                focusNodeId={universeFocusId}
-                semanticFilter={semanticFilter}
-                onSelectSource={(sourceId) => setInspectSourceId(sourceId)}
-                onNavigateToChatWithContext={(contextText) => {
-                  setChatSeed(contextText);
-                  setActiveView('chat');
-                }}
-              />
             )}
 
             {activeView === 'conflicts' && (
