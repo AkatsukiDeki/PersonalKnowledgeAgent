@@ -1281,8 +1281,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               Trace Active
             </button>
           )}
-
-        </div>
       </div>
 
       {/* Нижняя плавающая панель скраббера времени */}
