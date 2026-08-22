@@ -37,6 +37,8 @@ export function SourceManager({ isOpen, onClose }: Props) {
   const [sources, setSources] = useState<Source[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -124,12 +126,51 @@ export function SourceManager({ isOpen, onClose }: Props) {
     setIsDeleting(id);
     try {
       await sourcesApi.delete(id);
+      setSelectedIds(prev => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       await loadSources();
     } catch (err: any) {
       alert(`Delete error: ${err.message}`);
     } finally {
       setIsDeleting(null);
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0 || isBulkDeleting) return;
+    if (!confirm(`Удалить ${selectedIds.size} выбранных источников? (Soft delete)`)) return;
+    setIsBulkDeleting(true);
+    try {
+      for (const id of selectedIds) {
+        await sourcesApi.delete(id);
+      }
+      setSelectedIds(new Set());
+      await loadSources();
+    } catch (err: any) {
+      alert(`Bulk delete error: ${err.message}`);
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  const handleSelectAll = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.checked) {
+      setSelectedIds(new Set(sources.map(s => s.id)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   if (!isOpen) return null;
@@ -150,7 +191,17 @@ export function SourceManager({ isOpen, onClose }: Props) {
               <button onClick={loadSources} className="ml-2 text-zinc-500 hover:text-zinc-300" title="Refresh">
                 <RefreshCw size={14} className={isLoading ? 'animate-spin' : ''} />
               </button>
-              <button onClick={() => setIsObsidianModalOpen(true)} className="ml-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs px-3 py-1.5 rounded-md border border-zinc-700 transition-colors flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="ml-4 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-xs px-3 py-1.5 rounded-md border border-red-500/30 transition-colors flex items-center gap-2"
+                >
+                  {isBulkDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                  Удалить выбранные ({selectedIds.size})
+                </button>
+              )}
+              <button onClick={() => setIsObsidianModalOpen(true)} className="ml-auto bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs px-3 py-1.5 rounded-md border border-zinc-700 transition-colors flex items-center gap-2">
                 <Database size={14} />
                 Import Obsidian Vault
               </button>
@@ -238,6 +289,14 @@ export function SourceManager({ isOpen, onClose }: Props) {
               <table className="w-full text-left border-collapse">
                 <thead>
                   <tr className="border-b border-zinc-800 text-zinc-500 text-[10px] uppercase tracking-wider">
+                    <th className="pb-2 font-medium w-8 pl-4">
+                      <input 
+                        type="checkbox" 
+                        className="rounded border-zinc-600 bg-zinc-800 checked:bg-indigo-500 focus:ring-0 w-3 h-3 cursor-pointer" 
+                        checked={sources.length > 0 && selectedIds.size === sources.length}
+                        onChange={handleSelectAll}
+                      />
+                    </th>
                     <th className="pb-2 font-medium w-8"></th>
                     <th className="pb-2 font-medium">Title</th>
                     <th className="pb-2 font-medium">Domain</th>
@@ -252,7 +311,15 @@ export function SourceManager({ isOpen, onClose }: Props) {
                   {sources.map(src => {
                     const statusInfo = STATUS_BADGE[src.status] || STATUS_BADGE.pending;
                     return (
-                      <tr key={src.id} className="border-b border-zinc-800/50 hover:bg-zinc-800/20 transition-colors group">
+                      <tr key={src.id} className={`border-b border-zinc-800/50 hover:bg-zinc-800/20 transition-colors group ${selectedIds.has(src.id) ? 'bg-indigo-500/10' : ''}`}>
+                        <td className="py-2.5 pl-4">
+                          <input 
+                            type="checkbox" 
+                            className="rounded border-zinc-600 bg-zinc-800 checked:bg-indigo-500 focus:ring-0 w-3 h-3 cursor-pointer"
+                            checked={selectedIds.has(src.id)}
+                            onChange={() => toggleSelect(src.id)}
+                          />
+                        </td>
                         <td className="py-2.5 pl-2">
                           {FILE_ICONS[src.file_type || ''] || <FileText size={16} className="text-zinc-500" />}
                         </td>
