@@ -23,7 +23,8 @@ async def classify_intent(query: str) -> str:
         "взаимосвязан", "устройство", "как устроена память", "структура чат",
         "помощь", "help", "привет", "здравствуй", "стек агента", "архитектур",
         "космос", "вселенн", "метафор", "интерфейс", "граф", "звезд", "планет",
-        "созвезди", "deep space", "universe view", "связь тебя", "о себе", "о системе"
+        "созвезди", "deep space", "universe view", "связь тебя", "о себе", "о системе",
+        "обучение", "тьютор", "flashcards", "смарт тьютор", "smart tutor", "карточки"
     ]
     if any(kw in query_lower for kw in meta_keywords):
         logger.info(f"[IntentClassifier] Deterministic: -> META")

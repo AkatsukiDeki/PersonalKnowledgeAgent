@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, GraduationCap, RefreshCw, Zap, Trash2 } from 'lucide-react';
+import { Send, GraduationCap, RefreshCw, Trash2, Mic, MicOff, Volume2 } from 'lucide-react';
 import { subjectsApi } from '../../api/subjects';
 import ReactMarkdown from 'react-markdown';
 
@@ -13,8 +13,63 @@ export const SubjectTutorChat: React.FC<SubjectTutorChatProps> = ({ subjectId, i
   const [messages, setMessages] = useState<{ role: string; content: string }[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isListening, setIsListening] = useState(false);
+  const recognitionRef = useRef<any>(null);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // @ts-ignore
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (SpeechRecognition) {
+      const recognition = new SpeechRecognition();
+      recognition.lang = 'ru-RU';
+      recognition.interimResults = true;
+      recognition.continuous = false;
+
+      recognition.onresult = (event: any) => {
+        let transcript = '';
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          transcript += event.results[i][0].transcript;
+        }
+        setInput(transcript);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onerror = (e: any) => {
+        console.error('Speech recognition error', e.error);
+        setIsListening(false);
+      };
+
+      recognitionRef.current = recognition;
+    }
+  }, []);
+
+  const toggleListening = (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (isListening) {
+      recognitionRef.current?.stop();
+    } else {
+      if (!input.trim()) setInput(''); // Clear only if empty
+      recognitionRef.current?.start();
+      setIsListening(true);
+    }
+  };
+
+  const speakText = (text: string) => {
+    if (!window.speechSynthesis) return;
+    window.speechSynthesis.cancel(); // stop current
+    
+    // Strip basic markdown
+    const cleanText = text.replace(/[*_#`]/g, '');
+    const utterance = new SpeechSynthesisUtterance(cleanText);
+    utterance.lang = 'ru-RU';
+    
+    window.speechSynthesis.speak(utterance);
+  };
 
   const loadHistory = async () => {
     try {
@@ -29,8 +84,11 @@ export const SubjectTutorChat: React.FC<SubjectTutorChatProps> = ({ subjectId, i
     loadHistory();
   }, [subjectId]);
 
+  const processedContextRef = useRef<string | null>(null);
+
   useEffect(() => {
-    if (initialContext) {
+    if (initialContext && initialContext.id !== processedContextRef.current) {
+      processedContextRef.current = initialContext.id;
       const autoMessage = `Давай разберем тему: ${initialContext.title}`;
       handleSendMessage(autoMessage, initialContext.title);
       if (onClearContext) onClearContext();
@@ -102,10 +160,19 @@ export const SubjectTutorChat: React.FC<SubjectTutorChatProps> = ({ subjectId, i
         
         {messages.map((m, i) => (
           <div key={i} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`max-w-[80%] rounded-2xl p-4 ${m.role === 'user' ? 'bg-indigo-500/20 text-indigo-100 border border-indigo-500/30' : 'bg-zinc-800/50 text-slate-200 border border-zinc-700'}`}>
+            <div className={`max-w-[80%] rounded-2xl p-4 relative group ${m.role === 'user' ? 'bg-indigo-500/20 text-indigo-100 border border-indigo-500/30' : 'bg-zinc-800/50 text-slate-200 border border-zinc-700'}`}>
               <div className="prose prose-invert prose-sm">
                 <ReactMarkdown>{m.content}</ReactMarkdown>
               </div>
+              {m.role === 'assistant' && (
+                <button
+                  onClick={() => speakText(m.content)}
+                  className="absolute -right-8 top-1/2 -translate-y-1/2 p-1.5 text-zinc-500 hover:text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity bg-zinc-900 rounded-full border border-zinc-700"
+                  title="Прочитать вслух"
+                >
+                  <Volume2 size={16} />
+                </button>
+              )}
             </div>
           </div>
         ))}
@@ -127,15 +194,31 @@ export const SubjectTutorChat: React.FC<SubjectTutorChatProps> = ({ subjectId, i
             onChange={e => setInput(e.target.value)}
             disabled={loading}
             placeholder={loading ? "Тьютор печатает..." : "Спросите что-нибудь..."}
-            className="w-full bg-zinc-950 border border-zinc-700 text-white rounded-xl px-4 py-4 pr-12 outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
+            className="w-full bg-zinc-950 border border-zinc-700 text-white rounded-xl px-4 py-4 pr-24 outline-none focus:border-indigo-500 transition-colors disabled:opacity-50"
           />
-          <button
-            type="submit"
-            disabled={!input.trim() || loading}
-            className="absolute right-2 top-2 bottom-2 aspect-square bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:hover:bg-indigo-500 rounded-lg flex items-center justify-center text-white transition-colors"
-          >
-             <Send size={18} />
-          </button>
+          <div className="absolute right-2 top-2 bottom-2 flex gap-1">
+            {recognitionRef.current && (
+              <button
+                type="button"
+                onClick={toggleListening}
+                className={`aspect-square rounded-lg flex items-center justify-center transition-colors ${
+                  isListening 
+                    ? 'bg-red-500/20 text-red-400 border border-red-500/30 animate-pulse' 
+                    : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+                }`}
+                title="Голосовой ввод"
+              >
+                {isListening ? <Mic size={18} /> : <MicOff size={18} />}
+              </button>
+            )}
+            <button
+              type="submit"
+              disabled={!input.trim() || loading}
+              className="aspect-square bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:hover:bg-indigo-500 rounded-lg flex items-center justify-center text-white transition-colors"
+            >
+               <Send size={18} />
+            </button>
+          </div>
         </div>
       </form>
     </div>

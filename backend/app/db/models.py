@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pgvector.sqlalchemy import Vector
 from ..core.config import settings
@@ -483,6 +483,8 @@ class Subject(Base, TimestampedUUIDMixin):
                                                                                     cascade="all, delete-orphan", lazy="selectin")
     conversations = relationship("Conversation", back_populates="subject")
     sources: Mapped[List["Source"]] = relationship("Source", secondary=subject_sources)
+    flashcards: Mapped[List["SubjectFlashcard"]] = relationship("SubjectFlashcard", back_populates="subject",
+                                                                cascade="all, delete-orphan", lazy="selectin")
 
 
 class SubjectRoadmap(Base, TimestampedUUIDMixin):
@@ -542,3 +544,23 @@ class SubjectTutorMessage(Base, TimestampedUUIDMixin):
     sequence_num: Mapped[int] = mapped_column(Integer, nullable=False)
     
     conversation: Mapped["SubjectTutorConversation"] = relationship("SubjectTutorConversation", back_populates="messages")
+
+
+class SubjectFlashcard(Base):
+    __tablename__ = "subject_flashcards"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id = Column(PG_UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_id = Column(String, nullable=True)  # Привязка к теме из Roadmap
+    front = Column(Text, nullable=False)
+    back = Column(Text, nullable=False)
+    hint = Column(Text, nullable=True)
+    
+    # SM-2 параметры
+    ease_factor = Column(Float, default=2.5, nullable=False)
+    interval = Column(Integer, default=0, nullable=False)  # В днях
+    repetitions = Column(Integer, default=0, nullable=False)
+    due_date = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False, index=True)
+    last_reviewed_at = Column(DateTime(timezone=True), nullable=True)
+
+    subject = relationship("Subject", back_populates="flashcards")

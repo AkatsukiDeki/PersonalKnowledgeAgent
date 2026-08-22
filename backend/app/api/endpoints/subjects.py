@@ -19,7 +19,10 @@ from ...db.models import (
     Claim,
     SubjectTutorConversation,
     SubjectTutorMessage,
+    SubjectFlashcard,
 )
+from datetime import datetime, timezone, timedelta
+from typing import Tuple
 from ...core.ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
@@ -120,44 +123,57 @@ async def list_subjects(db: AsyncSession = Depends(get_db)):
 
 @router.get("/{subject_id}")
 async def get_subject_detail(subject_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    stmt = (
-        select(Subject)
-        .where(Subject.id == subject_id)
-        .options(
-            selectinload(Subject.sources),
-            selectinload(Subject.roadmaps),
-            selectinload(Subject.stats),
+    try:
+        stmt = (
+            select(Subject)
+            .where(Subject.id == subject_id)
+            .options(
+                selectinload(Subject.sources),
+                selectinload(Subject.roadmaps),
+            )
         )
-    )
-    res = await db.execute(stmt)
-    subject = res.scalar_one_or_none()
-    if not subject:
-        raise HTTPException(status_code=404, detail="Subject not found")
+        res = await db.execute(stmt)
+        subject = res.scalar_one_or_none()
+        if not subject:
+            raise HTTPException(status_code=404, detail="Предмет не найден")
 
-    roadmap_data = subject.roadmaps[0].content if subject.roadmaps else None
+        # Безопасное получение Roadmap
+        roadmap_data = None
+        if hasattr(subject, "roadmaps") and subject.roadmaps:
+            roadmap_data = subject.roadmaps[0].content
 
-    return {
-        "id": str(subject.id),
-        "title": subject.title,
-        "description": subject.description,
-        "icon": subject.icon,
-        "color_theme": subject.color_theme,
-        "mastery_score": subject.mastery_score,
-        "is_mastered": getattr(subject, "is_mastered", False),
-        "roadmap": roadmap_data,
-        "sources": [
-            {
-                "id": str(src.id),
-                "title": src.title,
-                "source_type": src.source_type,
-                "status": src.status,
-                "folder": getattr(src, "folder", None),
-                "meta_info": src.meta_info or {},
-            }
-            for src in subject.sources
-            if not src.is_deleted
-        ],
-    }
+        # Безопасное получение привязанных источников
+        sources_list = []
+        if hasattr(subject, "sources") and subject.sources:
+            sources_list = [
+                {
+                    "id": str(src.id),
+                    "title": getattr(src, "title", "Без названия"),
+                    "source_type": getattr(src, "source_type", "document"),
+                    "status": getattr(src, "status", "active"),
+                    "folder": getattr(src, "folder", None),
+                    "meta_info": getattr(src, "meta_info", {}) or {},
+                }
+                for src in subject.sources
+                if not getattr(src, "is_deleted", False)
+            ]
+
+        return {
+            "id": str(subject.id),
+            "title": subject.title,
+            "description": subject.description,
+            "icon": getattr(subject, "icon", "book"),
+            "color_theme": getattr(subject, "color_theme", "indigo"),
+            "mastery_score": getattr(subject, "mastery_score", 0.0) or 0.0,
+            "is_mastered": getattr(subject, "is_mastered", False) or False,
+            "roadmap": roadmap_data,
+            "sources": sources_list,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"[get_subject_detail error]: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Ошибка сервера при загрузке предмета: {str(e)}")
 
 
 @router.patch("/{subject_id}")
@@ -448,23 +464,42 @@ async def generate_flashcards(
     topic = data.topic_title or "Обзор предмета"
     difficulty = data.difficulty or "medium"
     count = max(3, min(data.count or 10, 50))
+    node_id = data.node_id
 
-    claims_stmt = (
-        select(Claim.content)
-        .join(Source, Claim.source_id == Source.id)
-        .join(subject_sources, subject_sources.c.source_id == Source.id)
-        .where(
-            subject_sources.c.subject_id == subject_id,
-            Claim.is_active == True,
-            Source.is_deleted == False,
-        )
-        .limit(40)
+    # 1. Сначала ищем карточки из БД, которые пора повторять
+    stmt_due = select(SubjectFlashcard).where(
+        SubjectFlashcard.subject_id == subject_id,
+        SubjectFlashcard.due_date <= datetime.now(timezone.utc)
     )
-    claims_res = await db.execute(claims_stmt)
-    facts = claims_res.scalars().all()
-    context_text = "\n".join([f"- {f}" for f in facts]) if facts else f"Ключевые понятия по теме: {topic}"
+    if node_id:
+        stmt_due = stmt_due.where(SubjectFlashcard.node_id == node_id)
+    
+    res_due = await db.execute(stmt_due)
+    due_cards = res_due.scalars().all()
+    
+    # Берем нужное количество из тех, что нужно повторить
+    selected_cards = list(due_cards[:count])
+    
+    # Если не хватает, нужно сгенерировать новые
+    if len(selected_cards) < count:
+        needed = count - len(selected_cards)
+        
+        claims_stmt = (
+            select(Claim.content)
+            .join(Source, Claim.source_id == Source.id)
+            .join(subject_sources, subject_sources.c.source_id == Source.id)
+            .where(
+                subject_sources.c.subject_id == subject_id,
+                Claim.is_active == True,
+                Source.is_deleted == False,
+            )
+            .limit(40)
+        )
+        claims_res = await db.execute(claims_stmt)
+        facts = claims_res.scalars().all()
+        context_text = "\n".join([f"- {f}" for f in facts]) if facts else f"Ключевые понятия по теме: {topic}"
 
-    prompt = f"""Сгенерируй {count} карточек для запоминания по теме "{topic}".
+        prompt = f"""Сгенерируй {needed} карточек для запоминания по теме "{topic}".
 Материалы:
 {context_text}
 
@@ -474,18 +509,143 @@ async def generate_flashcards(
 {{
   "flashcards": [
     {{
-      "id": "fc1",
       "front": "Термин или вопрос",
       "back": "Лаконичное объяснение",
       "hint": "Подсказка"
     }}
   ]
 }}"""
+        result = await ollama_client.generate_json(prompt)
+        if result and "flashcards" in result:
+            new_cards = []
+            for fc in result["flashcards"]:
+                new_card = SubjectFlashcard(
+                    subject_id=subject_id,
+                    node_id=node_id,
+                    front=fc.get("front", ""),
+                    back=fc.get("back", ""),
+                    hint=fc.get("hint", "")
+                )
+                db.add(new_card)
+                new_cards.append(new_card)
+            
+            await db.commit()
+            for c in new_cards:
+                await db.refresh(c)
+            selected_cards.extend(new_cards)
+    
+    return {
+        "flashcards": [
+            {
+                "id": str(c.id),
+                "front": c.front,
+                "back": c.back,
+                "hint": c.hint
+            }
+            for c in selected_cards
+        ]
+    }
 
-    result = await ollama_client.generate_json(prompt)
-    if not result or "flashcards" not in result:
-        raise HTTPException(status_code=500, detail="Не удалось сгенерировать карточки через LLM.")
-    return result
+def calculate_sm2(quality: int, repetitions: int, interval: int, ease_factor: float) -> Tuple[int, int, float]:
+    new_ef = ease_factor + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02))
+    new_ef = max(1.3, new_ef)
+    if quality < 3:
+        new_repetitions = 0
+        new_interval = 1
+    else:
+        if repetitions == 0:
+            new_interval = 1
+        elif repetitions == 1:
+            new_interval = 6
+        else:
+            new_interval = int(round(interval * new_ef))
+        new_repetitions = repetitions + 1
+    return new_repetitions, new_interval, round(new_ef, 2)
+
+class FlashcardReviewRequest(BaseModel):
+    quality: int  # 0-5
+
+@router.post("/{subject_id}/flashcards/{card_id}/review")
+async def review_flashcard(
+    subject_id: uuid.UUID,
+    card_id: uuid.UUID,
+    req: FlashcardReviewRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    stmt = select(SubjectFlashcard).where(
+        SubjectFlashcard.id == card_id,
+        SubjectFlashcard.subject_id == subject_id
+    )
+    res = await db.execute(stmt)
+    card = res.scalar_one_or_none()
+    if not card:
+        raise HTTPException(404, "Карточка не найдена")
+        
+    new_rep, new_int, new_ef = calculate_sm2(
+        req.quality, card.repetitions, card.interval, card.ease_factor
+    )
+    
+    card.repetitions = new_rep
+    card.interval = new_int
+    card.ease_factor = new_ef
+    card.last_reviewed_at = datetime.now(timezone.utc)
+    card.due_date = card.last_reviewed_at + timedelta(days=new_int)
+    
+    await db.commit()
+    return {"status": "ok", "next_due": card.due_date.isoformat()}
+
+@router.get("/{subject_id}/reports/weak-spots")
+async def get_weak_spots_report(subject_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    stmt = select(Subject).where(Subject.id == subject_id)
+    res = await db.execute(stmt)
+    subject = res.scalar_one_or_none()
+    if not subject:
+        raise HTTPException(404, "Subject not found")
+        
+    sessions_stmt = select(LearningSession).where(LearningSession.subject_id == subject_id)
+    sessions_res = await db.execute(sessions_stmt)
+    sessions = sessions_res.scalars().all()
+    
+    concept_counts = {}
+    for s in sessions:
+        for c in s.failed_concepts:
+            concept_counts[c] = concept_counts.get(c, 0) + 1
+            
+    top_concepts = sorted(concept_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    
+    report_lines = [
+        f"# Шпаргалка перед экзаменом: {subject.title}",
+        f"**Текущий балл освоения:** {int(subject.mastery_score * 100)}%",
+        "",
+        "## Концепции, вызвавшие наибольшие затруднения",
+        ""
+    ]
+    
+    for concept, count in top_concepts:
+        report_lines.append(f"### {concept} (Ошибок: {count})")
+        c_stmt = (
+            select(Claim.content)
+            .join(Source, Claim.source_id == Source.id)
+            .join(subject_sources, subject_sources.c.source_id == Source.id)
+            .where(
+                subject_sources.c.subject_id == subject_id,
+                Claim.is_active == True,
+                Claim.content.ilike(f"%{concept}%")
+            ).limit(3)
+        )
+        c_res = await db.execute(c_stmt)
+        facts = c_res.scalars().all()
+        if facts:
+            for f in facts:
+                report_lines.append(f"- {f}")
+        else:
+            report_lines.append("- *Требуется повторение материала по данной теме.*")
+        report_lines.append("")
+        
+    if not top_concepts:
+        report_lines.append("*Ошибок не найдено! Вы отлично справляетесь.*")
+        
+    return {"markdown": "\\n".join(report_lines)}
 
 
 @router.post("/{subject_id}/exam/generate")
@@ -758,6 +918,7 @@ async def send_tutor_message(
         socratic_system = (
             f"Ты — дружелюбный преподаватель и AI-тьютор по предмету '{subject.title}'. "
             f"Отвечай кратко, понятно, задавай наводящие вопросы. "
+            f"ВАЖНОЕ ПРАВИЛО: Всегда отвечай только на русском языке. Никогда не используй китайский или другие языки. "
             f"Факты курса:\n{context_text}"
         )
         if data.topic_context:

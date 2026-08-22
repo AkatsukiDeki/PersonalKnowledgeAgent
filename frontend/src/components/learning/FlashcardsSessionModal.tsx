@@ -58,16 +58,25 @@ export const FlashcardsSessionModal: React.FC<FlashcardsSessionModalProps> = ({
     };
   }, [subjectId, topicId, topicName, practiceParams]);
 
-  const handleNext = (remembered: boolean) => {
+  const handleNext = async (quality: number) => {
     let newCorrect = correctCount;
     const currentCard = cards[currentIndex];
 
-    if (remembered) {
+    // Оценка 4-5 считается успешным вспоминанием
+    if (quality >= 4) {
       newCorrect = correctCount + 1;
       setCorrectCount(newCorrect);
-    } else if (currentCard) {
+    } else if (currentCard && quality < 3) {
       const questionText = currentCard.front || (currentCard as any).question || '';
       setFailedConcepts((prev) => [...prev, questionText]);
+    }
+
+    if (currentCard.id) {
+      try {
+        await subjectsApi.reviewFlashcard(subjectId, currentCard.id, quality);
+      } catch (e) {
+        console.error('Failed to review flashcard:', e);
+      }
     }
 
     if (currentIndex < cards.length - 1) {
@@ -213,28 +222,30 @@ export const FlashcardsSessionModal: React.FC<FlashcardsSessionModalProps> = ({
       </div>
 
       <div
-        className={`flex gap-4 mt-8 transition-opacity duration-300 ${
+        className={`grid grid-cols-6 gap-2 mt-8 transition-opacity duration-300 ${
           isFlipped ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
         }`}
       >
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleNext(false);
-          }}
-          className="px-8 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 border border-red-500/20 rounded-xl font-medium transition-colors"
-        >
-          Забыл
-        </button>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            handleNext(true);
-          }}
-          className="px-8 py-3 bg-green-500/10 hover:bg-green-500/20 text-green-500 border border-green-500/20 rounded-xl font-medium transition-colors"
-        >
-          Помню
-        </button>
+        {[
+          { q: 0, label: 'Провал', color: 'bg-red-500/10 text-red-500 border-red-500/20 hover:bg-red-500/20' },
+          { q: 1, label: 'С трудом', color: 'bg-orange-500/10 text-orange-500 border-orange-500/20 hover:bg-orange-500/20' },
+          { q: 2, label: 'Неуверенно', color: 'bg-yellow-500/10 text-yellow-500 border-yellow-500/20 hover:bg-yellow-500/20' },
+          { q: 3, label: 'Нормально', color: 'bg-lime-500/10 text-lime-500 border-lime-500/20 hover:bg-lime-500/20' },
+          { q: 4, label: 'Хорошо', color: 'bg-green-500/10 text-green-500 border-green-500/20 hover:bg-green-500/20' },
+          { q: 5, label: 'Идеально', color: 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20 hover:bg-emerald-500/20' },
+        ].map((btn) => (
+          <button
+            key={btn.q}
+            onClick={(e) => {
+              e.stopPropagation();
+              handleNext(btn.q);
+            }}
+            className={`px-2 py-3 rounded-xl border font-medium text-xs sm:text-sm transition-colors flex flex-col items-center justify-center gap-1 ${btn.color}`}
+          >
+            <span>{btn.q}</span>
+            <span className="text-[10px] sm:text-[11px] opacity-80">{btn.label}</span>
+          </button>
+        ))}
       </div>
 
       <style>{`

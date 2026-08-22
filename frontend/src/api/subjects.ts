@@ -219,4 +219,15 @@ export const subjectsApi = {
       method: 'DELETE',
     });
   },
+
+  reviewFlashcard: async (subjectId: string, cardId: string, quality: number): Promise<{ status: string; next_due: string }> => {
+    return fetchApi<{ status: string; next_due: string }>(`/subjects/${subjectId}/flashcards/${cardId}/review`, {
+      method: 'POST',
+      body: JSON.stringify({ quality }),
+    });
+  },
+
+  getWeakSpotsReport: async (subjectId: string): Promise<{ markdown: string }> => {
+    return fetchApi<{ markdown: string }>(`/subjects/${subjectId}/reports/weak-spots`);
+  },
 };

@@ -42,7 +42,7 @@ PKA_JAILBREAK = (
 
 @tenacity_retry_llm
 async def _generate_rewrite(prompt: str) -> str:
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your_gemini_api_key_here":
+    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY in ("your_gemini_api_key_here", "dummy") or settings.REASONING_PROVIDER == "ollama":
         ollama = OllamaClient()
         return await ollama.generate("qwen2.5-coder:14b", prompt, system=None)
 
@@ -78,7 +78,7 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
         
     active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
 
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your_gemini_api_key_here":
+    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY in ("your_gemini_api_key_here", "dummy") or settings.REASONING_PROVIDER == "ollama":
         ollama = OllamaClient()
         return await ollama.generate("qwen2.5-coder:14b", prompt, system=active_system_prompt)
 
@@ -95,7 +95,7 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
 
 @tenacity_retry_reasoning_llm
 async def _do_stream(prompt: str, system_instruction: str):
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY == "your_gemini_api_key_here":
+    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY in ("your_gemini_api_key_here", "dummy") or settings.REASONING_PROVIDER == "ollama":
         # Simulate streaming by yielding chunks of Ollama's full response
         ollama = OllamaClient()
         full_resp = await ollama.generate("qwen2.5-coder:14b", prompt, system=system_instruction)

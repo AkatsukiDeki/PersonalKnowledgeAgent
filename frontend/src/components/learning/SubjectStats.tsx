@@ -10,7 +10,8 @@ import {
   Layers, 
   BookOpen, 
   RefreshCw,
-  CalendarDays
+  CalendarDays,
+  Download
 } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -39,6 +40,23 @@ export const SubjectStats: React.FC<SubjectStatsProps> = ({ subjectId }) => {
   useEffect(() => {
     fetchStats();
   }, [subjectId, timeframe]);
+
+  const handleDownloadReport = async () => {
+    try {
+      const { markdown } = await subjectsApi.getWeakSpotsReport(subjectId);
+      const blob = new Blob([markdown], { type: 'text/markdown;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `CheatSheet_${subjectId}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to download report:', e);
+    }
+  };
 
   // Генерация сетки GitHub Heatmap за последние 16 недель (~112 дней)
   const heatmapWeeks = useMemo(() => {
@@ -247,9 +265,22 @@ export const SubjectStats: React.FC<SubjectStatsProps> = ({ subjectId }) => {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Слабые места */}
         <div className="bg-[#111115] border border-zinc-800/80 rounded-2xl p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <AlertTriangle size={16} className="text-red-400" />
-            <h3 className="text-sm font-bold text-white tracking-tight">Требует повторения</h3>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <AlertTriangle size={16} className="text-red-400" />
+              <h3 className="text-sm font-bold text-white tracking-tight">Требует повторения</h3>
+            </div>
+            
+            {stats?.weak_spots && stats.weak_spots.length > 0 && (
+              <button
+                onClick={handleDownloadReport}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/20 hover:text-indigo-300 transition-colors border border-indigo-500/20 shrink-0 whitespace-nowrap"
+                title="Скачать шпаргалку перед экзаменом"
+              >
+                <Download size={14} />
+                <span className="text-[11px] font-medium hidden sm:inline">Шпаргалка</span>
+              </button>
+            )}
           </div>
 
           {stats?.weak_spots && stats.weak_spots.length > 0 ? (
