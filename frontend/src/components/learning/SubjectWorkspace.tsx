@@ -11,19 +11,19 @@ import { QuizSessionModal } from './QuizSessionModal';
 import { FlashcardsSessionModal } from './FlashcardsSessionModal';
 import { useLanguage } from '../../context/LanguageContext';
 
-type Tab = 'roadmap' | 'materials' | 'tutor' | 'stats';
+type Tab = 'roadmap' | 'materials' | 'tutor' | 'stats' | 'sources';
 
 export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void; initialTab?: Tab }> = ({ subjectId, onBack, initialTab }) => {
   const { t } = useLanguage();
   const [subject, setSubject] = useState<Subject | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (initialTab && ['roadmap', 'materials', 'tutor', 'stats'].includes(initialTab)) {
-      return initialTab;
+    if (initialTab && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(initialTab)) {
+      return initialTab === 'sources' ? 'materials' : initialTab;
     }
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(`pka_subject_tab_${subjectId}`);
-      if (saved && ['roadmap', 'materials', 'tutor', 'stats'].includes(saved)) {
-        return saved as Tab;
+      if (saved && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(saved)) {
+        return (saved === 'sources' ? 'materials' : saved) as Tab;
       }
     }
     return 'roadmap';
@@ -45,8 +45,8 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
   const [flashcardSession, setFlashcardSession] = useState<{ topicId: string; topicName: string; params?: any } | null>(null);
 
   useEffect(() => {
-    if (initialTab && ['roadmap', 'materials', 'tutor', 'stats'].includes(initialTab)) {
-      setActiveTab(initialTab);
+    if (initialTab && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(initialTab)) {
+      setActiveTab(initialTab === 'sources' ? 'materials' : initialTab);
     }
   }, [initialTab]);
 
@@ -189,8 +189,7 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
             onOpenTutor={(topicId, topicTitle) => {
               setInitialTutorTopic({ id: topicId, title: topicTitle || '' });
               setActiveTab('tutor');
-            }} 
-            onOpenMaterials={() => setActiveTab('materials')} 
+            }}
           />
         )}
         

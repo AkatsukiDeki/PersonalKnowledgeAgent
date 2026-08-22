@@ -65,8 +65,15 @@ export const sourcesApi = {
     return fetchApi<SourceItem[]>(url);
   },
 
+  list: async (params?: any): Promise<SourceItem[]> => {
+    return sourcesApi.getSources(params);
+  },
+
   getSourceDetail: async (id: string): Promise<SourceDetail> => {
     return fetchApi<SourceDetail>(`/sources/${id}`);
+  },
+  getDetail: async (id: string): Promise<SourceDetail> => {
+    return sourcesApi.getSourceDetail(id);
   },
 
   uploadFile: async (
@@ -87,6 +94,9 @@ export const sourcesApi = {
       method: 'POST',
       body: formData,
     });
+  },
+  upload: async (file: File, domain?: string, folder?: string): Promise<SourceItem> => {
+    return sourcesApi.uploadFile(file, undefined, folder, domain, 'normal');
   },
 
   uploadUrl: async (
@@ -121,6 +131,15 @@ export const sourcesApi = {
       body: JSON.stringify(data),
     });
   },
+  create: async (payload: { title: string; content: string; domain?: string; folder?: string }): Promise<SourceItem> => {
+    return sourcesApi.createNote({
+      title: payload.title,
+      content: payload.content,
+      domain: payload.domain,
+      folder: payload.folder,
+      source_type: 'note'
+    });
+  },
 
   updateContent: async (
     id: string,
@@ -133,9 +152,16 @@ export const sourcesApi = {
     });
   },
 
+  update: async (id: string, content: string, domain?: string): Promise<SourceItem> => {
+    return sourcesApi.updateContent(id, content, domain);
+  },
+
   deleteSource: async (id: string): Promise<void> => {
     await fetchApi(`/sources/${id}`, {
       method: 'DELETE',
     });
+  },
+  delete: async (id: string): Promise<void> => {
+    return sourcesApi.deleteSource(id);
   },
 };

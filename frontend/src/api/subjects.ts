@@ -12,6 +12,8 @@ export interface SubjectItem {
   updated_at: string;
 }
 
+export type Subject = SubjectItem;
+
 export interface SubjectDetail extends SubjectItem {
   sources: SourceItem[];
   roadmap?: any;

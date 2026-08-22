@@ -31,7 +31,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
 
   return (
     <div className="h-full overflow-y-auto p-6 bg-[#0a0a0c]">
-      <SubjectList onSelectSubject={(id) => setSelectedSubjectId(id)} />
+      <SubjectList onSelect={(id: string) => setSelectedSubjectId(id)} />
     </div>
   );
 };
