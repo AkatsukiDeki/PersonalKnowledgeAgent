@@ -116,6 +116,8 @@ async def list_subjects(db: AsyncSession = Depends(get_db)):
             "is_mastered": getattr(s, "is_mastered", False),
             "sources_count": len(s.sources),
             "has_roadmap": len(s.roadmaps) > 0,
+            "created_at": s.created_at.isoformat() if hasattr(s, "created_at") and s.created_at else None,
+            "updated_at": s.updated_at.isoformat() if hasattr(s, "updated_at") and s.updated_at else None,
         }
         for s in subjects
     ]

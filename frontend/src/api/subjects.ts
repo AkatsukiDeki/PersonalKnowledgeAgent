@@ -4,25 +4,17 @@ import { SourceItem } from './sources';
 export interface SubjectItem {
   id: string;
   title: string;
-  description: string | null;
-  icon: string;
-  color_theme: string;
-  mastery_score: number;
-  is_mastered: boolean;
-  sources_count: number;
-  has_roadmap: boolean;
+  description?: string;
+  color_theme?: string;
+  mastery_score?: number;
+  sources_count?: number;
+  created_at: string;
+  updated_at: string;
 }
 
-export interface SubjectDetail {
-  id: string;
-  title: string;
-  description: string | null;
-  icon: string;
-  color_theme: string;
-  mastery_score: number;
-  is_mastered: boolean;
-  roadmap: Record<string, any> | null;
+export interface SubjectDetail extends SubjectItem {
   sources: SourceItem[];
+  roadmap?: any;
 }
 
 export interface QuizQuestion {

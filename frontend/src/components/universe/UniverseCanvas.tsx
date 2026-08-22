@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { subjectsApi } from '../../api/subjects';
 import { conversationsApi } from '../../api/conversations';
-import * as claimsApi from '../../api/claims';
+import { claimsApi, ClaimItem } from '../../api/claims';
 import { useInspector } from '../../context/InspectorContext';
 import { UniverseSpotlight, SearchableEntity } from './UniverseSpotlight';
 import { Sparkles, ZoomIn, ZoomOut, RotateCcw, Search, Clock, Orbit, Play, Pause } from 'lucide-react';
@@ -15,6 +15,9 @@ interface Moon {
   speed: number;
   color: string;
   timestamp: number;
+  supersededAt?: number;
+  supersededById?: string | null;
+  isActive: boolean;
 }
 
 interface Planet {
@@ -84,16 +87,14 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   const [rootStars, setRootStars] = useState<StarSystem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Режим просмотра и таймлайн
   const [viewMode, setViewMode] = useState<'galaxy' | 'timeline'>('galaxy');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<{ min: number; max: number }>({ min: 0, max: 1 });
   const [cutoffTimestamp, setCutoffTimestamp] = useState<number>(Date.now());
   const [isPlaying, setIsPlaying] = useState(false);
-  
   const activeStarIdRef = useRef<string | null>(null);
 
-  const morphProgressRef = useRef(0); // 0.0 (galaxy) -> 1.0 (timeline)
+  const morphProgressRef = useRef(0);
   const cameraRef = useRef({
     x: 0,
     y: 0,
@@ -106,7 +107,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     startY: 0,
   });
 
-  // Хоткей Ctrl+K / Cmd+K
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
@@ -118,17 +118,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Генерация детерминированного timestamp при отсутствии created_at
-  const getFallbackTimestamp = (id: string, baseOffsetDays: number): number => {
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) {
-      hash = (hash << 5) - hash + id.charCodeAt(i);
-      hash |= 0;
-    }
-    const daysAgo = Math.abs(hash % baseOffsetDays);
-    return Date.now() - daysAgo * 24 * 60 * 60 * 1000;
-  };
-
   useEffect(() => {
     let isMounted = true;
 
@@ -136,32 +125,17 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       try {
         setLoading(true);
 
-        const fetchClaimsSafe = async (): Promise<any[]> => {
-          const api: any = claimsApi;
-          try {
-            if (typeof api.listClaims === 'function') return await api.listClaims();
-            if (typeof api.getClaims === 'function') return await api.getClaims();
-            if (typeof api.searchClaims === 'function') return await api.searchClaims();
-            if (typeof api.claimsApi?.getClaims === 'function') return await api.claimsApi.getClaims();
-            if (typeof api.claimsApi?.list === 'function') return await api.claimsApi.list();
-          } catch {
-            return [];
-          }
-          return [];
-        };
-
         const [subjectsRes, conversationsRes, claimsRes] = await Promise.allSettled([
           subjectsApi.getSubjects(),
           conversationsApi.getConversations(),
-          fetchClaimsSafe(),
+          claimsApi.getClaims(),
         ]);
 
         const rawSubjects: any[] = subjectsRes.status === 'fulfilled' && Array.isArray(subjectsRes.value) ? subjectsRes.value : [];
         const conversations: any[] = conversationsRes.status === 'fulfilled' && Array.isArray(conversationsRes.value) ? conversationsRes.value : [];
         const rawClaims = claimsRes.status === 'fulfilled' ? claimsRes.value : [];
-        const claims: any[] = Array.isArray(rawClaims) ? rawClaims : (rawClaims as any)?.items || [];
+        const claims: ClaimItem[] = Array.isArray(rawClaims) ? rawClaims : (rawClaims as any)?.items || [];
 
-        // Дозагрузка детальной информации для каждого предмета
         const subjects = await Promise.all(
           rawSubjects.map(async (sub) => {
             try {
@@ -173,21 +147,18 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           })
         );
 
-        // Расчет временного диапазона
-        let minTime = Date.now() - 30 * 24 * 60 * 60 * 1000;
-        let maxTime = Date.now();
-
+        // Расчет границ реального времени
         const timestamps: number[] = [];
-        subjects.forEach((s) => timestamps.push(s.created_at ? new Date(s.created_at).getTime() : getFallbackTimestamp(String(s.id), 25)));
-        conversations.forEach((c) => timestamps.push(c.created_at ? new Date(c.created_at).getTime() : getFallbackTimestamp(String(c.id), 20)));
-        if (timestamps.length > 0) {
-          minTime = Math.min(...timestamps);
-          maxTime = Math.max(...timestamps, Date.now());
-        }
+        subjects.forEach((s) => { if (s.created_at) timestamps.push(new Date(s.created_at).getTime()); });
+        conversations.forEach((c) => { if (c.created_at) timestamps.push(new Date(c.created_at).getTime()); });
+        claims.forEach((cl) => { if (cl.created_at) timestamps.push(new Date(cl.created_at).getTime()); });
+
+        const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 30 * 24 * 60 * 60 * 1000;
+        const maxTime = timestamps.length > 0 ? Math.max(...timestamps, Date.now()) : Date.now();
 
         const calcTimelineX = (ts: number) => {
           const normalized = (ts - minTime) / Math.max(maxTime - minTime, 1);
-          return (normalized - 0.5) * 1400; // Размах шкалы 1400px
+          return (normalized - 0.5) * 1400;
         };
 
         // 1. Группировка диалогов
@@ -202,7 +173,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           }
         });
 
-        // 2. Кластеры предметов
+        // 2. Доменные кластеры предметов
         const clusterMap: Record<string, { title: string; color: string; subjects: any[] }> = {
           indigo: { title: 'ENGINEERING & ARCHITECTURE', color: '#6366f1', subjects: [] },
           emerald: { title: 'SECURITY & SYSTEMS', color: '#10b981', subjects: [] },
@@ -226,15 +197,15 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         for (const [key, cluster] of activeClusters) {
           const clusterAngle = (cIdx * (Math.PI * 2)) / Math.max(activeClusters.length, 1);
           const clusterDist = 550 + (cIdx % 2) * 120;
-          const laneY = -220 + cIdx * 140; // Дорожка таймлайна
+          const laneY = -220 + cIdx * 140;
 
           const stars: StarSystem[] = cluster.subjects.map((sub: any, sIdx: number) => {
-            const subTs = sub.created_at ? new Date(sub.created_at).getTime() : getFallbackTimestamp(String(sub.id), 25);
+            const subTs = sub.created_at ? new Date(sub.created_at).getTime() : minTime;
             const currentSources: any[] = sub.sources || [];
             const starTimelineX = calcTimelineX(subTs);
 
             const planets: Planet[] = currentSources.map((src: any, pIdx: number) => {
-              const srcTs = src.created_at ? new Date(src.created_at).getTime() : subTs + (pIdx + 1) * 3600000;
+              const srcTs = src.created_at ? new Date(src.created_at).getTime() : subTs;
               return {
                 id: String(src.id),
                 title: src.title || 'Документ',
@@ -244,11 +215,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 speed: 0.003 + (pIdx % 3) * 0.001,
                 size: 6,
                 color: '#38bdf8',
-                meta: { type: src.source_type || 'document' },
+                meta: { type: src.source_type || 'document', created_at: src.created_at },
                 moons: [],
                 timestamp: srcTs,
                 timelineX: starTimelineX,
-                timelineY: laneY - 35 - pIdx * 18, // Вертикальный стек
+                timelineY: laneY - 35 - pIdx * 18,
               };
             });
 
@@ -269,6 +240,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 mastery: sub.mastery_score || 0,
                 sourcesCount: currentSources.length,
                 description: sub.description,
+                created_at: sub.created_at,
               },
             };
           });
@@ -286,25 +258,36 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           cIdx++;
         }
 
-        // 3. Созвездие диалогов
+        // 3. Созвездие диалогов с реальными лунами-инсайтами
         if (Object.keys(folderMap).length > 0) {
           const laneY = 220;
           const folderStars: StarSystem[] = Object.entries(folderMap).map(([folderName, folderChats], fIdx) => {
-            const folderTs = getFallbackTimestamp(folderName, 18);
-            const folderTimelineX = calcTimelineX(folderTs);
+            const firstChatTs = folderChats[0]?.created_at ? new Date(folderChats[0].created_at).getTime() : minTime;
+            const folderTimelineX = calcTimelineX(firstChatTs);
 
             const planets: Planet[] = folderChats.map((chat: any, pIdx: number) => {
-              const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : folderTs + (pIdx + 1) * 7200000;
-              const chatMoons: Moon[] = claims.slice(pIdx * 2, pIdx * 2 + 2).map((claimItem: any, mIdx: number) => ({
-                id: String(claimItem.id || `claim-${mIdx}`),
-                title: claimItem.content || claimItem.title || 'Инсайт',
-                type: 'insight',
-                angle: mIdx * Math.PI,
-                dist: 11,
-                speed: 0.01 + mIdx * 0.005,
-                color: '#facc15',
-                timestamp: chatTs,
-              }));
+              const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : firstChatTs;
+
+              // Связываем реальные claims к чату (или берем глобальные)
+              const chatMoons: Moon[] = claims.slice(pIdx * 2, pIdx * 2 + 2).map((claimItem: ClaimItem, mIdx: number) => {
+                const claimTs = claimItem.created_at ? new Date(claimItem.created_at).getTime() : chatTs;
+                const isSuperseded = Boolean(claimItem.superseded_by);
+                const supersededAt = isSuperseded && claimItem.updated_at ? new Date(claimItem.updated_at).getTime() : undefined;
+
+                return {
+                  id: String(claimItem.id || `claim-${mIdx}`),
+                  title: claimItem.content || 'Инсайт',
+                  type: claimItem.claim_type || 'insight',
+                  angle: mIdx * Math.PI,
+                  dist: 11,
+                  speed: 0.01 + mIdx * 0.005,
+                  color: isSuperseded ? '#71717a' : '#facc15',
+                  timestamp: claimTs,
+                  supersededAt,
+                  supersededById: claimItem.superseded_by,
+                  isActive: claimItem.is_active,
+                };
+              });
 
               return {
                 id: String(chat.id),
@@ -315,7 +298,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 speed: 0.0025 + (pIdx % 3) * 0.0008,
                 size: 6,
                 color: '#818cf8',
-                meta: { messageCount: chat.message_count || 0 },
+                meta: { messageCount: chat.message_count || 0, created_at: chat.created_at },
                 moons: chatMoons,
                 timestamp: chatTs,
                 timelineX: folderTimelineX,
@@ -333,7 +316,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               size: Math.max(18, Math.min(28, 16 + folderChats.length * 2)),
               color: '#06b6d4',
               planets,
-              timestamp: folderTs,
+              timestamp: firstChatTs,
               timelineX: folderTimelineX,
               timelineY: laneY,
               meta: { chatCount: folderChats.length },
@@ -354,7 +337,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
         // 4. Галактическое ядро
         const corePlanets: Planet[] = rootChats.map((chat: any, rIdx: number) => {
-          const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : getFallbackTimestamp(String(chat.id), 12);
+          const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : minTime;
           return {
             id: String(chat.id),
             title: chat.title || 'Диалог',
@@ -364,7 +347,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             speed: 0.002 + (rIdx % 4) * 0.0005,
             size: 5,
             color: '#a78bfa',
-            meta: { messageCount: chat.message_count || 0 },
+            meta: { messageCount: chat.message_count || 0, created_at: chat.created_at },
             moons: [],
             timestamp: chatTs,
             timelineX: calcTimelineX(chatTs),
@@ -395,7 +378,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           setRootStars([coreSystem]);
         }
       } catch (err) {
-        console.error('Failed to build universe timeline:', err);
+        console.error('Failed to load real timeline universe data:', err);
       } finally {
         if (isMounted) setLoading(false);
       }
@@ -407,7 +390,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     };
   }, []);
 
-  // Автопроигрывание таймлайна (Play / Pause)
   useEffect(() => {
     if (!isPlaying || viewMode !== 'timeline') return;
     const interval = setInterval(() => {
@@ -423,7 +405,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     return () => clearInterval(interval);
   }, [isPlaying, viewMode, timeRange]);
 
-  // Колесико мыши
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -441,7 +422,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     };
   }, []);
 
-  // Анимация рендера с морфингом (Galaxy <-> Timeline)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -484,13 +464,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       ctx.translate(canvas.width / 2 + cam.x, canvas.height / 2 + cam.y);
       ctx.scale(currentZoom, currentZoom);
 
-      // Фон космоса
       starsBackground.forEach((star) => {
         ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha * (1 - morph * 0.4)})`;
         ctx.fillRect(star.x, star.y, star.size, star.size);
       });
 
-      // Хронологическая ось и дорожки таймлайна (когда morph > 0)
       if (morph > 0.05) {
         ctx.save();
         ctx.globalAlpha = morph * 0.4;
@@ -498,13 +476,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         ctx.lineWidth = 1;
         ctx.setLineDash([2, 4]);
 
-        // Основная линия времени
         ctx.beginPath();
         ctx.moveTo(-750, 0);
         ctx.lineTo(750, 0);
         ctx.stroke();
 
-        // Засечки дат
         const dateTicks = 6;
         ctx.fillStyle = '#71717a';
         ctx.font = '10px monospace';
@@ -521,24 +497,19 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         ctx.restore();
       }
 
-      // Отрисовка созвездий
-      const allStarsToRender: Array<{ star: StarSystem; worldX: number; worldY: number; clusterColor: string }> = [];
+      const allStarsToRender: Array<{ star: StarSystem; worldX: number; worldY: number }> = [];
 
       constellations.forEach((cluster) => {
         cluster.angle += cluster.driftSpeed * (1 - morph);
         const galaxyCX = Math.cos(cluster.angle) * cluster.orbitRadius;
         const galaxyCY = Math.sin(cluster.angle) * cluster.orbitRadius;
 
-        const timelineCX = 0;
-        const timelineCY = cluster.laneY;
-
-        const cx = galaxyCX * (1 - morph) + timelineCX * morph;
-        const cy = galaxyCY * (1 - morph) + timelineCY * morph;
+        const cx = galaxyCX * (1 - morph) + 0 * morph;
+        const cy = galaxyCY * (1 - morph) + cluster.laneY * morph;
 
         cluster.renderX = cx;
         cluster.renderY = cy;
 
-        // Туманность (в Timeline сжимается в полосу дорожки)
         const nebulaRadius = 260 * (1 - morph * 0.6);
         const nebulaGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, nebulaRadius);
         nebulaGrad.addColorStop(0, cluster.color);
@@ -552,7 +523,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         ctx.fill();
         ctx.restore();
 
-        // Заголовок дорожки
         if (morph > 0.4) {
           ctx.save();
           ctx.fillStyle = `${cluster.color}cc`;
@@ -567,7 +537,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           ctx.fillText(`✦ ${cluster.title}`, cx, cy - 140);
         }
 
-        // Координаты звезд
         const clusterStarCoords: Array<{ x: number; y: number }> = [];
         cluster.stars.forEach((star) => {
           star.angle += star.driftSpeed * (1 - morph);
@@ -583,10 +552,9 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           star.renderX = sx;
           star.renderY = sy;
           clusterStarCoords.push({ x: sx, y: sy });
-          allStarsToRender.push({ star, worldX: sx, worldY: sy, clusterColor: cluster.color });
+          allStarsToRender.push({ star, worldX: sx, worldY: sy });
         });
 
-        // Линии созвездия в Galaxy моде
         if (morph < 0.5 && clusterStarCoords.length > 1) {
           ctx.save();
           ctx.globalAlpha = 1 - morph * 2;
@@ -604,28 +572,28 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         }
       });
 
-      // Добавление Ядра
       rootStars.forEach((star) => {
         const sx = 0 * (1 - morph) + (star.timelineX || 0) * morph;
         const sy = 0;
         star.renderX = sx;
         star.renderY = sy;
-        allStarsToRender.push({ star, worldX: sx, worldY: sy, clusterColor: star.color });
+        allStarsToRender.push({ star, worldX: sx, worldY: sy });
       });
 
-      // Отрисовка Звезд и Планет с учетом среза времени (cutoffTimestamp)
+      // Рендеринг с реальным учетом времени
       allStarsToRender.forEach(({ star, worldX, worldY }) => {
-        const isVisibleByTime = star.timestamp <= cutoffTimestamp;
+        const isStarBorn = star.timestamp <= cutoffTimestamp;
         
         // FOCUS MODE INJECTION
         const isActive = !activeStarIdRef.current || activeStarIdRef.current === star.id;
         const focusAlpha = isActive ? 1.0 : 0.15;
-        const entityAlpha = (isVisibleByTime ? 1.0 : 0.08) * focusAlpha;
+        const starAlpha = (isStarBorn ? 1.0 : morph > 0 ? 0.0 : 0.08) * focusAlpha;
+
+        if (starAlpha <= 0) return;
 
         ctx.save();
-        ctx.globalAlpha = entityAlpha;
+        ctx.globalAlpha = starAlpha;
 
-        // Корона
         const glow = ctx.createRadialGradient(worldX, worldY, 2, worldX, worldY, star.size * 2.2);
         glow.addColorStop(0, star.color);
         glow.addColorStop(1, 'rgba(0,0,0,0)');
@@ -634,13 +602,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         ctx.arc(worldX, worldY, star.size * 2.2, 0, Math.PI * 2);
         ctx.fill();
 
-        // Тело звезды
         ctx.fillStyle = star.color;
         ctx.beginPath();
         ctx.arc(worldX, worldY, star.size, 0, Math.PI * 2);
         ctx.fill();
 
-        // Подпись звезды
         if (!isMacro || morph > 0.3) {
           ctx.fillStyle = '#ffffff';
           ctx.font = 'bold 11px sans-serif';
@@ -648,9 +614,13 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           ctx.fillText(star.title, worldX, worldY + star.size + 14);
         }
 
-        // Планеты
         if (!isMacro || morph > 0.3) {
           star.planets.forEach((planet) => {
+            const isPlanetBorn = planet.timestamp <= cutoffTimestamp;
+            const planetAlpha = isPlanetBorn ? 1.0 : morph > 0 ? 0.0 : 0.06;
+
+            if (planetAlpha <= 0) return;
+
             planet.angle += planet.speed * (1 - morph);
 
             const galaxyPX = worldX + Math.cos(planet.angle) * planet.orbitRadius;
@@ -665,11 +635,9 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             planet.renderX = px;
             planet.renderY = py;
 
-            const planetAlpha = planet.timestamp <= cutoffTimestamp ? 1.0 : 0.06;
             ctx.save();
-            ctx.globalAlpha = entityAlpha * planetAlpha;
+            ctx.globalAlpha = starAlpha * planetAlpha;
 
-            // Орбита (растворяется при morph -> 1)
             if (morph < 0.6) {
               ctx.strokeStyle = `rgba(255, 255, 255, ${0.04 * (1 - morph * 1.5)})`;
               ctx.lineWidth = 1;
@@ -678,29 +646,42 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               ctx.stroke();
             }
 
-            // Тело планеты
             ctx.fillStyle = planet.color;
             ctx.beginPath();
             ctx.arc(px, py, planet.size, 0, Math.PI * 2);
             ctx.fill();
 
-            // Подпись
             if (isMicro) {
               ctx.fillStyle = '#a1a1aa';
               ctx.font = '9px sans-serif';
               ctx.fillText(planet.title, px, py + planet.size + 10);
             }
 
-            // Спутники
+            // Луны (Инсайты и проверка Superseded)
             if (isMicro && morph < 0.6) {
               planet.moons.forEach((moon) => {
+                const isMoonBorn = moon.timestamp <= cutoffTimestamp;
+                if (!isMoonBorn) return;
+
+                const isSupersededAtCurrentCutoff = moon.supersededAt !== undefined && cutoffTimestamp >= moon.supersededAt;
+
                 moon.angle += moon.speed;
                 const mx = px + Math.cos(moon.angle) * moon.dist;
                 const my = py + Math.sin(moon.angle) * moon.dist;
-                ctx.fillStyle = moon.color;
+
+                ctx.save();
+                ctx.fillStyle = isSupersededAtCurrentCutoff ? '#71717a' : moon.color;
+                ctx.globalAlpha = isSupersededAtCurrentCutoff ? 0.35 : 1.0;
                 ctx.beginPath();
                 ctx.arc(mx, my, 2, 0, Math.PI * 2);
                 ctx.fill();
+
+                if (isSupersededAtCurrentCutoff) {
+                  ctx.strokeStyle = '#a1a1aa';
+                  ctx.lineWidth = 0.5;
+                  ctx.stroke();
+                }
+                ctx.restore();
               });
             }
             ctx.restore();
@@ -736,7 +717,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     cameraRef.current.isDragging = false;
   };
 
-  // Поисковый индекс Spotlight
   const searchableEntities = useMemo<SearchableEntity[]>(() => {
     const list: SearchableEntity[] = [];
     constellations.forEach((c) => {
@@ -863,14 +843,23 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             cam.targetZoom = 1.6;
             activeStarIdRef.current = star.id;
 
+            const dateStr = new Date(planet.timestamp).toLocaleDateString([], {
+              month: 'short',
+              day: 'numeric',
+              year: 'numeric',
+            });
+
             if (planet.type === 'conversation') {
               inspectEntity({
                 id: planet.id,
                 type: 'claim',
                 title: planet.title,
                 subtitle: `Диалог в ветке "${star.title}"`,
-                summary: `Операционная память: ${planet.meta?.messageCount || 0} сообщений.`,
-                meta: { сообщений: planet.meta?.messageCount || 0 },
+                summary: `Операционная память: ${planet.meta?.messageCount || 0} сообщений. Создано: ${dateStr}.`,
+                meta: {
+                  сообщений: planet.meta?.messageCount || 0,
+                  создано: dateStr,
+                },
                 onOpenSubject: () => onOpenChat && onOpenChat(planet.id),
               });
             } else if (planet.type === 'source') {
@@ -879,8 +868,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 type: 'source',
                 title: planet.title,
                 subtitle: `Первоисточник предмета "${star.title}"`,
-                summary: `Тип документа: ${planet.meta?.type || 'документ'}.`,
+                summary: `Тип документа: ${planet.meta?.type || 'документ'}. Добавлено: ${dateStr}.`,
                 parentSubject: { id: star.id, title: star.title },
+                meta: {
+                  добавлено: dateStr,
+                },
                 onOpenSource: () => onOpenSource && onOpenSource(planet.id),
                 onOpenSubject: (subId) => onOpenSubject && onOpenSubject(subId, 'sources'),
               });
@@ -900,17 +892,24 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           cam.targetZoom = 1.2;
           activeStarIdRef.current = star.id;
 
+          const dateStr = new Date(star.timestamp).toLocaleDateString([], {
+            month: 'short',
+            day: 'numeric',
+            year: 'numeric',
+          });
+
           if (star.type === 'subject') {
             inspectEntity({
               id: star.id,
               type: 'subject',
               title: star.title,
               subtitle: `Звездная система | Освоение: ${Math.round(star.meta?.mastery || 0)}%`,
-              summary: star.meta?.description || `Включает ${star.planets.length} первоисточников.`,
+              summary: star.meta?.description || `Включает ${star.planets.length} первоисточников. Создано: ${dateStr}.`,
               parentSubject: { id: star.id, title: star.title },
               meta: {
                 освоение: `${Math.round(star.meta?.mastery || 0)}%`,
                 источников: star.planets.length,
+                создано: dateStr,
               },
               onOpenSubject: (subId) => onOpenSubject && onOpenSubject(subId, 'roadmap'),
               onAskTutor: (subId) => onOpenSubject && onOpenSubject(subId, 'tutor'),
@@ -921,8 +920,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               type: 'pattern',
               title: star.title,
               subtitle: `Папка диалогов`,
-              summary: `Содержит ${star.planets.length} активных диалогов.`,
-              meta: { диалогов: star.planets.length },
+              summary: `Содержит ${star.planets.length} активных диалогов. Создано: ${dateStr}.`,
+              meta: {
+                диалогов: star.planets.length,
+                создано: dateStr,
+              },
             });
           }
           return;
@@ -944,7 +946,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     <div className="relative w-full h-full bg-[#070709] overflow-hidden select-none">
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-[#070709]/80 z-10 text-zinc-400 text-xs">
-          Построение 4D Вселенной...
+          Построение 4D Вселенной на реальных данных времени...
         </div>
       )}
 
@@ -956,7 +958,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         </div>
         <div className="h-4 w-[1px] bg-zinc-800" />
 
-        {/* Переключатель Galaxy / Timeline */}
         <button
           onClick={() => {
             const nextMode = viewMode === 'galaxy' ? 'timeline' : 'galaxy';
@@ -1012,7 +1013,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         </button>
       </div>
 
-      {/* Нижняя плавающая панель Таймлайна (Time Scrubber) */}
+      {/* Нижняя плавающая панель скраббера времени */}
       <div
         className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl bg-[#111116]/90 backdrop-blur-md border border-zinc-800/90 rounded-2xl px-4 py-3 shadow-2xl transition-all duration-300 ${
           viewMode === 'timeline' ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'

@@ -1,18 +1,28 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000/api/v1';
+import { fetchApi } from './client';
+
+export interface ClaimItem {
+  id: string;
+  content: string;
+  claim_type?: 'insight' | 'fact' | 'decision' | string;
+  source_id?: string;
+  conversation_id?: string;
+  is_active: boolean;
+  superseded_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export const claimsApi = {
-  listBySource: async (sourceId: string) => {
-    const res = await fetch(`${API_URL}/claims?source_id=${sourceId}`);
-    if (!res.ok) throw new Error('Failed to fetch claims');
-    return res.json();
+  getClaims: async (): Promise<ClaimItem[]> => {
+    return fetchApi<ClaimItem[]>('/claims');
   },
-  update: async (claimId: string, data: { is_active: boolean }) => {
-    const res = await fetch(`${API_URL}/claims/${claimId}`, {
+  listBySource: async (sourceId: string): Promise<ClaimItem[]> => {
+    return fetchApi<ClaimItem[]>(`/claims?source_id=${sourceId}`);
+  },
+  update: async (claimId: string, payload: Partial<ClaimItem>): Promise<ClaimItem> => {
+    return fetchApi<ClaimItem>(`/claims/${claimId}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      body: JSON.stringify(payload),
     });
-    if (!res.ok) throw new Error('Failed to update claim');
-    return res.json();
-  }
+  },
 };
