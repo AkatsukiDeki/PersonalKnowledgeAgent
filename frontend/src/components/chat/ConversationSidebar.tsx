@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { ConversationOut, conversationsApi } from '../../api/conversations';
-import { MessageSquare, Plus, Trash2, Pin, PinOff, Edit2, Check, X, Folder, ChevronDown, ChevronRight, FolderPlus } from 'lucide-react';
+import { MessageSquare, Plus, Trash2, Pin, PinOff, Edit2, Check, X, Folder, ChevronDown, ChevronRight, FolderPlus, CheckSquare, Loader2 } from 'lucide-react';
 import { useLanguage } from '../../context/LanguageContext';
 
 interface SidebarProps {
@@ -12,7 +12,10 @@ interface SidebarProps {
 export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversationId, onSelectConversation, onNewConversation }) => {
   const { t } = useLanguage();
   const [conversations, setConversations] = useState<ConversationOut[]>([]);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   
@@ -87,6 +90,36 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
     } catch (err) {
       console.error('Failed to delete conversation', err);
     }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0 || isBulkDeleting) return;
+    if (!window.confirm(`Удалить ${selectedIds.size} выбранных диалогов?`)) return;
+    setIsBulkDeleting(true);
+    try {
+      for (const id of selectedIds) {
+        await conversationsApi.deleteConversation(id);
+      }
+      setSelectedIds(new Set());
+      setSelectMode(false);
+      fetchConversations();
+      if (activeConversationId && selectedIds.has(activeConversationId)) {
+        onNewConversation();
+      }
+    } catch (err) {
+      console.error('Failed to bulk delete', err);
+    } finally {
+      setIsBulkDeleting(false);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
   };
 
   const handleTogglePin = async (e: React.MouseEvent, conv: ConversationOut) => {
@@ -262,7 +295,11 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
         onDragOver={onDragOver}
         onDrop={(e) => onDropConv(e, conv)}
         onClick={() => {
-          if (editingId !== conv.id) onSelectConversation(conv.id);
+          if (selectMode) {
+            toggleSelect(conv.id);
+          } else if (editingId !== conv.id) {
+            onSelectConversation(conv.id);
+          }
         }}
         className={`relative group flex items-center justify-between p-2 cursor-pointer transition-all duration-150 rounded-lg border overflow-visible ${
           isActive
@@ -271,7 +308,14 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
         } ${draggedConvId === conv.id ? 'opacity-30' : ''}`}
       >
         <div className="flex items-center gap-2 overflow-hidden min-w-0 flex-1">
-          {conv.is_pinned ? (
+          {selectMode ? (
+            <input 
+              type="checkbox" 
+              checked={selectedIds.has(conv.id)} 
+              readOnly 
+              className="shrink-0 rounded border-zinc-600 bg-zinc-800 checked:bg-indigo-500 focus:ring-0 w-3.5 h-3.5 cursor-pointer"
+            />
+          ) : conv.is_pinned ? (
             <Pin size={13} className="shrink-0 text-entity-insight fill-entity-insight/30" />
           ) : (
             <MessageSquare size={13} className="shrink-0 opacity-60 group-hover:opacity-100 transition-opacity cursor-grab active:cursor-grabbing" />
@@ -392,13 +436,23 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
 
   return (
     <div className="w-64 bg-surface-low flex flex-col h-full text-zinc-100 shrink-0">
-      <div className="p-3">
+      <div className="p-3 flex gap-2">
         <button
           onClick={onNewConversation}
-          className="w-full flex items-center gap-2 justify-center py-2 px-3 bg-entity-decision/10 hover:bg-entity-decision/20 border border-entity-decision/20 text-entity-decision rounded-lg transition-colors font-medium text-xs shadow-lg shadow-entity-decision/5"
+          className="flex-1 flex items-center gap-2 justify-center py-2 px-3 bg-entity-decision/10 hover:bg-entity-decision/20 border border-entity-decision/20 text-entity-decision rounded-lg transition-colors font-medium text-xs shadow-lg shadow-entity-decision/5"
         >
           <Plus size={14} />
           {t('chatSidebar.newDialog')}
+        </button>
+        <button
+          onClick={() => {
+            setSelectMode(!selectMode);
+            if (selectMode) setSelectedIds(new Set());
+          }}
+          className={`p-2 rounded-lg border transition-colors flex items-center justify-center ${selectMode ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-400' : 'bg-white/5 border-white/10 text-zinc-400 hover:text-zinc-200'}`}
+          title="Режим массового удаления"
+        >
+          <CheckSquare size={14} />
         </button>
       </div>
 
@@ -475,6 +529,19 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
           </>
         )}
       </div>
+
+      {selectMode && selectedIds.size > 0 && (
+        <div className="p-3 border-t border-white/5 bg-[#0a0a0a]">
+          <button 
+            onClick={handleBulkDelete}
+            disabled={isBulkDeleting}
+            className="w-full flex items-center justify-center gap-2 py-1.5 px-3 bg-red-500/20 hover:bg-red-500/30 text-red-400 text-xs rounded-lg border border-red-500/30 transition-colors"
+          >
+            {isBulkDeleting ? <Loader2 size={12} className="animate-spin" /> : <Trash2 size={12} />}
+            Удалить ({selectedIds.size})
+          </button>
+        </div>
+      )}
     </div>
   );
 };
