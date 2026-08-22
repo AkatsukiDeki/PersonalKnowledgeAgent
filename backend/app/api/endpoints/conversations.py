@@ -31,6 +31,8 @@ class MessageOut(BaseModel):
     content: str
     model: str | None = None
     created_at: str
+    image_base64: str | None = None
+    image_mime_type: str | None = None
 
 
 class ConversationDetailOut(BaseModel):
@@ -176,6 +178,8 @@ async def get_conversation(conversation_id: UUID, db: AsyncSession = Depends(get
                 "content": m.content,
                 "model": getattr(m, "model", None),
                 "created_at": m.timestamp.isoformat() if m.timestamp else "",
+                "image_base64": m.meta_info.get("image_base64") if m.meta_info else None,
+                "image_mime_type": m.meta_info.get("image_mime_type") if m.meta_info else None,
             }
             for m in messages
         ],

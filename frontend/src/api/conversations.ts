@@ -6,6 +6,8 @@ export interface MessageOut {
   content: string;
   model: string | null;
   created_at: string;
+  image_base64?: string | null;
+  image_mime_type?: string | null;
 }
 
 export interface ConversationDetailOut {

@@ -126,6 +126,40 @@ class OllamaClient:
                     detail=f"Не удалось подключиться к Ollama по адресу {self.base_url}."
                 )
 
+    async def stream_generate(
+            self,
+            prompt: str,
+            model: Optional[str] = None,
+            system: Optional[str] = None,
+            images: Optional[list[str]] = None,
+    ):
+        target_model = model or self.default_model
+        payload = {
+            "model": target_model,
+            "prompt": prompt,
+            "stream": True,
+        }
+        if system:
+            payload["system"] = system
+        if images:
+            payload["images"] = images
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                async with client.stream("POST", f"{self.base_url}/api/generate", json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                if "response" in data:
+                                    yield data["response"]
+                            except json.JSONDecodeError:
+                                pass
+            except Exception as e:
+                logger.error(f"[Ollama Stream Error]: {repr(e)}")
+                raise
+
     async def generate_json(
             self,
             prompt: str,

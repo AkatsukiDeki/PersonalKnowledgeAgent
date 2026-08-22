@@ -166,6 +166,64 @@ class ModelManager:
             # Если оба упали, возвращаем дефолтный текст ошибки
             return "[Ошибка обработки изображения: Vision-провайдер недоступен]"
 
+    async def stream_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/png",
+        allow_cloud_fallback: bool = True,
+        system_instruction: Optional[str] = None
+    ):
+        """Стриминг мультимодального ответа (Ollama -> Cloud Fallback)"""
+        import base64
+        import asyncio
+        
+        # 1. Попытка локально через Ollama
+        try:
+            b64_img = base64.b64encode(image_bytes).decode("utf-8")
+            vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
+            async for chunk in self.ollama_client.stream_generate(
+                prompt=prompt,
+                model=vision_model,
+                system=system_instruction,
+                images=[b64_img]
+            ):
+                yield chunk
+            return
+        except Exception as e:
+            logger.warning(f"[ModelManager] Stream Ollama Vision failed: {e}. Switching to Cloud Fallback...")
+
+        # 2. Cloud Fallback (Gemini)
+        if allow_cloud_fallback and self.cloud_available and self._cloud_client:
+            try:
+                from google.genai import types
+                
+                # Gemini SDK is mostly sync for streaming or uses async generators.
+                # In google.genai, generate_content_stream returns an iterator or async iterator depending on client.
+                # Let's use the async client if available:
+                config = types.GenerateContentConfig(temperature=0.2)
+                if system_instruction:
+                    config.system_instruction = system_instruction
+                
+                response_stream = await self._cloud_client.aio.models.generate_content_stream(
+                    model=self.fast_model,
+                    contents=[
+                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
+                        prompt
+                    ],
+                    config=config
+                )
+                async for chunk in response_stream:
+                    if chunk.text:
+                        yield chunk.text
+                return
+            except Exception as cloud_err:
+                logger.error(f"[ModelManager] Cloud Vision Stream failed: {cloud_err}")
+                yield f"\n\n[Ошибка Vision-анализа: {cloud_err}]"
+                return
+
+        yield "\n\n[Ошибка: Мультимодальные модели недоступны]"
+
 model_manager = ModelManager()
 
 # We keep the old retry decorators for backward compatibility in other parts of the system for now

@@ -10,6 +10,8 @@ class ChatRequest(BaseModel):
     use_reasoning: bool = False
     mode: str = "assistant"
     attached_source_ids: List[uuid.UUID] = []
+    image_base64: Optional[str] = None
+    image_mime_type: Optional[str] = "image/png"
 
 
 class Citation(BaseModel):

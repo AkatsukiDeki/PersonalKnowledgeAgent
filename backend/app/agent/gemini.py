@@ -58,7 +58,7 @@ async def _generate_rewrite(prompt: str) -> str:
 
 
 @tenacity_retry_reasoning_llm
-async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any]], user_profile: str = "", mode: str = "assistant") -> str:
+async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any]], user_profile: str = "", mode: str = "assistant", history: list = None) -> str:
     """Генерация ответа на базе извлеченных чанков (RAG)."""
     if not retrieved_chunks:
         return "К сожалению, я не нашел информации по вашему вопросу."
@@ -68,7 +68,7 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
         for i, chunk in enumerate(retrieved_chunks)
     ]
     context_text = "\n\n".join(context_blocks)
-    prompt = build_rag_prompt(query, context_text)
+    prompt = build_rag_prompt(query, context_text, history)
 
     # Формируем итоговый промпт с директивой-взломщиком
     base_instruction = get_rag_system_instruction(user_profile)
@@ -122,7 +122,8 @@ async def stream_rag_response(
         query: str,
         retrieved_chunks: List[Dict[str, Any]],
         user_profile: str = "",
-        mode: str = "assistant"
+        mode: str = "assistant",
+        history: list = None
 ) -> AsyncGenerator[str, None]:
     """Потоковая генерация ответа на базе чанков."""
     if not retrieved_chunks:
@@ -134,7 +135,7 @@ async def stream_rag_response(
         for i, chunk in enumerate(retrieved_chunks)
     ]
     context_text = "\n\n".join(context_blocks)
-    prompt = build_rag_prompt(query, context_text)
+    prompt = build_rag_prompt(query, context_text, history)
 
     # Формируем итоговый промпт с директивой-взломщиком для стриминга
     base_instruction = get_rag_system_instruction(user_profile)

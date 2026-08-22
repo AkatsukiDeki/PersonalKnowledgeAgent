@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_EXTRACTION_MODEL: str = "qwen2.5:7b"
     OLLAMA_QA_MODEL: str = "qwen2.5:7b"
-    OLLAMA_VISION_MODEL: str = "qwen2.5-vl"
+    OLLAMA_VISION_MODEL: str = "qwen2.5vl:7b"
     OLLAMA_TIMEOUT_SECONDS: float = 3000.0
     EXTRACTION_BATCH_SIZE: int = 2
     

@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Message } from '../../types/chat';
-import { Bot, User } from 'lucide-react';
+import { Bot, User, X } from 'lucide-react';
 import { ProvenanceTree } from './ProvenanceTree';
 
 interface Props {
@@ -9,6 +9,7 @@ interface Props {
 }
 
 export function MessageView({ message }: Props) {
+  const [isExpanded, setIsExpanded] = useState(false);
   const isUser = message.role === 'user';
 
   return (
@@ -29,7 +30,39 @@ export function MessageView({ message }: Props) {
         }`}
       >
         {isUser ? (
-          <p className="whitespace-pre-wrap">{message.content}</p>
+          <div className="flex flex-col gap-2">
+            {message.image_base64 && (
+              <>
+                <img 
+                  src={`data:${message.image_mime_type || 'image/png'};base64,${message.image_base64}`} 
+                  alt="Attached image" 
+                  onClick={() => setIsExpanded(true)}
+                  className="max-w-full max-h-64 object-contain rounded-lg border border-white/10 shadow-md cursor-pointer hover:border-indigo-500/50 transition-colors"
+                />
+                
+                {isExpanded && (
+                  <div 
+                    className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 cursor-zoom-out"
+                    onClick={() => setIsExpanded(false)}
+                  >
+                    <button 
+                      className="absolute top-6 right-6 p-2 bg-white/10 hover:bg-white/20 text-white rounded-xl backdrop-blur-md transition-colors"
+                      onClick={(e) => { e.stopPropagation(); setIsExpanded(false); }}
+                    >
+                      <X size={24} />
+                    </button>
+                    <img 
+                      src={`data:${message.image_mime_type || 'image/png'};base64,${message.image_base64}`} 
+                      alt="Expanded attached image" 
+                      className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-default"
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  </div>
+                )}
+              </>
+            )}
+            <p className="whitespace-pre-wrap">{message.content}</p>
+          </div>
         ) : (
           <div className="prose-deep-space">
             <ReactMarkdown>{message.content}</ReactMarkdown>

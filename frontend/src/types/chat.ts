@@ -12,6 +12,8 @@ export interface Message {
   citations?: Citation[];
   timestamp: string;
   isStreaming?: boolean;
+  image_base64?: string;
+  image_mime_type?: string;
 }
 
 export interface Decision {

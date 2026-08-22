@@ -27,6 +27,13 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [isSeeded, setIsSeeded] = useState(false);
 
   const [attachedFiles, setAttachedFiles] = useState<{id: string, name: string}[]>([]);
+  const [attachedImage, setAttachedImage] = useState<{
+    file: File;
+    previewUrl: string;
+    base64: string;
+    mimeType: string;
+  } | null>(null);
+  
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -107,6 +114,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
           content: m.content,
           timestamp: m.created_at,
           citations: [] as Citation[],
+          image_base64: m.image_base64 || undefined,
+          image_mime_type: m.image_mime_type || undefined,
         };
       });
       setMessages(formatted);
@@ -133,13 +142,16 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
   const handleSubmit = async (e: React.FormEvent, overrideInput?: string) => {
     e.preventDefault();
-    const textToSend = overrideInput || input;
-    if (!textToSend.trim() || isLoading || isCooldown) return;
+    const textToSend = overrideInput !== undefined ? overrideInput : input;
+    
+    // Allow empty text only if there's an attached image or file
+    if ((!textToSend.trim() && !attachedImage && attachedFiles.length === 0) || isLoading || isCooldown) return;
 
     let targetConvId = activeConvId;
     if (!targetConvId) {
       try {
-        const optimisticTitle = textToSend.trim().substring(0, 35) + (textToSend.length > 35 ? '...' : '');
+        const titleText = textToSend.trim() || 'Изображение';
+        const optimisticTitle = titleText.substring(0, 35) + (titleText.length > 35 ? '...' : '');
         const conv = await conversationsApi.createConversation(optimisticTitle);
         targetConvId = conv.id;
         skipLoadRef.current = true;
@@ -155,6 +167,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       role: 'user',
       content: textToSend.trim(),
       timestamp: new Date().toISOString(),
+      image_base64: attachedImage?.base64,
+      image_mime_type: attachedImage?.mimeType,
     };
 
     const assistantId = crypto.randomUUID();
@@ -180,7 +194,10 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     let currentCitations: Citation[] = [];
 
     const sourceIds = attachedFiles.map(f => f.id);
+    const imagePayload = attachedImage;
+    
     setAttachedFiles([]);
+    setAttachedImage(null);
     
     await streamChat(
       userMsg.content,
@@ -242,7 +259,10 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         setLoadingStatus('');
         setIsCooldown(true);
         setTimeout(() => setIsCooldown(false), 2500);
-      }
+      },
+      'rag',
+      imagePayload?.base64,
+      imagePayload?.mimeType
     );
   };
 
@@ -263,11 +283,43 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     setIsDragging(false);
   };
   
+  const handleImageAttach = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const result = e.target?.result as string;
+      const base64 = result.split(',')[1];
+      setAttachedImage({
+        file,
+        previewUrl: result,
+        base64,
+        mimeType: file.type,
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      await handleFileUpload(e.dataTransfer.files[0]);
+      const file = e.dataTransfer.files[0];
+      if (file.type.startsWith('image/')) {
+        handleImageAttach(file);
+      } else {
+        await handleFileUpload(file);
+      }
+    }
+  };
+
+  const handlePaste = async (e: React.ClipboardEvent) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (file) handleImageAttach(file);
+        break;
+      }
     }
   };
 
@@ -339,8 +391,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
         {/* Message stream */}
         <div 
-          className="flex-1 overflow-y-auto pt-24 pb-32 w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
-          style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)' }}
+          className="flex-1 overflow-y-auto pt-24 w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
+          style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black 100%)' }}
         >
           <div className="max-w-3xl w-full mx-auto px-6 h-full">
             {messages.length === 0 ? (
@@ -372,6 +424,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
                 {messages.map((msg) => (
                   <MessageView key={msg.id} message={msg} />
                 ))}
+                {/* Spacer so the last message is pushed above the input bar when scrolling to the end */}
+                <div className="h-40 shrink-0" />
                 <div ref={messagesEndRef} />
               </div>
             )}
@@ -390,7 +444,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
         {/* Glass Input Bar */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-3xl w-[calc(100%-3rem)] shrink-0 z-10">
-          {attachedFiles.length > 0 && (
+          {(attachedFiles.length > 0 || attachedImage) && (
             <div className="flex flex-wrap gap-2 mb-2 px-1">
               {attachedFiles.map(file => (
                 <div key={file.id} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-200 text-xs px-2.5 py-1 rounded-md border border-indigo-500/30">
@@ -400,6 +454,22 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
                   </button>
                 </div>
               ))}
+              {attachedImage && (
+                <div className="relative group bg-[#111116]/80 backdrop-blur-xl border border-indigo-500/20 rounded-xl p-1.5 flex items-center gap-3">
+                  <img src={attachedImage.previewUrl} alt="Preview" className="w-10 h-10 object-cover rounded-lg border border-white/5" />
+                  <div className="flex flex-col mr-6">
+                    <span className="text-[11px] font-medium text-white/90 truncate max-w-[150px]">{attachedImage.file.name}</span>
+                    <span className="text-[9px] text-white/40 uppercase font-mono">{(attachedImage.file.size / 1024).toFixed(1)} KB</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAttachedImage(null)}
+                    className="absolute top-1.5 right-1.5 w-4 h-4 bg-black/60 hover:bg-red-500/80 text-white rounded-full flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                  >
+                    <X size={10} />
+                  </button>
+                </div>
+              )}
             </div>
           )}
           
@@ -410,9 +480,15 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
           >
             <input 
               type="file" 
+              accept="image/*"
               ref={fileInputRef} 
               className="hidden" 
-              onChange={(e) => e.target.files && e.target.files.length > 0 && handleFileUpload(e.target.files[0])}
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  handleImageAttach(e.target.files[0]);
+                  e.target.value = '';
+                }
+              }}
             />
             <button
               type="button"
@@ -426,7 +502,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={isCooldown ? 'Подождите…' : 'Введите запрос... (Shift+Enter — новая строка)'}
+              onPaste={handlePaste}
+              placeholder={isCooldown ? 'Подождите…' : 'Введите запрос... (Shift+Enter — новая строка, Ctrl+V — картинка)'}
               disabled={isLoading || isCooldown}
               rows={1}
               className="flex-1 bg-transparent border-none text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-2 px-2 disabled:opacity-40 font-light scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent [&::-webkit-scrollbar-button]:hidden"

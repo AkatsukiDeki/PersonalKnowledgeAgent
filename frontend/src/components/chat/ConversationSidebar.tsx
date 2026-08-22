@@ -313,7 +313,7 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
               type="checkbox" 
               checked={selectedIds.has(conv.id)} 
               readOnly 
-              className="shrink-0 rounded border-zinc-600 bg-zinc-800 checked:bg-indigo-500 focus:ring-0 w-3.5 h-3.5 cursor-pointer"
+              className="shrink-0 rounded border-zinc-700 bg-black/40 checked:bg-indigo-600/80 checked:border-indigo-400 focus:ring-0 w-3.5 h-3.5 cursor-pointer appearance-none transition-all relative after:content-[''] after:absolute after:hidden checked:after:block after:left-1 after:top-[1px] after:w-1.5 after:h-2.5 after:border-r-[2px] after:border-b-[2px] after:border-white after:rotate-45"
             />
           ) : conv.is_pinned ? (
             <Pin size={13} className="shrink-0 text-entity-insight fill-entity-insight/30" />
@@ -338,7 +338,7 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
           )}
         </div>
         
-        <div className="opacity-0 group-hover:opacity-100 flex items-center shrink-0 ml-1">
+        <div className="opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 transition-all flex items-center shrink-0 ml-1">
           {editingId === conv.id ? (
             <>
               <button onClick={(e) => handleSaveRename(e, conv)} className="p-1 hover:bg-white/[0.06] rounded text-emerald-400">
