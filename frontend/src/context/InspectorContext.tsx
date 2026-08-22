@@ -16,6 +16,8 @@ export interface InspectableEntity {
   onOpenSource?: (sourceId: string) => void;
   onAskTutor?: (subjectId: string, contextPrompt?: string) => void;
   onViewTimeline?: (eventId?: string) => void;
+  onJumpToTargetNode?: (nodeId: string) => void;
+  onOpenChat?: (convId: string, messageId?: string) => void;
 }
 
 interface InspectorContextType {

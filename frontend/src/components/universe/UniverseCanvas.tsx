@@ -769,10 +769,10 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               type: 'insight',
               category: 'Инсайт',
               color: moon.color,
-              worldX: planet.renderX || 0,
+              worldX: planet.renderX || 0, // approximation
               worldY: planet.renderY || 0,
               targetZoom: 2.2,
-              originalEntity: moon,
+              originalEntity: { ...moon, parentPlanetId: planet.id },
             });
           });
         });
@@ -780,6 +780,13 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     });
     return list;
   }, [constellations]);
+
+  const handleJumpToTargetNode = (targetId: string) => {
+    const item = searchableEntities.find(e => e.id === targetId);
+    if (item) {
+      handleSelectSearchEntity(item);
+    }
+  };
 
   const handleSelectSearchEntity = (item: SearchableEntity) => {
     cameraRef.current.targetX = -item.worldX * item.targetZoom;
@@ -814,7 +821,20 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         type: 'claim',
         title: item.title,
         subtitle: item.subtitle,
-        onOpenSubject: () => onOpenChat && onOpenChat(item.id),
+        onOpenChat: () => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: item.id } })),
+      });
+    } else if (item.type === 'insight') {
+      const moon = item.originalEntity as Moon;
+      inspectEntity({
+        id: item.id,
+        type: 'claim',
+        title: item.title,
+        subtitle: item.subtitle,
+        meta: {
+          superseded_by: moon.supersededById,
+          // Extract conversation ID from planet? Wait, we didn't store planet in originalEntity.
+        },
+        onJumpToTargetNode: handleJumpToTargetNode,
       });
     }
   };
@@ -836,6 +856,32 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     for (const star of allStars) {
       for (const planet of star.planets) {
         if (planet.renderX !== undefined && planet.renderY !== undefined) {
+          // Check Moons first
+          for (const moon of planet.moons) {
+            const mx = planet.renderX + Math.cos(moon.angle) * moon.dist;
+            const my = planet.renderY + Math.sin(moon.angle) * moon.dist;
+            if (Math.hypot(worldX - mx, worldY - my) <= 6) {
+              cam.targetX = -mx * 2.2;
+              cam.targetY = -my * 2.2;
+              cam.targetZoom = 2.2;
+              activeStarIdRef.current = star.id;
+              
+              inspectEntity({
+                id: moon.id,
+                type: 'claim',
+                title: moon.title,
+                subtitle: `Инсайт диалога "${planet.title}"`,
+                meta: {
+                  superseded_by: moon.supersededById,
+                  conversationId: planet.id,
+                },
+                onJumpToTargetNode: handleJumpToTargetNode,
+                onOpenChat: (convId) => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: convId } })),
+              });
+              return;
+            }
+          }
+
           const dist = Math.hypot(worldX - planet.renderX, worldY - planet.renderY);
           if (dist <= planet.size + 8) {
             cam.targetX = -planet.renderX * 1.6;
@@ -860,7 +906,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                   сообщений: planet.meta?.messageCount || 0,
                   создано: dateStr,
                 },
-                onOpenSubject: () => onOpenChat && onOpenChat(planet.id),
+                onOpenChat: () => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: planet.id } })),
               });
             } else if (planet.type === 'source') {
               inspectEntity({

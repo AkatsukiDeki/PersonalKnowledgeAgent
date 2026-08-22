@@ -97,6 +97,7 @@ export function App() {
       const customEvent = e as CustomEvent;
       if (customEvent.detail) {
         setUniverseFocusId(customEvent.detail);
+        setActiveView('universe'); // Force view change
         if (activeView === 'universe') {
           graphRef.current?.focusNode(customEvent.detail, 3.5);
         }

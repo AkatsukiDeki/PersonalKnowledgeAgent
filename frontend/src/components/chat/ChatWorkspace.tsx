@@ -3,7 +3,7 @@ import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { Send, Loader2, Paperclip, X } from 'lucide-react';
+import { Send, Loader2, Paperclip, X, Sparkles } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
 import { profileApi } from '../../api/profile';
@@ -300,6 +300,20 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         {isDragging && (
           <div className="absolute inset-0 z-50 bg-indigo-500/10 backdrop-blur-sm border-2 border-dashed border-indigo-500/50 flex items-center justify-center rounded-2xl m-4">
             <p className="text-indigo-400 font-medium text-lg">Перетащите файл сюда для загрузки</p>
+          </div>
+        )}
+
+        {/* Action Header */}
+        {activeConvId && messages.length > 0 && (
+          <div className="absolute top-6 right-8 z-20">
+            <button
+              onClick={() => window.dispatchEvent(new CustomEvent('focusNode', { detail: activeConvId }))}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-xl transition-colors shadow-lg"
+              title="Показать на карте Вселенной"
+            >
+              <Sparkles size={14} />
+              <span className="hidden sm:inline">В Galaxy</span>
+            </button>
           </div>
         )}
 

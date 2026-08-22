@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { sourcesApi } from '../../api/sources';
 import { SourceDetail } from '../../types/source';
-import { X, Save, RefreshCw, Loader2, CheckCircle2, XCircle, FileText, ExternalLink, GraduationCap } from 'lucide-react';
+import { X, Save, RefreshCw, Loader2, CheckCircle2, XCircle, FileText, ExternalLink, GraduationCap, Sparkles } from 'lucide-react';
 import { LearningModal } from '../learning/LearningModal';
 
 interface Props {
@@ -92,6 +92,16 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved }: Props) {
                 Save & Re-index
               </button>
             )}
+            <button
+              onClick={() => {
+                window.dispatchEvent(new CustomEvent('focusNode', { detail: sourceId }));
+                onClose();
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs font-medium rounded-lg transition-colors"
+              title="Показать на карте Вселенной"
+            >
+              <Sparkles size={14} className="text-indigo-400" />
+            </button>
             <button
               onClick={() => setIsLearningModalOpen(true)}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/50 text-indigo-300 text-xs font-medium rounded-lg transition-colors"

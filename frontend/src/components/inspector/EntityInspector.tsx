@@ -100,6 +100,13 @@ export const EntityInspector: React.FC = () => {
 
         {/* Контекст происхождения (Почему оно здесь) */}
         <div className="space-y-2">
+          {activeEntity.meta?.superseded_by && (
+            <div className="p-3 mb-2 bg-amber-950/40 border border-amber-900/60 rounded-xl text-xs text-amber-200/80">
+              <span className="font-semibold text-amber-400 block mb-1">Заменено новым решением</span>
+              {activeEntity.meta.superseded_by}
+            </div>
+          )}
+          
           <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block">
             Связанный контекст
           </span>
@@ -138,6 +145,31 @@ export const EntityInspector: React.FC = () => {
         <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-2">
           Действия
         </span>
+
+        {activeEntity.meta?.superseded_by && activeEntity.onJumpToTargetNode && (
+          <button
+            onClick={() => {
+              activeEntity.onJumpToTargetNode!(activeEntity.meta!.superseded_by);
+            }}
+            className="w-full py-2 px-3 bg-amber-600/20 hover:bg-amber-600/40 border border-amber-500/50 text-amber-400 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all mb-2"
+          >
+            <Sparkles size={14} />
+            Найти преемника ↗
+          </button>
+        )}
+
+        {activeEntity.onOpenChat && activeEntity.meta?.conversationId && (
+          <button
+            onClick={() => {
+              activeEntity.onOpenChat!(activeEntity.meta!.conversationId);
+              closeInspector();
+            }}
+            className="w-full py-2 px-3 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-all mb-2"
+          >
+            <MessageSquare size={14} />
+            Открыть диалог
+          </button>
+        )}
 
         {activeEntity.onAskTutor && activeEntity.parentSubject && (
           <button
