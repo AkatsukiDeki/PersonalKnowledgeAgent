@@ -92,7 +92,19 @@ async def create_subject(data: SubjectCreate, db: AsyncSession = Depends(get_db)
     db.add(subject)
     await db.commit()
     await db.refresh(subject)
-    return {"id": str(subject.id), "title": subject.title, "is_mastered": subject.is_mastered}
+    return {
+        "id": str(subject.id),
+        "title": subject.title,
+        "description": subject.description,
+        "icon": subject.icon,
+        "color_theme": subject.color_theme,
+        "mastery_score": subject.mastery_score,
+        "is_mastered": subject.is_mastered,
+        "sources_count": 0,
+        "has_roadmap": False,
+        "created_at": subject.created_at.isoformat() if hasattr(subject, "created_at") and subject.created_at else None,
+        "updated_at": subject.updated_at.isoformat() if hasattr(subject, "updated_at") and subject.updated_at else None,
+    }
 
 
 @router.get("", response_model=List[Dict[str, Any]])

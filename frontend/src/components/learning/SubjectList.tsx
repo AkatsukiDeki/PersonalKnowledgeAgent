@@ -36,8 +36,14 @@ export const SubjectList: React.FC<{ onSelect: (id: string) => void }> = ({ onSe
 
   const deleteSubject = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    await subjectsApi.deleteSubject(id);
-    setSubjects(subjects.filter(s => s.id !== id));
+    if (!window.confirm(t('learning.deleteConfirm') || 'Удалить этот предмет?')) return;
+    try {
+      await subjectsApi.deleteSubject(id);
+      setSubjects(subjects.filter(s => s.id !== id));
+    } catch (error) {
+      console.error(error);
+      alert('Ошибка при удалении');
+    }
   };
 
   return (
@@ -72,7 +78,11 @@ export const SubjectList: React.FC<{ onSelect: (id: string) => void }> = ({ onSe
                 <div className={`p-3 bg-${subject.color_theme}-500/20 rounded-lg text-${subject.color_theme}-400`}>
                   <Book size={24} />
                 </div>
-                <button onClick={(e) => deleteSubject(e, subject.id)} className="p-2 text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button 
+                  onClick={(e) => deleteSubject(e, subject.id)} 
+                  className="p-2 text-zinc-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all opacity-50 hover:opacity-100"
+                  title="Удалить предмет"
+                >
                   <Trash2 size={18} />
                 </button>
               </div>
