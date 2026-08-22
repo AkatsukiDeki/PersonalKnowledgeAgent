@@ -1210,7 +1210,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       )}
 
       {/* Верхняя панель */}
-      <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 p-1.5 rounded-xl shadow-lg">
+      <div className="absolute top-24 left-4 z-20 flex items-center gap-2 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 p-1.5 rounded-xl shadow-lg">
         <div className="px-2.5 py-1 text-xs font-bold text-white flex items-center gap-1.5">
           <Sparkles size={14} className="text-indigo-400" />
           Galaxy Universe 4D
