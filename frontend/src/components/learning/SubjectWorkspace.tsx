@@ -13,10 +13,13 @@ import { useLanguage } from '../../context/LanguageContext';
 
 type Tab = 'roadmap' | 'materials' | 'tutor' | 'stats';
 
-export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void }> = ({ subjectId, onBack }) => {
+export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void; initialTab?: Tab }> = ({ subjectId, onBack, initialTab }) => {
   const { t } = useLanguage();
   const [subject, setSubject] = useState<Subject | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(() => {
+    if (initialTab && ['roadmap', 'materials', 'tutor', 'stats'].includes(initialTab)) {
+      return initialTab;
+    }
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(`pka_subject_tab_${subjectId}`);
       if (saved && ['roadmap', 'materials', 'tutor', 'stats'].includes(saved)) {
@@ -40,6 +43,12 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void 
   const [isPracticeModalOpen, setIsPracticeModalOpen] = useState(false);
   const [quizSession, setQuizSession] = useState<{ topicId: string; topicName: string; isExam: boolean; params?: any } | null>(null);
   const [flashcardSession, setFlashcardSession] = useState<{ topicId: string; topicName: string; params?: any } | null>(null);
+
+  useEffect(() => {
+    if (initialTab && ['roadmap', 'materials', 'tutor', 'stats'].includes(initialTab)) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
 
   useEffect(() => {
     subjectsApi.getSubject(subjectId).then((data) => {

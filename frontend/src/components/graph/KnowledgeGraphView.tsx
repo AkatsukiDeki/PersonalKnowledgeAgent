@@ -13,8 +13,8 @@ import { graphApi } from '../../api/graph';
 import { claimsApi } from '../../api/claims';
 import { GraphNode, GraphLink } from '../../types/graph';
 import { GraphSidebarFilters } from './GraphSidebarFilters';
-import { MemoryInspector } from './MemoryInspector';
 import { LinkInspector } from './LinkInspector';
+import { useInspector } from '../../context/InspectorContext';
 import { endpointId, isPositionedNode, resolveGraphNode } from './graphEndpoints';
 import { ENTITY_TOKENS, resolveEntityGroup } from '../../utils/entityTokens';
 
@@ -211,6 +211,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   onSelectSource,
   onNavigateToChatWithContext,
 }, ref) => {
+  const { inspectEntity } = useInspector();
   const fgRef = useRef<GraphHandle | undefined>(undefined);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -352,7 +353,49 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
   const handleNodeClick = useCallback((node: GraphNode) => {
     pendingFocusRef.current = null;
     applyFocus(node);
-  }, [applyFocus]);
+    
+    // Open Entity Inspector
+    if (node.group === 'claim' || node.kind === 'claim') {
+      inspectEntity({
+        id: node.id,
+        type: 'claim',
+        title: node.label || 'Утверждение',
+        summary: node.content || node.label,
+        provenanceSource: node.source_id ? { id: node.source_id, title: 'Источник' } : undefined,
+        parentSubject: node.subject_id ? { id: node.subject_id, title: 'Предмет' } : undefined,
+        onOpenSource: onSelectSource ? (sourceTitle) => {
+           if (node.source_id) onSelectSource(node.source_id);
+        } : undefined,
+        onAskTutor: onNavigateToChatWithContext ? (subjectId, prompt) => {
+           onNavigateToChatWithContext(prompt || node.label);
+        } : undefined,
+      });
+    } else if (node.group === 'source' || node.kind === 'source') {
+      inspectEntity({
+        id: node.id,
+        type: 'source',
+        title: node.label || 'Документ',
+        summary: `Файл: ${node.label}. Тип: ${node.group || 'источник'}.`,
+        onOpenSource: onSelectSource ? () => {
+          onSelectSource(node.id);
+        } : undefined,
+      });
+    } else if (node.group === 'decision' || node.kind === 'decision') {
+      inspectEntity({
+        id: node.id,
+        type: 'pattern', // Using pattern for decisions in inspector for now
+        title: node.label || 'Решение',
+        summary: node.content || node.label,
+      });
+    } else {
+      inspectEntity({
+        id: node.id,
+        type: 'subject',
+        title: node.label || 'Сущность',
+        summary: node.content || node.label,
+      });
+    }
+  }, [applyFocus, inspectEntity, onSelectSource, onNavigateToChatWithContext]);
 
   const handleNodeHover = useCallback((node: GraphNode | null) => {
     setHoverNode(node);
@@ -713,24 +756,7 @@ export const KnowledgeGraphView = forwardRef<KnowledgeGraphRef, KnowledgeGraphVi
         backgroundColor="transparent"
       />
 
-      {selectedNode && (
-        <MemoryInspector
-          node={selectedNode}
-          links={data.links}
-          allNodes={data.nodes}
-          onClose={() => {
-            setSelectedNode(null);
-            updateHighlight(null);
-          }}
-          onSelectNode={(nodeId) => {
-            const target = resolveGraphNode(data.nodes, nodeId);
-            if (target) handleNodeClick(target);
-          }}
-          onViewSource={onSelectSource}
-          onNavigateToChatWithContext={onNavigateToChatWithContext}
-          onUpdateStatus={handleUpdateStatus}
-        />
-      )}
+      {/* MemoryInspector is now replaced by the global EntityInspector */}
 
       {selectedLink && (
         <LinkInspector

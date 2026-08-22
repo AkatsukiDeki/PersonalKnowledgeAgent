@@ -11,6 +11,7 @@ import { SearchResult } from './api/search';
 import { InsightsWorkspace } from './pages/InsightsWorkspace';
 import { TimelineWorkspace } from './pages/TimelineWorkspace';
 import { GraphWorkspace } from './pages/GraphWorkspace';
+import { UniverseCanvas } from './components/universe/UniverseCanvas';
 import { LearningDashboard } from './pages/LearningDashboard';
 import { KnowledgeGraphRef } from './components/graph/KnowledgeGraphView';
 import { SemanticSearchModal } from './components/search/SemanticSearchModal';
@@ -20,6 +21,8 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { Search, PanelRightOpen, Settings } from 'lucide-react';
 import { useLanguage } from './context/LanguageContext';
 import clsx from 'clsx';
+import { InspectorProvider } from './context/InspectorContext';
+import { EntityInspector } from './components/inspector/EntityInspector';
 
 export function App() {
   const { t } = useLanguage();
@@ -53,8 +56,16 @@ export function App() {
   const [universeFocusId, setUniverseFocusId] = useState<string | null>(null);
   const [inspectSourceId, setInspectSourceId] = useState<string | null>(null);
   const [chatSeed, setChatSeed] = useState<string | null>(null);
+  const [learningSubjectId, setLearningSubjectId] = useState<string | null>(null);
+  const [learningInitialTab, setLearningInitialTab] = useState<'roadmap' | 'sources' | 'tutor' | 'stats'>('roadmap');
 
   const graphRef = useRef<KnowledgeGraphRef | null>(null);
+  
+  const handleOpenSubjectFromUniverse = (subjectId: string, initialTab: 'roadmap' | 'sources' | 'tutor' | 'stats' = 'roadmap') => {
+    setLearningSubjectId(subjectId);
+    setLearningInitialTab(initialTab);
+    setActiveView('learning');
+  };
   useEffect(() => {
     const handleOpenConversation = () => {
       setActiveView('chat');
@@ -124,7 +135,8 @@ export function App() {
   const showOrbit = activeView === 'chat' && orbitOpen;
 
   return (
-    // 1. Глубокий фон с изоляцией контекста
+    <InspectorProvider>
+    {/* 1. Глубокий фон с изоляцией контекста */}
     <main className="h-screen w-screen bg-[#030303] text-slate-200 font-sans flex flex-col overflow-hidden relative isolate">
 
       {/* 2. Тот самый космический градиент на фоне всего приложения */}
@@ -215,6 +227,10 @@ export function App() {
             )}
 
             {activeView === 'universe' && (
+              <UniverseCanvas onOpenSubject={handleOpenSubjectFromUniverse} />
+            )}
+
+            {activeView === 'graph' && (
               <GraphWorkspace
                 ref={graphRef}
                 focusNodeId={universeFocusId}
@@ -240,7 +256,10 @@ export function App() {
             )}
 
             {activeView === 'learning' && (
-              <LearningDashboard />
+              <LearningDashboard 
+                initialSubjectId={learningSubjectId} 
+                initialTab={learningInitialTab} 
+              />
             )}
           </div>
         </main>
@@ -298,7 +317,11 @@ export function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
+
+      {/* Глобальный инспектор сущностей */}
+      <EntityInspector />
     </main>
+    </InspectorProvider>
   );
 }
 

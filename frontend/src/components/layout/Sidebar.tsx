@@ -14,7 +14,7 @@ import {
 import { conflictsApi } from '../../api/conflicts';
 import { useLanguage } from '../../context/LanguageContext';
 
-export type ViewType = 'chat' | 'insights' | 'universe' | 'conflicts' | 'timeline' | 'learning';
+export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning';
 
 interface Props {
   onOpenUploader: () => void;
@@ -66,6 +66,7 @@ export function Sidebar({
     { id: 'chat', icon: <MessageSquare size={16} strokeWidth={1.5} />, label: t('nav.dialogs'), activeColor: 'text-indigo-400' },
     { id: 'insights', icon: <Sparkles size={16} strokeWidth={1.5} />, label: t('nav.insights'), activeColor: 'text-fuchsia-400' },
     { id: 'universe', icon: <Globe size={16} strokeWidth={1.5} />, label: t('nav.universe'), activeColor: 'text-indigo-400' },
+    { id: 'graph', icon: <Database size={16} strokeWidth={1.5} />, label: 'Граф знаний', activeColor: 'text-sky-400' },
     { id: 'conflicts', icon: <ShieldAlert size={16} strokeWidth={1.5} />, label: t('nav.contradictions'), activeColor: 'text-amber-400', badge: unresolvedCount },
     { id: 'timeline', icon: <Clock size={16} strokeWidth={1.5} />, label: t('nav.timeline'), activeColor: 'text-emerald-400' },
     { id: 'learning', icon: <GraduationCap size={16} strokeWidth={1.5} />, label: t('nav.learning'), activeColor: 'text-indigo-400' },
