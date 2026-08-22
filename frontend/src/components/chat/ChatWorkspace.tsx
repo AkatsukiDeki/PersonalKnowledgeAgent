@@ -295,11 +295,18 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       )}
 
       <div 
-        className="flex flex-col flex-1 h-full min-w-0 relative bg-[radial-gradient(ellipse_at_center,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#050510] to-[#0a0a0a] text-slate-200"
+        className="flex flex-col flex-1 h-full min-w-0 relative text-slate-200 overflow-hidden"
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
+        {/* Cosmic Background */}
+        <div className="absolute inset-0 pointer-events-none z-0 bg-[#030308]">
+          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#05050a]/80 to-[#020205]" />
+          <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'radial-gradient(1px 1px at 25px 25px, white, transparent), radial-gradient(1px 1px at 75px 75px, white, transparent), radial-gradient(1.5px 1.5px at 120px 40px, #a5b4fc, transparent), radial-gradient(1.5px 1.5px at 40px 120px, #c4b5fd, transparent)', backgroundSize: '200px 200px' }} />
+          <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'radial-gradient(1px 1px at 10px 150px, white, transparent), radial-gradient(1px 1px at 170px 10px, white, transparent), radial-gradient(2px 2px at 150px 150px, #818cf8, transparent)', backgroundSize: '250px 250px' }} />
+        </div>
+
         {isDragging && (
           <div className="absolute inset-0 z-50 bg-indigo-500/10 backdrop-blur-sm border-2 border-dashed border-indigo-500/50 flex items-center justify-center rounded-2xl m-4">
             <p className="text-indigo-400 font-medium text-lg">Перетащите файл сюда для загрузки</p>
@@ -332,7 +339,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
         {/* Message stream */}
         <div 
-          className="flex-1 overflow-y-auto pt-24 pb-32 w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent"
+          className="flex-1 overflow-y-auto pt-24 pb-32 w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
           style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black calc(100% - 80px), transparent 100%)' }}
         >
           <div className="max-w-3xl w-full mx-auto px-6 h-full">
