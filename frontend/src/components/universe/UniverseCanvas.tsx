@@ -1,85 +1,447 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { subjectsApi } from '../../api/subjects';
+import { conversationsApi } from '../../api/conversations';
+import * as claimsApi from '../../api/claims';
 import { useInspector } from '../../context/InspectorContext';
-import { Compass, RotateCcw, ZoomIn, ZoomOut, Sparkles } from 'lucide-react';
+import { UniverseSpotlight, SearchableEntity } from './UniverseSpotlight';
+import { Sparkles, ZoomIn, ZoomOut, RotateCcw, Search, Clock, Orbit, Play, Pause } from 'lucide-react';
 
-interface PlanetNode {
+interface Moon {
   id: string;
   title: string;
-  mastery: number;
+  type: 'insight' | 'decision' | string;
+  angle: number;
+  dist: number;
+  speed: number;
   color: string;
+  timestamp: number;
+}
+
+interface Planet {
+  id: string;
+  title: string;
+  type: 'source' | 'conversation' | 'roadmap_node';
   orbitRadius: number;
   angle: number;
   speed: number;
   size: number;
-  sourcesCount: number;
-  sources: Array<{ id: string; title: string }>;
+  color: string;
+  meta?: Record<string, any>;
+  moons: Moon[];
+  timestamp: number;
+  timelineX?: number;
+  timelineY?: number;
+  renderX?: number;
+  renderY?: number;
+}
+
+interface StarSystem {
+  id: string;
+  title: string;
+  type: 'subject' | 'chat_folder' | 'root_core';
+  localRadius: number;
+  angle: number;
+  driftSpeed: number;
+  size: number;
+  color: string;
+  planets: Planet[];
+  meta?: Record<string, any>;
+  timestamp: number;
+  timelineX?: number;
+  timelineY?: number;
+  renderX?: number;
+  renderY?: number;
+}
+
+interface Constellation {
+  id: string;
+  title: string;
+  color: string;
+  orbitRadius: number;
+  angle: number;
+  driftSpeed: number;
+  stars: StarSystem[];
+  laneY: number;
+  renderX?: number;
+  renderY?: number;
 }
 
 interface UniverseCanvasProps {
   onOpenSubject?: (subjectId: string, tab?: 'roadmap' | 'sources' | 'tutor' | 'stats') => void;
+  onOpenChat?: (conversationId: string) => void;
+  onOpenSource?: (sourceId: string) => void;
 }
 
-export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({ onOpenSubject }) => {
+export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
+  onOpenSubject,
+  onOpenChat,
+  onOpenSource,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const { inspectEntity } = useInspector();
-  
-  const [planets, setPlanets] = useState<PlanetNode[]>([]);
+
+  const [constellations, setConstellations] = useState<Constellation[]>([]);
+  const [rootStars, setRootStars] = useState<StarSystem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Состояние камеры (Pan & Zoom & Target Lerp)
+  // Режим просмотра и таймлайн
+  const [viewMode, setViewMode] = useState<'galaxy' | 'timeline'>('galaxy');
+  const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
+  const [timeRange, setTimeRange] = useState<{ min: number; max: number }>({ min: 0, max: 1 });
+  const [cutoffTimestamp, setCutoffTimestamp] = useState<number>(Date.now());
+  const [isPlaying, setIsPlaying] = useState(false);
+  
+  const activeStarIdRef = useRef<string | null>(null);
+
+  const morphProgressRef = useRef(0); // 0.0 (galaxy) -> 1.0 (timeline)
   const cameraRef = useRef({
     x: 0,
     y: 0,
-    zoom: 1,
+    zoom: 0.55,
     targetX: 0,
     targetY: 0,
-    targetZoom: 1,
+    targetZoom: 0.55,
     isDragging: false,
     startX: 0,
     startY: 0,
   });
 
-  const selectedPlanetIdRef = useRef<string | null>(null);
-
-  // Загрузка данных предметов для Вселенной
+  // Хоткей Ctrl+K / Cmd+K
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsSpotlightOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Генерация детерминированного timestamp при отсутствии created_at
+  const getFallbackTimestamp = (id: string, baseOffsetDays: number): number => {
+    let hash = 0;
+    for (let i = 0; i < id.length; i++) {
+      hash = (hash << 5) - hash + id.charCodeAt(i);
+      hash |= 0;
+    }
+    const daysAgo = Math.abs(hash % baseOffsetDays);
+    return Date.now() - daysAgo * 24 * 60 * 60 * 1000;
+  };
+
+  useEffect(() => {
+    let isMounted = true;
+
     const loadUniverseData = async () => {
       try {
         setLoading(true);
-        // Загружаем список всех предметов
-        const subjectsList = await subjectsApi.getSubjects(); 
-        
-        const colors = ['#6366f1', '#3b82f6', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'];
-        
-        const mappedPlanets: PlanetNode[] = subjectsList.map((sub: any, index: number) => {
-          const orbitRadius = 140 + index * 90;
+
+        const fetchClaimsSafe = async (): Promise<any[]> => {
+          const api: any = claimsApi;
+          try {
+            if (typeof api.listClaims === 'function') return await api.listClaims();
+            if (typeof api.getClaims === 'function') return await api.getClaims();
+            if (typeof api.searchClaims === 'function') return await api.searchClaims();
+            if (typeof api.claimsApi?.getClaims === 'function') return await api.claimsApi.getClaims();
+            if (typeof api.claimsApi?.list === 'function') return await api.claimsApi.list();
+          } catch {
+            return [];
+          }
+          return [];
+        };
+
+        const [subjectsRes, conversationsRes, claimsRes] = await Promise.allSettled([
+          subjectsApi.getSubjects(),
+          conversationsApi.getConversations(),
+          fetchClaimsSafe(),
+        ]);
+
+        const rawSubjects: any[] = subjectsRes.status === 'fulfilled' && Array.isArray(subjectsRes.value) ? subjectsRes.value : [];
+        const conversations: any[] = conversationsRes.status === 'fulfilled' && Array.isArray(conversationsRes.value) ? conversationsRes.value : [];
+        const rawClaims = claimsRes.status === 'fulfilled' ? claimsRes.value : [];
+        const claims: any[] = Array.isArray(rawClaims) ? rawClaims : (rawClaims as any)?.items || [];
+
+        // Дозагрузка детальной информации для каждого предмета
+        const subjects = await Promise.all(
+          rawSubjects.map(async (sub) => {
+            try {
+              const fullDetails = await subjectsApi.getSubject(sub.id);
+              return { ...sub, ...fullDetails };
+            } catch {
+              return sub;
+            }
+          })
+        );
+
+        // Расчет временного диапазона
+        let minTime = Date.now() - 30 * 24 * 60 * 60 * 1000;
+        let maxTime = Date.now();
+
+        const timestamps: number[] = [];
+        subjects.forEach((s) => timestamps.push(s.created_at ? new Date(s.created_at).getTime() : getFallbackTimestamp(String(s.id), 25)));
+        conversations.forEach((c) => timestamps.push(c.created_at ? new Date(c.created_at).getTime() : getFallbackTimestamp(String(c.id), 20)));
+        if (timestamps.length > 0) {
+          minTime = Math.min(...timestamps);
+          maxTime = Math.max(...timestamps, Date.now());
+        }
+
+        const calcTimelineX = (ts: number) => {
+          const normalized = (ts - minTime) / Math.max(maxTime - minTime, 1);
+          return (normalized - 0.5) * 1400; // Размах шкалы 1400px
+        };
+
+        // 1. Группировка диалогов
+        const folderMap: Record<string, any[]> = {};
+        const rootChats: any[] = [];
+        conversations.forEach((conv: any) => {
+          if (conv.folder && typeof conv.folder === 'string' && conv.folder.trim() !== '') {
+            if (!folderMap[conv.folder]) folderMap[conv.folder] = [];
+            folderMap[conv.folder].push(conv);
+          } else {
+            rootChats.push(conv);
+          }
+        });
+
+        // 2. Кластеры предметов
+        const clusterMap: Record<string, { title: string; color: string; subjects: any[] }> = {
+          indigo: { title: 'ENGINEERING & ARCHITECTURE', color: '#6366f1', subjects: [] },
+          emerald: { title: 'SECURITY & SYSTEMS', color: '#10b981', subjects: [] },
+          amber: { title: 'DATA & ANALYTICS', color: '#f59e0b', subjects: [] },
+          purple: { title: 'THEORY & PROTOCOLS', color: '#8b5cf6', subjects: [] },
+        };
+
+        const colorKeys = Object.keys(clusterMap);
+        subjects.forEach((sub: any, idx: number) => {
+          const themeKey = sub.color_theme || colorKeys[idx % colorKeys.length];
+          if (!clusterMap[themeKey]) {
+            clusterMap[themeKey] = { title: `${sub.title.toUpperCase()} DOMAIN`, color: '#3b82f6', subjects: [] };
+          }
+          clusterMap[themeKey].subjects.push(sub);
+        });
+
+        const newConstellations: Constellation[] = [];
+        let cIdx = 0;
+        const activeClusters = Object.entries(clusterMap).filter(([_, val]) => val.subjects.length > 0);
+
+        for (const [key, cluster] of activeClusters) {
+          const clusterAngle = (cIdx * (Math.PI * 2)) / Math.max(activeClusters.length, 1);
+          const clusterDist = 550 + (cIdx % 2) * 120;
+          const laneY = -220 + cIdx * 140; // Дорожка таймлайна
+
+          const stars: StarSystem[] = cluster.subjects.map((sub: any, sIdx: number) => {
+            const subTs = sub.created_at ? new Date(sub.created_at).getTime() : getFallbackTimestamp(String(sub.id), 25);
+            const currentSources: any[] = sub.sources || [];
+            const starTimelineX = calcTimelineX(subTs);
+
+            const planets: Planet[] = currentSources.map((src: any, pIdx: number) => {
+              const srcTs = src.created_at ? new Date(src.created_at).getTime() : subTs + (pIdx + 1) * 3600000;
+              return {
+                id: String(src.id),
+                title: src.title || 'Документ',
+                type: 'source' as const,
+                orbitRadius: 45 + pIdx * 25,
+                angle: (pIdx * (Math.PI * 2)) / Math.max(currentSources.length, 1),
+                speed: 0.003 + (pIdx % 3) * 0.001,
+                size: 6,
+                color: '#38bdf8',
+                meta: { type: src.source_type || 'document' },
+                moons: [],
+                timestamp: srcTs,
+                timelineX: starTimelineX,
+                timelineY: laneY - 35 - pIdx * 18, // Вертикальный стек
+              };
+            });
+
+            return {
+              id: String(sub.id),
+              title: sub.title,
+              type: 'subject' as const,
+              localRadius: 90 + sIdx * 50,
+              angle: (sIdx * (Math.PI * 2)) / Math.max(cluster.subjects.length, 1),
+              driftSpeed: 0.0008 + (sIdx % 2) * 0.0003,
+              size: Math.max(20, Math.min(32, 20 + (sub.mastery_score || 0) / 6)),
+              color: cluster.color,
+              planets,
+              timestamp: subTs,
+              timelineX: starTimelineX,
+              timelineY: laneY,
+              meta: {
+                mastery: sub.mastery_score || 0,
+                sourcesCount: currentSources.length,
+                description: sub.description,
+              },
+            };
+          });
+
+          newConstellations.push({
+            id: `constellation-${key}`,
+            title: cluster.title,
+            color: cluster.color,
+            orbitRadius: clusterDist,
+            angle: clusterAngle,
+            driftSpeed: 0.00025 + (cIdx % 2) * 0.0001,
+            stars,
+            laneY,
+          });
+          cIdx++;
+        }
+
+        // 3. Созвездие диалогов
+        if (Object.keys(folderMap).length > 0) {
+          const laneY = 220;
+          const folderStars: StarSystem[] = Object.entries(folderMap).map(([folderName, folderChats], fIdx) => {
+            const folderTs = getFallbackTimestamp(folderName, 18);
+            const folderTimelineX = calcTimelineX(folderTs);
+
+            const planets: Planet[] = folderChats.map((chat: any, pIdx: number) => {
+              const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : folderTs + (pIdx + 1) * 7200000;
+              const chatMoons: Moon[] = claims.slice(pIdx * 2, pIdx * 2 + 2).map((claimItem: any, mIdx: number) => ({
+                id: String(claimItem.id || `claim-${mIdx}`),
+                title: claimItem.content || claimItem.title || 'Инсайт',
+                type: 'insight',
+                angle: mIdx * Math.PI,
+                dist: 11,
+                speed: 0.01 + mIdx * 0.005,
+                color: '#facc15',
+                timestamp: chatTs,
+              }));
+
+              return {
+                id: String(chat.id),
+                title: chat.title || 'Диалог',
+                type: 'conversation' as const,
+                orbitRadius: 40 + pIdx * 22,
+                angle: (pIdx * (Math.PI * 2)) / Math.max(folderChats.length, 1),
+                speed: 0.0025 + (pIdx % 3) * 0.0008,
+                size: 6,
+                color: '#818cf8',
+                meta: { messageCount: chat.message_count || 0 },
+                moons: chatMoons,
+                timestamp: chatTs,
+                timelineX: folderTimelineX,
+                timelineY: laneY + 30 + pIdx * 18,
+              };
+            });
+
+            return {
+              id: `folder-${folderName}`,
+              title: `📁 ${folderName}`,
+              type: 'chat_folder' as const,
+              localRadius: 80 + fIdx * 45,
+              angle: (fIdx * (Math.PI * 2)) / Math.max(Object.keys(folderMap).length, 1),
+              driftSpeed: 0.0006 + (fIdx % 2) * 0.0002,
+              size: Math.max(18, Math.min(28, 16 + folderChats.length * 2)),
+              color: '#06b6d4',
+              planets,
+              timestamp: folderTs,
+              timelineX: folderTimelineX,
+              timelineY: laneY,
+              meta: { chatCount: folderChats.length },
+            };
+          });
+
+          newConstellations.push({
+            id: 'constellation-operations',
+            title: 'OPERATIONAL MEMORY & CHATS',
+            color: '#06b6d4',
+            orbitRadius: 650,
+            angle: Math.PI * 1.35,
+            driftSpeed: 0.0002,
+            stars: folderStars,
+            laneY,
+          });
+        }
+
+        // 4. Галактическое ядро
+        const corePlanets: Planet[] = rootChats.map((chat: any, rIdx: number) => {
+          const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : getFallbackTimestamp(String(chat.id), 12);
           return {
-            id: sub.id,
-            title: sub.title,
-            mastery: sub.mastery_score || 0,
-            color: colors[index % colors.length],
-            orbitRadius,
-            angle: (index * (Math.PI * 2)) / Math.max(subjectsList.length, 1),
-            speed: 0.001 + index * 0.0002,
-            size: Math.max(16, Math.min(32, 16 + (sub.mastery_score || 0) / 5)),
-            sourcesCount: sub.sources?.length || 0,
-            sources: sub.sources || [],
+            id: String(chat.id),
+            title: chat.title || 'Диалог',
+            type: 'conversation' as const,
+            orbitRadius: 75 + rIdx * 22,
+            angle: (rIdx * (Math.PI * 2)) / Math.max(rootChats.length, 1),
+            speed: 0.002 + (rIdx % 4) * 0.0005,
+            size: 5,
+            color: '#a78bfa',
+            meta: { messageCount: chat.message_count || 0 },
+            moons: [],
+            timestamp: chatTs,
+            timelineX: calcTimelineX(chatTs),
+            timelineY: 0,
           };
         });
 
-        setPlanets(mappedPlanets);
-      } catch (e) {
-        console.error('Failed to load universe subjects:', e);
+        const coreSystem: StarSystem = {
+          id: 'root-galactic-core',
+          title: '⚡ Galactic Core',
+          type: 'root_core' as const,
+          localRadius: 0,
+          angle: 0,
+          driftSpeed: 0,
+          size: 26,
+          color: '#ffffff',
+          planets: corePlanets,
+          timestamp: minTime,
+          timelineX: -700,
+          timelineY: 0,
+          meta: { rogueChatsCount: rootChats.length },
+        };
+
+        if (isMounted) {
+          setTimeRange({ min: minTime, max: maxTime });
+          setCutoffTimestamp(maxTime);
+          setConstellations(newConstellations);
+          setRootStars([coreSystem]);
+        }
+      } catch (err) {
+        console.error('Failed to build universe timeline:', err);
       } finally {
-        setLoading(false);
+        if (isMounted) setLoading(false);
       }
     };
 
     loadUniverseData();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  // Основной цикл анимации и рендеринга Canvas (60 FPS)
+  // Автопроигрывание таймлайна (Play / Pause)
+  useEffect(() => {
+    if (!isPlaying || viewMode !== 'timeline') return;
+    const interval = setInterval(() => {
+      setCutoffTimestamp((prev) => {
+        const step = (timeRange.max - timeRange.min) / 200;
+        if (prev + step >= timeRange.max) {
+          setIsPlaying(false);
+          return timeRange.max;
+        }
+        return prev + step;
+      });
+    }, 40);
+    return () => clearInterval(interval);
+  }, [isPlaying, viewMode, timeRange]);
+
+  // Колесико мыши
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const onNativeWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
+      const newZoom = Math.max(0.12, Math.min(3.5, cameraRef.current.targetZoom * zoomFactor));
+      cameraRef.current.targetZoom = newZoom;
+    };
+
+    canvas.addEventListener('wheel', onNativeWheel, { passive: false });
+    return () => {
+      canvas.removeEventListener('wheel', onNativeWheel);
+    };
+  }, []);
+
+  // Анимация рендера с морфингом (Galaxy <-> Timeline)
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -95,105 +457,256 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({ onOpenSubject })
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
 
-    // Генерация статического звездного фона (параллакс)
-    const stars = Array.from({ length: 150 }).map(() => ({
-      x: (Math.random() - 0.5) * 3000,
-      y: (Math.random() - 0.5) * 3000,
-      size: Math.random() * 1.5,
+    const starsBackground = Array.from({ length: 300 }).map(() => ({
+      x: (Math.random() - 0.5) * 6500,
+      y: (Math.random() - 0.5) * 6500,
+      size: Math.random() * 1.6,
       alpha: Math.random() * 0.7 + 0.3,
     }));
 
     const render = () => {
-      const cam = cameraRef.current;
+      const targetMorph = viewMode === 'timeline' ? 1.0 : 0.0;
+      morphProgressRef.current += (targetMorph - morphProgressRef.current) * 0.06;
+      const morph = morphProgressRef.current;
 
-      // Плавное приближение камеры (Lerp)
+      const cam = cameraRef.current;
       cam.x += (cam.targetX - cam.x) * 0.08;
       cam.y += (cam.targetY - cam.y) * 0.08;
       cam.zoom += (cam.targetZoom - cam.zoom) * 0.08;
 
+      const currentZoom = cam.zoom;
+      const isMacro = currentZoom < 0.45 && morph < 0.5;
+      const isMicro = currentZoom >= 0.85 || morph > 0.5;
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
-      // Центрирование и применение матрицы камеры
       ctx.translate(canvas.width / 2 + cam.x, canvas.height / 2 + cam.y);
-      ctx.scale(cam.zoom, cam.zoom);
+      ctx.scale(currentZoom, currentZoom);
 
-      // 1. Рендер звездного поля
-      stars.forEach(star => {
-        ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha})`;
+      // Фон космоса
+      starsBackground.forEach((star) => {
+        ctx.fillStyle = `rgba(255, 255, 255, ${star.alpha * (1 - morph * 0.4)})`;
         ctx.fillRect(star.x, star.y, star.size, star.size);
       });
 
-      // 2. Рендер Ядра Вселенной (Центр)
-      const coreGradient = ctx.createRadialGradient(0, 0, 5, 0, 0, 60);
-      coreGradient.addColorStop(0, 'rgba(99, 102, 241, 0.8)');
-      coreGradient.addColorStop(1, 'rgba(99, 102, 241, 0)');
-      ctx.fillStyle = coreGradient;
-      ctx.beginPath();
-      ctx.arc(0, 0, 60, 0, Math.PI * 2);
-      ctx.fill();
-
-      ctx.fillStyle = '#818cf8';
-      ctx.beginPath();
-      ctx.arc(0, 0, 12, 0, Math.PI * 2);
-      ctx.fill();
-
-      // 3. Рендер планет и орбит
-      planets.forEach(planet => {
-        // Вращение планеты по орбите
-        planet.angle += planet.speed;
-        const x = Math.cos(planet.angle) * planet.orbitRadius;
-        const y = Math.sin(planet.angle) * planet.orbitRadius;
-
-        // Орбитальное кольцо
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.04)';
+      // Хронологическая ось и дорожки таймлайна (когда morph > 0)
+      if (morph > 0.05) {
+        ctx.save();
+        ctx.globalAlpha = morph * 0.4;
+        ctx.strokeStyle = '#ffffff';
         ctx.lineWidth = 1;
+        ctx.setLineDash([2, 4]);
+
+        // Основная линия времени
         ctx.beginPath();
-        ctx.arc(0, 0, planet.orbitRadius, 0, Math.PI * 2);
+        ctx.moveTo(-750, 0);
+        ctx.lineTo(750, 0);
         ctx.stroke();
 
-        // Свечение планеты
-        const glow = ctx.createRadialGradient(x, y, 2, x, y, planet.size * 2);
-        glow.addColorStop(0, planet.color);
+        // Засечки дат
+        const dateTicks = 6;
+        ctx.fillStyle = '#71717a';
+        ctx.font = '10px monospace';
+        ctx.textAlign = 'center';
+        for (let i = 0; i <= dateTicks; i++) {
+          const tx = -700 + (i * 1400) / dateTicks;
+          const tickTime = new Date(timeRange.min + (i * (timeRange.max - timeRange.min)) / dateTicks);
+          ctx.beginPath();
+          ctx.moveTo(tx, -10);
+          ctx.lineTo(tx, 10);
+          ctx.stroke();
+          ctx.fillText(tickTime.toLocaleDateString([], { month: 'short', day: 'numeric' }), tx, 24);
+        }
+        ctx.restore();
+      }
+
+      // Отрисовка созвездий
+      const allStarsToRender: Array<{ star: StarSystem; worldX: number; worldY: number; clusterColor: string }> = [];
+
+      constellations.forEach((cluster) => {
+        cluster.angle += cluster.driftSpeed * (1 - morph);
+        const galaxyCX = Math.cos(cluster.angle) * cluster.orbitRadius;
+        const galaxyCY = Math.sin(cluster.angle) * cluster.orbitRadius;
+
+        const timelineCX = 0;
+        const timelineCY = cluster.laneY;
+
+        const cx = galaxyCX * (1 - morph) + timelineCX * morph;
+        const cy = galaxyCY * (1 - morph) + timelineCY * morph;
+
+        cluster.renderX = cx;
+        cluster.renderY = cy;
+
+        // Туманность (в Timeline сжимается в полосу дорожки)
+        const nebulaRadius = 260 * (1 - morph * 0.6);
+        const nebulaGrad = ctx.createRadialGradient(cx, cy, 20, cx, cy, nebulaRadius);
+        nebulaGrad.addColorStop(0, cluster.color);
+        nebulaGrad.addColorStop(1, 'rgba(0,0,0,0)');
+
+        ctx.save();
+        ctx.globalAlpha = 0.1 * (1 - morph * 0.3);
+        ctx.fillStyle = nebulaGrad;
+        ctx.beginPath();
+        ctx.arc(cx, cy, nebulaRadius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // Заголовок дорожки
+        if (morph > 0.4) {
+          ctx.save();
+          ctx.fillStyle = `${cluster.color}cc`;
+          ctx.font = 'bold 11px monospace';
+          ctx.textAlign = 'left';
+          ctx.fillText(`── ${cluster.title}`, -720, cluster.laneY - 14);
+          ctx.restore();
+        } else if (isMacro) {
+          ctx.fillStyle = `${cluster.color}99`;
+          ctx.font = 'bold 16px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(`✦ ${cluster.title}`, cx, cy - 140);
+        }
+
+        // Координаты звезд
+        const clusterStarCoords: Array<{ x: number; y: number }> = [];
+        cluster.stars.forEach((star) => {
+          star.angle += star.driftSpeed * (1 - morph);
+          const galaxySX = galaxyCX + Math.cos(star.angle) * star.localRadius;
+          const galaxySY = galaxyCY + Math.sin(star.angle) * star.localRadius;
+
+          const tX = star.timelineX !== undefined ? star.timelineX : cx;
+          const tY = star.timelineY !== undefined ? star.timelineY : cy;
+
+          const sx = galaxySX * (1 - morph) + tX * morph;
+          const sy = galaxySY * (1 - morph) + tY * morph;
+
+          star.renderX = sx;
+          star.renderY = sy;
+          clusterStarCoords.push({ x: sx, y: sy });
+          allStarsToRender.push({ star, worldX: sx, worldY: sy, clusterColor: cluster.color });
+        });
+
+        // Линии созвездия в Galaxy моде
+        if (morph < 0.5 && clusterStarCoords.length > 1) {
+          ctx.save();
+          ctx.globalAlpha = 1 - morph * 2;
+          ctx.setLineDash([4, 6]);
+          ctx.strokeStyle = `${cluster.color}40`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          for (let i = 0; i < clusterStarCoords.length; i++) {
+            const next = clusterStarCoords[(i + 1) % clusterStarCoords.length];
+            ctx.moveTo(clusterStarCoords[i].x, clusterStarCoords[i].y);
+            ctx.lineTo(next.x, next.y);
+          }
+          ctx.stroke();
+          ctx.restore();
+        }
+      });
+
+      // Добавление Ядра
+      rootStars.forEach((star) => {
+        const sx = 0 * (1 - morph) + (star.timelineX || 0) * morph;
+        const sy = 0;
+        star.renderX = sx;
+        star.renderY = sy;
+        allStarsToRender.push({ star, worldX: sx, worldY: sy, clusterColor: star.color });
+      });
+
+      // Отрисовка Звезд и Планет с учетом среза времени (cutoffTimestamp)
+      allStarsToRender.forEach(({ star, worldX, worldY }) => {
+        const isVisibleByTime = star.timestamp <= cutoffTimestamp;
+        
+        // FOCUS MODE INJECTION
+        const isActive = !activeStarIdRef.current || activeStarIdRef.current === star.id;
+        const focusAlpha = isActive ? 1.0 : 0.15;
+        const entityAlpha = (isVisibleByTime ? 1.0 : 0.08) * focusAlpha;
+
+        ctx.save();
+        ctx.globalAlpha = entityAlpha;
+
+        // Корона
+        const glow = ctx.createRadialGradient(worldX, worldY, 2, worldX, worldY, star.size * 2.2);
+        glow.addColorStop(0, star.color);
         glow.addColorStop(1, 'rgba(0,0,0,0)');
         ctx.fillStyle = glow;
         ctx.beginPath();
-        ctx.arc(x, y, planet.size * 2, 0, Math.PI * 2);
+        ctx.arc(worldX, worldY, star.size * 2.2, 0, Math.PI * 2);
         ctx.fill();
 
-        // Тело планеты
-        ctx.fillStyle = planet.color;
+        // Тело звезды
+        ctx.fillStyle = star.color;
         ctx.beginPath();
-        ctx.arc(x, y, planet.size, 0, Math.PI * 2);
+        ctx.arc(worldX, worldY, star.size, 0, Math.PI * 2);
         ctx.fill();
 
-        // Текстовая подпись планеты
-        ctx.fillStyle = '#f4f4f5';
-        ctx.font = '11px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(planet.title, x, y + planet.size + 16);
+        // Подпись звезды
+        if (!isMacro || morph > 0.3) {
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 11px sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(star.title, worldX, worldY + star.size + 14);
+        }
 
-        // Процент освоения поверх планеты
-        ctx.fillStyle = '#ffffff';
-        ctx.font = '9px monospace';
-        ctx.fillText(`${Math.round(planet.mastery)}%`, x, y + 3);
+        // Планеты
+        if (!isMacro || morph > 0.3) {
+          star.planets.forEach((planet) => {
+            planet.angle += planet.speed * (1 - morph);
 
-        // Спутники (Источники) на мини-орбите вокруг планеты
-        planet.sources.forEach((src, sIdx) => {
-          const sAngle = planet.angle * 3 + (sIdx * (Math.PI * 2)) / Math.max(planet.sources.length, 1);
-          const sDist = planet.size + 14;
-          const sx = x + Math.cos(sAngle) * sDist;
-          const sy = y + Math.sin(sAngle) * sDist;
+            const galaxyPX = worldX + Math.cos(planet.angle) * planet.orbitRadius;
+            const galaxyPY = worldY + Math.sin(planet.angle) * planet.orbitRadius;
 
-          ctx.fillStyle = '#38bdf8';
-          ctx.beginPath();
-          ctx.arc(sx, sy, 3, 0, Math.PI * 2);
-          ctx.fill();
-        });
+            const tPX = planet.timelineX !== undefined ? planet.timelineX : worldX;
+            const tPY = planet.timelineY !== undefined ? planet.timelineY : worldY;
 
-        // Сохраняем текущие мировые координаты планеты для отслеживания кликов
-        (planet as any).renderX = x;
-        (planet as any).renderY = y;
+            const px = galaxyPX * (1 - morph) + tPX * morph;
+            const py = galaxyPY * (1 - morph) + tPY * morph;
+
+            planet.renderX = px;
+            planet.renderY = py;
+
+            const planetAlpha = planet.timestamp <= cutoffTimestamp ? 1.0 : 0.06;
+            ctx.save();
+            ctx.globalAlpha = entityAlpha * planetAlpha;
+
+            // Орбита (растворяется при morph -> 1)
+            if (morph < 0.6) {
+              ctx.strokeStyle = `rgba(255, 255, 255, ${0.04 * (1 - morph * 1.5)})`;
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.arc(worldX, worldY, planet.orbitRadius * (1 - morph * 0.4), 0, Math.PI * 2);
+              ctx.stroke();
+            }
+
+            // Тело планеты
+            ctx.fillStyle = planet.color;
+            ctx.beginPath();
+            ctx.arc(px, py, planet.size, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Подпись
+            if (isMicro) {
+              ctx.fillStyle = '#a1a1aa';
+              ctx.font = '9px sans-serif';
+              ctx.fillText(planet.title, px, py + planet.size + 10);
+            }
+
+            // Спутники
+            if (isMicro && morph < 0.6) {
+              planet.moons.forEach((moon) => {
+                moon.angle += moon.speed;
+                const mx = px + Math.cos(moon.angle) * moon.dist;
+                const my = py + Math.sin(moon.angle) * moon.dist;
+                ctx.fillStyle = moon.color;
+                ctx.beginPath();
+                ctx.arc(mx, my, 2, 0, Math.PI * 2);
+                ctx.fill();
+              });
+            }
+            ctx.restore();
+          });
+        }
+        ctx.restore();
       });
 
       ctx.restore();
@@ -201,14 +714,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({ onOpenSubject })
     };
 
     animationFrameId = requestAnimationFrame(render);
-
     return () => {
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', resizeCanvas);
     };
-  }, [planets]);
+  }, [constellations, rootStars, viewMode, cutoffTimestamp, timeRange]);
 
-  // Обработка мыши: Pan (перетаскивание)
   const handleMouseDown = (e: React.MouseEvent) => {
     cameraRef.current.isDragging = true;
     cameraRef.current.startX = e.clientX - cameraRef.current.targetX;
@@ -225,26 +736,109 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({ onOpenSubject })
     cameraRef.current.isDragging = false;
   };
 
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+  // Поисковый индекс Spotlight
+  const searchableEntities = useMemo<SearchableEntity[]>(() => {
+    const list: SearchableEntity[] = [];
+    constellations.forEach((c) => {
+      list.push({
+        id: c.id,
+        title: c.title,
+        subtitle: `Созвездие (${c.stars.length} звезд)`,
+        type: 'constellation',
+        category: 'Кластер',
+        color: c.color,
+        worldX: c.renderX || 0,
+        worldY: c.renderY || 0,
+        targetZoom: 0.45,
+        originalEntity: c,
+      });
 
-    const onNativeWheel = (e: WheelEvent) => {
-      e.preventDefault(); // Теперь работает корректно и без ошибок
-      const zoomFactor = e.deltaY < 0 ? 1.15 : 0.85;
-      const newZoom = Math.max(0.4, Math.min(3.0, cameraRef.current.targetZoom * zoomFactor));
-      cameraRef.current.targetZoom = newZoom;
-    };
+      c.stars.forEach((star) => {
+        list.push({
+          id: star.id,
+          title: star.title,
+          subtitle: star.type === 'subject' ? `Предмет • Освоение: ${Math.round(star.meta?.mastery || 0)}%` : `Папка чатов`,
+          type: star.type as any,
+          category: star.type === 'subject' ? 'Звезда' : 'Папка',
+          color: star.color,
+          worldX: star.renderX || 0,
+          worldY: star.renderY || 0,
+          targetZoom: 1.2,
+          originalEntity: star,
+        });
 
-    // Регистрация с явным passive: false
-    canvas.addEventListener('wheel', onNativeWheel, { passive: false });
+        star.planets.forEach((planet) => {
+          list.push({
+            id: planet.id,
+            title: planet.title,
+            subtitle: `В системе "${star.title}"`,
+            type: planet.type as any,
+            category: planet.type === 'source' ? 'Источник' : 'Диалог',
+            color: planet.color,
+            worldX: planet.renderX || 0,
+            worldY: planet.renderY || 0,
+            targetZoom: 1.8,
+            originalEntity: planet,
+          });
 
-    return () => {
-      canvas.removeEventListener('wheel', onNativeWheel);
-    };
-  }, []);
+          planet.moons.forEach((moon) => {
+            list.push({
+              id: moon.id,
+              title: moon.title,
+              subtitle: `Инсайт диалога "${planet.title}"`,
+              type: 'insight',
+              category: 'Инсайт',
+              color: moon.color,
+              worldX: planet.renderX || 0,
+              worldY: planet.renderY || 0,
+              targetZoom: 2.2,
+              originalEntity: moon,
+            });
+          });
+        });
+      });
+    });
+    return list;
+  }, [constellations]);
 
-  // Клик по планете -> Фокус камеры + Инспектор
+  const handleSelectSearchEntity = (item: SearchableEntity) => {
+    cameraRef.current.targetX = -item.worldX * item.targetZoom;
+    cameraRef.current.targetY = -item.worldY * item.targetZoom;
+    cameraRef.current.targetZoom = item.targetZoom;
+
+    if (item.type === 'subject' || item.type === 'chat_folder') {
+      activeStarIdRef.current = item.id;
+    }
+
+    if (item.type === 'subject') {
+      inspectEntity({
+        id: item.id,
+        type: 'subject',
+        title: item.title,
+        subtitle: item.subtitle,
+        parentSubject: { id: item.id, title: item.title },
+        onOpenSubject: (id) => onOpenSubject && onOpenSubject(id, 'roadmap'),
+        onAskTutor: (id) => onOpenSubject && onOpenSubject(id, 'tutor'),
+      });
+    } else if (item.type === 'source') {
+      inspectEntity({
+        id: item.id,
+        type: 'source',
+        title: item.title,
+        subtitle: item.subtitle,
+        onOpenSource: () => onOpenSource && onOpenSource(item.id),
+      });
+    } else if (item.type === 'conversation') {
+      inspectEntity({
+        id: item.id,
+        type: 'claim',
+        title: item.title,
+        subtitle: item.subtitle,
+        onOpenSubject: () => onOpenChat && onOpenChat(item.id),
+      });
+    }
+  };
+
   const handleCanvasClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -254,82 +848,155 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({ onOpenSubject })
     const clickY = e.clientY - rect.top;
 
     const cam = cameraRef.current;
-    // Преобразуем координаты клика в мировые координаты холста
     const worldX = (clickX - canvas.width / 2 - cam.targetX) / cam.targetZoom;
     const worldY = (clickY - canvas.height / 2 - cam.targetY) / cam.targetZoom;
 
-    // Ищем планету, по которой кликнули
-    for (const planet of planets) {
-      const rx = (planet as any).renderX || 0;
-      const ry = (planet as any).renderY || 0;
-      const dist = Math.hypot(worldX - rx, worldY - ry);
+    const allStars: StarSystem[] = [...rootStars, ...constellations.flatMap((c) => c.stars)];
 
-      if (dist <= planet.size + 10) {
-        // Фокусируем камеру на планете
-        cam.targetX = -rx * 1.5;
-        cam.targetY = -ry * 1.5;
-        cam.targetZoom = 1.6;
-        selectedPlanetIdRef.current = planet.id;
+    for (const star of allStars) {
+      for (const planet of star.planets) {
+        if (planet.renderX !== undefined && planet.renderY !== undefined) {
+          const dist = Math.hypot(worldX - planet.renderX, worldY - planet.renderY);
+          if (dist <= planet.size + 8) {
+            cam.targetX = -planet.renderX * 1.6;
+            cam.targetY = -planet.renderY * 1.6;
+            cam.targetZoom = 1.6;
+            activeStarIdRef.current = star.id;
 
-        // Вызываем глобальный Inspector
-        inspectEntity({
-          id: planet.id,
-          type: 'subject',
-          title: planet.title,
-          subtitle: `Освоение предмета: ${Math.round(planet.mastery)}%`,
-          summary: `Планетная система знаний включает ${planet.sourcesCount} связанных первоисточников.`,
-          meta: {
-            освоение: `${Math.round(planet.mastery)}%`,
-            источников: planet.sourcesCount,
-          },
-          parentSubject: { id: planet.id, title: planet.title },
-          onOpenSubject: (subId) => {
-            if (onOpenSubject) {
-              onOpenSubject(subId, 'roadmap');
+            if (planet.type === 'conversation') {
+              inspectEntity({
+                id: planet.id,
+                type: 'claim',
+                title: planet.title,
+                subtitle: `Диалог в ветке "${star.title}"`,
+                summary: `Операционная память: ${planet.meta?.messageCount || 0} сообщений.`,
+                meta: { сообщений: planet.meta?.messageCount || 0 },
+                onOpenSubject: () => onOpenChat && onOpenChat(planet.id),
+              });
+            } else if (planet.type === 'source') {
+              inspectEntity({
+                id: planet.id,
+                type: 'source',
+                title: planet.title,
+                subtitle: `Первоисточник предмета "${star.title}"`,
+                summary: `Тип документа: ${planet.meta?.type || 'документ'}.`,
+                parentSubject: { id: star.id, title: star.title },
+                onOpenSource: () => onOpenSource && onOpenSource(planet.id),
+                onOpenSubject: (subId) => onOpenSubject && onOpenSubject(subId, 'sources'),
+              });
             }
-          },
-          onAskTutor: (subId, topic) => {
-            if (onOpenSubject) {
-              onOpenSubject(subId, 'tutor');
-            }
-          },
-        });
-        return;
+            return;
+          }
+        }
       }
     }
+
+    for (const star of allStars) {
+      if (star.renderX !== undefined && star.renderY !== undefined) {
+        const dist = Math.hypot(worldX - star.renderX, worldY - star.renderY);
+        if (dist <= star.size + 10) {
+          cam.targetX = -star.renderX * 1.2;
+          cam.targetY = -star.renderY * 1.2;
+          cam.targetZoom = 1.2;
+          activeStarIdRef.current = star.id;
+
+          if (star.type === 'subject') {
+            inspectEntity({
+              id: star.id,
+              type: 'subject',
+              title: star.title,
+              subtitle: `Звездная система | Освоение: ${Math.round(star.meta?.mastery || 0)}%`,
+              summary: star.meta?.description || `Включает ${star.planets.length} первоисточников.`,
+              parentSubject: { id: star.id, title: star.title },
+              meta: {
+                освоение: `${Math.round(star.meta?.mastery || 0)}%`,
+                источников: star.planets.length,
+              },
+              onOpenSubject: (subId) => onOpenSubject && onOpenSubject(subId, 'roadmap'),
+              onAskTutor: (subId) => onOpenSubject && onOpenSubject(subId, 'tutor'),
+            });
+          } else if (star.type === 'chat_folder') {
+            inspectEntity({
+              id: star.id,
+              type: 'pattern',
+              title: star.title,
+              subtitle: `Папка диалогов`,
+              summary: `Содержит ${star.planets.length} активных диалогов.`,
+              meta: { диалогов: star.planets.length },
+            });
+          }
+          return;
+        }
+      }
+    }
+
+    activeStarIdRef.current = null;
   };
 
   const resetCamera = () => {
     cameraRef.current.targetX = 0;
     cameraRef.current.targetY = 0;
-    cameraRef.current.targetZoom = 1;
-    selectedPlanetIdRef.current = null;
+    cameraRef.current.targetZoom = viewMode === 'timeline' ? 0.65 : 0.55;
+    activeStarIdRef.current = null;
   };
 
   return (
     <div className="relative w-full h-full bg-[#070709] overflow-hidden select-none">
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center bg-[#070709]/80 z-10 text-zinc-400 text-xs">
-          Инициализация орбитальной вселенной...
+          Построение 4D Вселенной...
         </div>
       )}
 
-      {/* Верхняя панель управления картой */}
+      {/* Верхняя панель */}
       <div className="absolute top-4 left-4 z-20 flex items-center gap-2 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 p-1.5 rounded-xl shadow-lg">
         <div className="px-2.5 py-1 text-xs font-bold text-white flex items-center gap-1.5">
           <Sparkles size={14} className="text-indigo-400" />
-          Universe 2.5D
+          Galaxy Universe 4D
         </div>
         <div className="h-4 w-[1px] bg-zinc-800" />
+
+        {/* Переключатель Galaxy / Timeline */}
         <button
-          onClick={() => { cameraRef.current.targetZoom = Math.min(3.0, cameraRef.current.targetZoom * 1.2); }}
+          onClick={() => {
+            const nextMode = viewMode === 'galaxy' ? 'timeline' : 'galaxy';
+            setViewMode(nextMode);
+            resetCamera();
+          }}
+          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+            viewMode === 'timeline'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
+          }`}
+          title="Сменить проекцию Вселенной"
+        >
+          {viewMode === 'timeline' ? <Clock size={13} /> : <Orbit size={13} />}
+          <span>{viewMode === 'timeline' ? 'Timeline' : 'Galaxy'}</span>
+        </button>
+
+        <div className="h-4 w-[1px] bg-zinc-800" />
+
+        <button
+          onClick={() => setIsSpotlightOpen(true)}
+          className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all flex items-center gap-1.5 px-2 text-xs"
+          title="Быстрый поиск (Ctrl+K)"
+        >
+          <Search size={13} />
+          <span>Поиск</span>
+          <kbd className="text-[10px] text-zinc-500 font-mono bg-zinc-900 px-1 rounded">Ctrl+K</kbd>
+        </button>
+
+        <div className="h-4 w-[1px] bg-zinc-800" />
+
+        <button
+          onClick={() => { cameraRef.current.targetZoom = Math.min(3.5, cameraRef.current.targetZoom * 1.25); }}
           className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
           title="Приблизить"
         >
           <ZoomIn size={15} />
         </button>
         <button
-          onClick={() => { cameraRef.current.targetZoom = Math.max(0.4, cameraRef.current.targetZoom * 0.8); }}
+          onClick={() => { cameraRef.current.targetZoom = Math.max(0.12, cameraRef.current.targetZoom * 0.75); }}
           className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
           title="Отдалить"
         >
@@ -338,14 +1005,57 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({ onOpenSubject })
         <button
           onClick={resetCamera}
           className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all flex items-center gap-1 px-2.5 text-xs"
-          title="Сбросить вид"
+          title="Сброс камеры"
         >
           <RotateCcw size={13} />
           <span>Центр</span>
         </button>
       </div>
 
-      {/* Интерактивный Canvas */}
+      {/* Нижняя плавающая панель Таймлайна (Time Scrubber) */}
+      <div
+        className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl bg-[#111116]/90 backdrop-blur-md border border-zinc-800/90 rounded-2xl px-4 py-3 shadow-2xl transition-all duration-300 ${
+          viewMode === 'timeline' ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'
+        }`}
+      >
+        <div className="flex items-center justify-between text-xs text-zinc-400 mb-2">
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setIsPlaying((p) => !p)}
+              className="p-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-all"
+              title={isPlaying ? 'Пауза' : 'Воспроизвести эволюцию'}
+            >
+              {isPlaying ? <Pause size={12} /> : <Play size={12} />}
+            </button>
+            <span className="font-mono text-zinc-200">
+              {new Date(cutoffTimestamp).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}
+            </span>
+          </div>
+          <span className="text-[11px] font-mono text-zinc-500">
+            {cutoffTimestamp >= timeRange.max ? 'Текущий момент (Всё)' : 'Исторический срез'}
+          </span>
+        </div>
+
+        <input
+          type="range"
+          min={timeRange.min}
+          max={timeRange.max}
+          value={cutoffTimestamp}
+          onChange={(e) => {
+            setIsPlaying(false);
+            setCutoffTimestamp(Number(e.target.value));
+          }}
+          className="w-full accent-indigo-500 h-1.5 bg-zinc-800 rounded-lg cursor-pointer"
+        />
+      </div>
+
+      <UniverseSpotlight
+        isOpen={isSpotlightOpen}
+        onClose={() => setIsSpotlightOpen(false)}
+        entities={searchableEntities}
+        onSelectEntity={handleSelectSearchEntity}
+      />
+
       <canvas
         ref={canvasRef}
         onMouseDown={handleMouseDown}
