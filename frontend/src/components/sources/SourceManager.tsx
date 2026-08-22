@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { sourcesApi } from '../../api/sources';
+import { sourcesApi, SourceItem } from '../../api/sources';
 import { Source } from '../../types/source';
 import { DocumentEditorModal } from './DocumentEditorModal';
 import { ObsidianImportModal } from '../connectors/ObsidianImportModal';
@@ -39,7 +39,7 @@ const STATUS_BADGE: Record<string, { className: string; icon: React.ReactNode }>
 const ACCEPTED_EXTENSIONS = '.md,.txt,.pdf,.docx,.xlsx,.csv,.json,.png,.jpg,.jpeg,.webp,.heic';
 
 export function SourceManager({ isOpen, onClose }: Props) {
-  const [sources, setSources] = useState<Source[]>([]);
+  const [sources, setSources] = useState<SourceItem[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());

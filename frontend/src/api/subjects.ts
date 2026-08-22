@@ -10,6 +10,8 @@ export interface SubjectItem {
   sources_count?: number;
   created_at: string;
   updated_at: string;
+  is_mastered?: boolean;
+  stats?: any;
 }
 
 export type Subject = SubjectItem;
@@ -82,8 +84,8 @@ export const subjectsApi = {
     description?: string;
     icon?: string;
     color_theme?: string;
-  }): Promise<{ id: string; title: string; is_mastered: boolean }> => {
-    return fetchApi<{ id: string; title: string; is_mastered: boolean }>('/subjects', {
+  }): Promise<SubjectItem> => {
+    return fetchApi<SubjectItem>('/subjects', {
       method: 'POST',
       body: JSON.stringify(data),
     });

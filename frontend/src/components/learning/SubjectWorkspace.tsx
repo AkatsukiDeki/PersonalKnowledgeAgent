@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Subject, subjectsApi } from '../../api/subjects';
+import { Subject, SubjectDetail, subjectsApi } from '../../api/subjects';
 import { ArrowLeft, BookOpen, MessageSquare, Map, BarChart2, Award, SlidersHorizontal, GraduationCap } from 'lucide-react';
 import clsx from 'clsx';
 import { SubjectRoadmap } from './SubjectRoadmap';
@@ -15,7 +15,7 @@ type Tab = 'roadmap' | 'materials' | 'tutor' | 'stats' | 'sources';
 
 export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void; initialTab?: Tab }> = ({ subjectId, onBack, initialTab }) => {
   const { t } = useLanguage();
-  const [subject, setSubject] = useState<Subject | null>(null);
+  const [subject, setSubject] = useState<SubjectDetail | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(() => {
     if (initialTab && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(initialTab)) {
       return initialTab === 'sources' ? 'materials' : initialTab;
@@ -62,7 +62,7 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
     setIsEditingTitle(false);
     if (editTitle.trim() !== subject?.title && subject) {
       const updated = await subjectsApi.updateSubject(subject.id, { title: editTitle.trim() });
-      setSubject(updated);
+      setSubject({ ...subject, title: editTitle.trim() });
     }
   };
 
@@ -70,7 +70,7 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
     setIsEditingDesc(false);
     if (editDesc.trim() !== subject?.description && subject) {
       const updated = await subjectsApi.updateSubject(subject.id, { description: editDesc.trim() });
-      setSubject(updated);
+      setSubject({ ...subject, description: editDesc.trim() });
     }
   };
 

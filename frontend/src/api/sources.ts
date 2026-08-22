@@ -131,13 +131,14 @@ export const sourcesApi = {
       body: JSON.stringify(data),
     });
   },
-  create: async (payload: { title: string; content: string; domain?: string; folder?: string }): Promise<SourceItem> => {
+  create: async (payload: { title: string; content: string; domain?: string; folder?: string; source_type?: string; meta_info?: Record<string, any> }): Promise<SourceItem> => {
     return sourcesApi.createNote({
       title: payload.title,
       content: payload.content,
       domain: payload.domain,
       folder: payload.folder,
-      source_type: 'note'
+      source_type: payload.source_type || 'note',
+      meta_info: payload.meta_info
     });
   },
 

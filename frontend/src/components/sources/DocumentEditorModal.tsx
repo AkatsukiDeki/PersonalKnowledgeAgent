@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { sourcesApi } from '../../api/sources';
-import { SourceDetail } from '../../types/source';
+import { sourcesApi, SourceDetail } from '../../api/sources';
 import { X, Save, RefreshCw, Loader2, CheckCircle2, XCircle, FileText, ExternalLink, GraduationCap, Sparkles } from 'lucide-react';
 import { LearningModal } from '../learning/LearningModal';
 
