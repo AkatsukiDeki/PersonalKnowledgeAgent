@@ -146,6 +146,19 @@ export const EntityInspector: React.FC = () => {
           Действия
         </span>
 
+        {activeEntity.onTracePath && (
+          <button
+            onClick={() => {
+              activeEntity.onTracePath!();
+              closeInspector();
+            }}
+            className="w-full py-2 px-3 bg-indigo-600/20 hover:bg-indigo-600/40 border border-indigo-500/50 text-indigo-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all mb-2"
+          >
+            <Compass size={14} />
+            Трассировать путь знания
+          </button>
+        )}
+
         {activeEntity.meta?.superseded_by && activeEntity.onJumpToTargetNode && (
           <button
             onClick={() => {

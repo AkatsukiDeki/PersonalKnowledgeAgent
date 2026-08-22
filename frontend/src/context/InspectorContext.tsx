@@ -18,6 +18,7 @@ export interface InspectableEntity {
   onViewTimeline?: (eventId?: string) => void;
   onJumpToTargetNode?: (nodeId: string) => void;
   onOpenChat?: (convId: string, messageId?: string) => void;
+  onTracePath?: () => void;
 }
 
 interface InspectorContextType {

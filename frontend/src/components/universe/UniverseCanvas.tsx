@@ -4,7 +4,7 @@ import { conversationsApi } from '../../api/conversations';
 import { claimsApi, ClaimItem } from '../../api/claims';
 import { useInspector } from '../../context/InspectorContext';
 import { UniverseSpotlight, SearchableEntity } from './UniverseSpotlight';
-import { Sparkles, ZoomIn, ZoomOut, RotateCcw, Search, Clock, Orbit, Play, Pause } from 'lucide-react';
+import { Sparkles, ZoomIn, ZoomOut, RotateCcw, Search, Clock, Orbit, Play, Pause, X } from 'lucide-react';
 
 interface Moon {
   id: string;
@@ -18,6 +18,19 @@ interface Moon {
   supersededAt?: number;
   supersededById?: string | null;
   isActive: boolean;
+}
+
+interface CausalEdge {
+  fromId: string;
+  toId: string;
+  type: string;
+}
+
+interface Particle {
+  edgeIndex: number;
+  progress: number;
+  speed: number;
+  spawnDelay: number;
 }
 
 interface Planet {
@@ -93,6 +106,39 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   const [cutoffTimestamp, setCutoffTimestamp] = useState<number>(Date.now());
   const [isPlaying, setIsPlaying] = useState(false);
   const activeStarIdRef = useRef<string | null>(null);
+
+  const nodePositionsRef = useRef<Record<string, {x: number, y: number, color: string, alpha: number}>>({});
+  const edgesRef = useRef<CausalEdge[]>([]);
+  const particlesRef = useRef<Particle[]>([]);
+  const [tracedNodeId, setTracedNodeId] = useState<string | null>(null);
+  const [tracedNodesMap, setTracedNodesMap] = useState<Set<string>>(new Set());
+  const traceZoomRef = useRef(false);
+
+  useEffect(() => {
+    if (!tracedNodeId) {
+      setTracedNodesMap(new Set());
+      traceZoomRef.current = false;
+      return;
+    }
+    const nodes = new Set<string>([tracedNodeId]);
+    const edges = edgesRef.current;
+    const queue = [tracedNodeId];
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const e of edges) {
+        if (e.fromId === cur && !nodes.has(e.toId)) {
+          nodes.add(e.toId);
+          queue.push(e.toId);
+        }
+        if (e.toId === cur && !nodes.has(e.fromId)) {
+          nodes.add(e.fromId);
+          queue.push(e.fromId);
+        }
+      }
+    }
+    setTracedNodesMap(nodes);
+    traceZoomRef.current = true;
+  }, [tracedNodeId]);
 
   const morphProgressRef = useRef(0);
   const cameraRef = useRef({
@@ -191,6 +237,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         });
 
         const newConstellations: Constellation[] = [];
+        const extractedEdges: CausalEdge[] = [];
         let cIdx = 0;
         const activeClusters = Object.entries(clusterMap).filter(([_, val]) => val.subjects.length > 0);
 
@@ -206,6 +253,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
             const planets: Planet[] = currentSources.map((src: any, pIdx: number) => {
               const srcTs = src.created_at ? new Date(src.created_at).getTime() : subTs;
+              extractedEdges.push({ fromId: String(src.id), toId: String(sub.id), type: 'source_to_subject' });
               return {
                 id: String(src.id),
                 title: src.title || 'Документ',
@@ -273,9 +321,15 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 const claimTs = claimItem.created_at ? new Date(claimItem.created_at).getTime() : chatTs;
                 const isSuperseded = Boolean(claimItem.superseded_by);
                 const supersededAt = isSuperseded && claimItem.updated_at ? new Date(claimItem.updated_at).getTime() : undefined;
+                
+                const moonId = String(claimItem.id || `claim-${mIdx}-${chat.id}`);
+                extractedEdges.push({ fromId: moonId, toId: String(chat.id), type: 'claim_to_chat' });
+                if (claimItem.superseded_by) {
+                   extractedEdges.push({ fromId: moonId, toId: claimItem.superseded_by, type: 'superseded' });
+                }
 
                 return {
-                  id: String(claimItem.id || `claim-${mIdx}`),
+                  id: moonId,
                   title: claimItem.content || 'Инсайт',
                   type: claimItem.claim_type || 'insight',
                   angle: mIdx * Math.PI,
@@ -376,6 +430,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           setCutoffTimestamp(maxTime);
           setConstellations(newConstellations);
           setRootStars([coreSystem]);
+          edgesRef.current = extractedEdges;
         }
       } catch (err) {
         console.error('Failed to load real timeline universe data:', err);
@@ -458,6 +513,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       const isMacro = currentZoom < 0.45 && morph < 0.5;
       const isMicro = currentZoom >= 0.85 || morph > 0.5;
 
+      nodePositionsRef.current = {};
+      
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
@@ -591,6 +648,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
         if (starAlpha <= 0) return;
 
+        nodePositionsRef.current[star.id] = { x: worldX, y: worldY, color: star.color, alpha: starAlpha };
+
         ctx.save();
         ctx.globalAlpha = starAlpha;
 
@@ -635,6 +694,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             planet.renderX = px;
             planet.renderY = py;
 
+            nodePositionsRef.current[planet.id] = { x: px, y: py, color: planet.color, alpha: starAlpha * planetAlpha };
+
             ctx.save();
             ctx.globalAlpha = starAlpha * planetAlpha;
 
@@ -672,6 +733,9 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 ctx.save();
                 ctx.fillStyle = isSupersededAtCurrentCutoff ? '#71717a' : moon.color;
                 ctx.globalAlpha = isSupersededAtCurrentCutoff ? 0.35 : 1.0;
+                
+                nodePositionsRef.current[moon.id] = { x: mx, y: my, color: moon.color, alpha: ctx.globalAlpha * starAlpha * planetAlpha };
+
                 ctx.beginPath();
                 ctx.arc(mx, my, 2, 0, Math.PI * 2);
                 ctx.fill();
@@ -689,6 +753,143 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         }
         ctx.restore();
       });
+
+      // --- DRAW KNOWLEDGE FLOW ---
+      const positions = nodePositionsRef.current;
+      const isTracing = tracedNodeId !== null;
+
+      if (traceZoomRef.current) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        tracedNodesMap.forEach(id => {
+          const pos = positions[id];
+          if (pos) {
+            minX = Math.min(minX, pos.x);
+            maxX = Math.max(maxX, pos.x);
+            minY = Math.min(minY, pos.y);
+            maxY = Math.max(maxY, pos.y);
+          }
+        });
+        
+        if (minX !== Infinity) {
+          const w = Math.max(maxX - minX, 100);
+          const h = Math.max(maxY - minY, 100);
+          const centerX = minX + w / 2;
+          const centerY = minY + h / 2;
+          
+          const maxDim = Math.max(w, h);
+          let optimalZoom = Math.min(canvas.width, canvas.height) / (maxDim * 1.6);
+          optimalZoom = Math.max(0.12, Math.min(optimalZoom, 1.8));
+
+          cam.targetX = -centerX * optimalZoom;
+          cam.targetY = -centerY * optimalZoom;
+          cam.targetZoom = optimalZoom;
+          traceZoomRef.current = false;
+        }
+      }
+
+      edgesRef.current.forEach((edge, i) => {
+        const fromPos = positions[edge.fromId];
+        const toPos = positions[edge.toId];
+        if (!fromPos || !toPos) return;
+
+        const isEdgeTraced = isTracing ? (tracedNodesMap.has(edge.fromId) && tracedNodesMap.has(edge.toId)) : false;
+        
+        // Hide untraced edges when tracing
+        if (isTracing && !isEdgeTraced) return;
+
+        // Base alpha depends on connected nodes
+        const baseAlpha = Math.min(fromPos.alpha, toPos.alpha) * (isTracing ? 0.8 : 0.15);
+        if (baseAlpha <= 0.01) return;
+
+        ctx.save();
+        ctx.globalAlpha = baseAlpha;
+        
+        // Draw organic Bezier Curve
+        const dx = toPos.x - fromPos.x;
+        const dy = toPos.y - fromPos.y;
+        
+        const cx = fromPos.x + dx * 0.5 + dy * 0.2;
+        const cy = fromPos.y + dy * 0.5 - dx * 0.2;
+
+        ctx.strokeStyle = fromPos.color;
+        ctx.lineWidth = isTracing ? 1.5 : 0.8;
+        if (edge.type === 'superseded') {
+           ctx.setLineDash([4, 4]);
+           ctx.strokeStyle = '#f59e0b';
+        }
+        
+        ctx.beginPath();
+        ctx.moveTo(fromPos.x, fromPos.y);
+        ctx.quadraticCurveTo(cx, cy, toPos.x, toPos.y);
+        ctx.stroke();
+
+        ctx.restore();
+      });
+
+      // Spawn particles
+      if (Math.random() < (isTracing ? 0.8 : 0.2)) {
+        const activeEdges = edgesRef.current.map((e, idx) => ({ e, idx })).filter(({ e }) => {
+           if (isTracing) return tracedNodesMap.has(e.fromId) && tracedNodesMap.has(e.toId);
+           return positions[e.fromId] && positions[e.toId] && positions[e.fromId].alpha > 0.1 && positions[e.toId].alpha > 0.1;
+        });
+
+        if (activeEdges.length > 0) {
+           const rand = activeEdges[Math.floor(Math.random() * activeEdges.length)];
+           particlesRef.current.push({
+             edgeIndex: rand.idx,
+             progress: 0,
+             speed: 0.005 + Math.random() * 0.01,
+             spawnDelay: 0
+           });
+        }
+      }
+
+      // Draw and update particles
+      ctx.save();
+      for (let i = particlesRef.current.length - 1; i >= 0; i--) {
+        const p = particlesRef.current[i];
+        const edge = edgesRef.current[p.edgeIndex];
+        const fromPos = positions[edge.fromId];
+        const toPos = positions[edge.toId];
+
+        if (!fromPos || !toPos) {
+           particlesRef.current.splice(i, 1);
+           continue;
+        }
+
+        p.progress += p.speed * (1 - morph * 0.5);
+        if (p.progress >= 1) {
+           particlesRef.current.splice(i, 1);
+           continue;
+        }
+
+        const dx = toPos.x - fromPos.x;
+        const dy = toPos.y - fromPos.y;
+        const cx = fromPos.x + dx * 0.5 + dy * 0.2;
+        const cy = fromPos.y + dy * 0.5 - dx * 0.2;
+
+        const t = p.progress;
+        const mt = 1 - t;
+        
+        const px = mt * mt * fromPos.x + 2 * mt * t * cx + t * t * toPos.x;
+        const py = mt * mt * fromPos.y + 2 * mt * t * cy + t * t * toPos.y;
+        
+        ctx.globalAlpha = Math.min(fromPos.alpha, toPos.alpha);
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(px, py, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        const glow = ctx.createRadialGradient(px, py, 0, px, py, 6);
+        glow.addColorStop(0, fromPos.color);
+        glow.addColorStop(1, 'rgba(0,0,0,0)');
+        ctx.fillStyle = glow;
+        ctx.beginPath();
+        ctx.arc(px, py, 6, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.restore();
 
       ctx.restore();
       animationFrameId = requestAnimationFrame(render);
@@ -806,6 +1007,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         parentSubject: { id: item.id, title: item.title },
         onOpenSubject: (id) => onOpenSubject && onOpenSubject(id, 'roadmap'),
         onAskTutor: (id) => onOpenSubject && onOpenSubject(id, 'tutor'),
+        onTracePath: () => setTracedNodeId(item.id),
       });
     } else if (item.type === 'source') {
       inspectEntity({
@@ -814,6 +1016,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         title: item.title,
         subtitle: item.subtitle,
         onOpenSource: () => onOpenSource && onOpenSource(item.id),
+        onTracePath: () => setTracedNodeId(item.id),
       });
     } else if (item.type === 'conversation') {
       inspectEntity({
@@ -822,6 +1025,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         title: item.title,
         subtitle: item.subtitle,
         onOpenChat: () => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: item.id } })),
+        onTracePath: () => setTracedNodeId(item.id),
       });
     } else if (item.type === 'insight') {
       const moon = item.originalEntity as Moon;
@@ -835,6 +1039,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           // Extract conversation ID from planet? Wait, we didn't store planet in originalEntity.
         },
         onJumpToTargetNode: handleJumpToTargetNode,
+        onTracePath: () => setTracedNodeId(item.id),
       });
     }
   };
@@ -848,6 +1053,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     const clickY = e.clientY - rect.top;
 
     const cam = cameraRef.current;
+    
+    // hit testing ...
     const worldX = (clickX - canvas.width / 2 - cam.targetX) / cam.targetZoom;
     const worldY = (clickY - canvas.height / 2 - cam.targetY) / cam.targetZoom;
 
@@ -877,6 +1084,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 },
                 onJumpToTargetNode: handleJumpToTargetNode,
                 onOpenChat: (convId) => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: convId } })),
+                onTracePath: () => setTracedNodeId(moon.id),
               });
               return;
             }
@@ -907,6 +1115,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                   создано: dateStr,
                 },
                 onOpenChat: () => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: planet.id } })),
+                onTracePath: () => setTracedNodeId(planet.id),
               });
             } else if (planet.type === 'source') {
               inspectEntity({
@@ -921,6 +1130,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 },
                 onOpenSource: () => onOpenSource && onOpenSource(planet.id),
                 onOpenSubject: (subId) => onOpenSubject && onOpenSubject(subId, 'sources'),
+                onTracePath: () => setTracedNodeId(planet.id),
               });
             }
             return;
@@ -959,6 +1169,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               },
               onOpenSubject: (subId) => onOpenSubject && onOpenSubject(subId, 'roadmap'),
               onAskTutor: (subId) => onOpenSubject && onOpenSubject(subId, 'tutor'),
+              onTracePath: () => setTracedNodeId(star.id),
             });
           } else if (star.type === 'chat_folder') {
             inspectEntity({
@@ -971,6 +1182,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 диалогов: star.planets.length,
                 создано: dateStr,
               },
+              onTracePath: () => setTracedNodeId(star.id),
             });
           }
           return;
@@ -979,6 +1191,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     }
 
     activeStarIdRef.current = null;
+    setTracedNodeId(null);
   };
 
   const resetCamera = () => {
@@ -1057,6 +1270,19 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           <RotateCcw size={13} />
           <span>Центр</span>
         </button>
+          
+          {tracedNodeId && (
+            <button
+              onClick={() => setTracedNodeId(null)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-medium rounded-lg transition-all"
+              title="Сбросить трассировку потока (Esc или клик в пустоту)"
+            >
+              <X size={14} />
+              Trace Active
+            </button>
+          )}
+
+        </div>
       </div>
 
       {/* Нижняя плавающая панель скраббера времени */}
