@@ -20,12 +20,15 @@ from fastapi import (
     File,
     Form,
     Query,
+    Request,
 )
 from sqlalchemy import select, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
+import magic
 
 from ..db.models import Source, Chunk, Claim
 from ..db.session import get_db, async_session_factory
+from ..core.security import limiter
 from ..knowledge.ingestion import process_source_chunks_bg
 from ..knowledge.file_ingestion import ingest_file_revision
 from ..schemas.source import (
@@ -46,6 +49,8 @@ DATA_DIR = os.path.join(
     "data",
     "sources",
 )
+
+MAX_UPLOAD_SIZE = 25 * 1024 * 1024  # 25 MB
 
 
 class MLStripper(HTMLParser):
@@ -183,7 +188,9 @@ async def upload_url(
 
 
 @router.post("/upload", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
+@limiter.limit("30/minute")
 async def upload_source(
+    request: Request,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
@@ -201,6 +208,13 @@ async def upload_source(
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
+        
+    if len(file_bytes) > MAX_UPLOAD_SIZE:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 25MB.")
+        
+    mime_type = magic.from_buffer(file_bytes[:2048], mime=True)
+    if mime_type in ("application/x-executable", "application/x-dosexec"):
+        raise HTTPException(status_code=400, detail="Executable files are not allowed")
 
     _ensure_data_dir()
     source_title = title.strip() if (title and title.strip()) else os.path.splitext(file.filename)[0]
@@ -440,3 +454,19 @@ async def _safe_reindex(source_id: uuid.UUID):
 
     await process_source_chunks_bg(source_id)
     logger.info(f"[ReIndex] Safe re-index completed for source {source_id}")
+
+@router.delete('/{source_id}', status_code=status.HTTP_204_NO_CONTENT)
+async def delete_source(source_id: str, db: AsyncSession = Depends(get_db)):
+    import uuid
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail='Invalid UUID format')
+    stmt = select(Source).where(Source.id == sid)
+    res = await db.execute(stmt)
+    source = res.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail='Source not found')
+    await db.delete(source)
+    await db.commit()
+    return

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str
     GEMINI_API_KEY: Optional[str] = None
+    PKA_API_KEY: Optional[str] = None
 
     # Grounding Configuration
     FACTUAL_MIN_TOP1_SIMILARITY: float = 0.40

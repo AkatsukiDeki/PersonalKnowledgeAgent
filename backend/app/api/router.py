@@ -1,4 +1,5 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
+from ..core.security import verify_api_key
 
 from .chat import router as chat_router
 from .sources import router as sources_router
@@ -21,8 +22,8 @@ from .learning import router as learning_router
 
 api_router = APIRouter()
 
-api_router.include_router(sources_router)
-api_router.include_router(chat_router)
+api_router.include_router(sources_router, dependencies=[Depends(verify_api_key)])
+api_router.include_router(chat_router, dependencies=[Depends(verify_api_key)])
 api_router.include_router(conversations.router, prefix="/conversations", tags=["conversations"])
 api_router.include_router(claims_router)
 api_router.include_router(entities_router)

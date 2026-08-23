@@ -13,6 +13,11 @@ export async function fetchApi<T>(endpoint: string, options: RequestInit = {}): 
     headers.set('X-Target-Language', targetLang);
   }
 
+  const apiKey = import.meta.env.VITE_PKA_API_KEY;
+  if (apiKey) {
+    headers.set('X-API-Key', apiKey);
+  }
+
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${cleanEndpoint}`;
 

@@ -72,9 +72,9 @@ export const SubjectList: React.FC<{ onSelect: (id: string) => void }> = ({ onSe
               className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-6 cursor-pointer hover:border-indigo-500/50 hover:bg-zinc-800/50 transition-all group relative overflow-hidden"
             >
               {/* Decorative gradient orb */}
-              <div className={`absolute -top-12 -right-12 w-32 h-32 bg-${subject.color_theme}-500/10 rounded-full blur-3xl group-hover:bg-${subject.color_theme}-500/20 transition-all`} />
+              <div className={`absolute -top-12 -right-12 w-32 h-32 bg-${subject.color_theme}-500/10 rounded-full blur-3xl group-hover:bg-${subject.color_theme}-500/20 transition-all pointer-events-none`} />
               
-              <div className="flex justify-between items-start mb-4">
+              <div className="flex justify-between items-start mb-4 relative z-10">
                 <div className={`p-3 bg-${subject.color_theme}-500/20 rounded-lg text-${subject.color_theme}-400`}>
                   <Book size={24} />
                 </div>

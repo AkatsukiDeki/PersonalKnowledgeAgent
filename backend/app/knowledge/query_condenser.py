@@ -13,17 +13,16 @@ async def rewrite_query(query: str, history: List[Dict[str, str]]) -> Tuple[bool
     if not history:
         return True, query
 
-    # Быстрая эвристика: если текущий запрос длинный (больше 4-5 слов) или содержит
-    # специфические тех. термины/сущности, он скорее всего самодостаточен.
-    # Конденсация нужна только для коротких уточняющих вопросов со словарями отсылок.
+    # Быстрая эвристика: если в сообщении > 4 слов и нет местоимений-анафор,
+    # оригинальный текст сразу летит в эмбеддер без переписывания.
     query_lower = query.lower()
-    context_triggers = ["а ", "и ", "туда", "него", "ней", "них", "этот", "эту", "эти", "тоже", "еще раз", "почему",
-                        "зачем"]
-
-    # Если вопрос длинный и не начинается с явных слов-паразитов контекста — не дергаем LLM
     words = query.strip().split()
-    if len(words) > 6 and not any(query_lower.startswith(tr) for tr in ["а ", "и ", "то "]):
-        logger.info(f"[QueryCondenser] Query is self-contained (length > 6). Skipping LLM rewrite.")
+    
+    anaphors = {"он", "она", "оно", "они", "это", "этот", "эта", "эти", "тот", "та", "те", "почему", "зачем", "как", "ее", "его", "их", "туда"}
+    has_anaphors = any(word.lower() in anaphors for word in words)
+    
+    if len(words) > 4 and not has_anaphors:
+        logger.info(f"[QueryCondenser] Query is self-contained (length > 4, no anaphors). Skipping LLM rewrite.")
         return True, query
 
     recent_history = history[-4:]

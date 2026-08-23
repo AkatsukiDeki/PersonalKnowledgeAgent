@@ -18,9 +18,15 @@ export async function streamChat(
   image_mime_type?: string
 ) {
   try {
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const apiKey = import.meta.env.VITE_PKA_API_KEY;
+    if (apiKey) {
+      headers['X-API-Key'] = apiKey;
+    }
+
     const response = await fetch(`${BASE_URL}/chat/stream`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ query, history, conversation_id, attached_source_ids, mode, image_base64, image_mime_type }),
     });
 

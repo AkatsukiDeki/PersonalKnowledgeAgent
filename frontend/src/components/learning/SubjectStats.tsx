@@ -14,6 +14,7 @@ import {
   Download
 } from 'lucide-react';
 import clsx from 'clsx';
+import { GlobalSkillRadarChart } from './SkillRadarChart';
 
 interface SubjectStatsProps {
   subjectId: string;
@@ -195,8 +196,11 @@ export const SubjectStats: React.FC<SubjectStatsProps> = ({ subjectId }) => {
         </div>
       </div>
 
-      {/* GitHub Style Activity Heatmap */}
-      <div className="bg-[#111115] border border-zinc-800/80 rounded-2xl p-6">
+      {/* 2-Column Grid for Heatmap and Radar */}
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-4 items-stretch">
+        {/* Left Column: Activity Heatmap */}
+        <div className="w-full">
+          <div className="bg-[#111115] border border-zinc-800/80 rounded-2xl p-6 h-full flex flex-col">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-6">
           <div className="flex items-center gap-2">
             <CalendarDays size={16} className="text-indigo-400" />
@@ -258,6 +262,13 @@ export const SubjectStats: React.FC<SubjectStatsProps> = ({ subjectId }) => {
           <div className="w-3 h-3 rounded-[2px] bg-indigo-500 border border-indigo-400" />
           <div className="w-3 h-3 rounded-[2px] bg-indigo-400 border border-white" />
           <span>Больше</span>
+        </div>
+          </div>
+        </div>
+
+        {/* Right Column: Skill Radar */}
+        <div className="w-full h-[320px] xl:h-auto">
+          <GlobalSkillRadarChart />
         </div>
       </div>
 

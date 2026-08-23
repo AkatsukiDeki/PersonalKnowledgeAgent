@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { Message } from '../../types/chat';
-import { Bot, User, X } from 'lucide-react';
+import { Bot, User, X, Copy, Check } from 'lucide-react';
 import { ProvenanceTree } from './ProvenanceTree';
 
 interface Props {
@@ -10,10 +10,21 @@ interface Props {
 
 export function MessageView({ message }: Props) {
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isCopied, setIsCopied] = useState(false);
   const isUser = message.role === 'user';
 
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setIsCopied(true);
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy text: ', err);
+    }
+  };
+
   return (
-    <div className={`flex gap-3 my-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={`group flex gap-3 my-3 ${isUser ? 'justify-end' : 'justify-start'}`}>
       {/* Assistant avatar */}
       {!isUser && (
         <div className="w-8 h-8 rounded-lg bg-entity-decision/20 border border-entity-decision/30 flex items-center justify-center text-entity-decision shrink-0 mt-1">
@@ -23,14 +34,22 @@ export function MessageView({ message }: Props) {
 
       {/* Message bubble */}
       <div
-        className={`max-w-[80%] rounded-xl text-sm leading-relaxed ${
+        className={`relative max-w-[80%] rounded-xl text-sm leading-relaxed ${
           isUser
             ? 'bg-white/5 border border-white/10 text-zinc-100 px-4 py-3 rounded-br-sm'
             : 'bg-[#0B0D13]/60 backdrop-blur-sm border border-white/5 text-zinc-200 px-4 py-3 rounded-bl-sm'
         }`}
       >
+        {/* Copy button */}
+        <button
+          onClick={handleCopy}
+          className="absolute top-2 right-2 p-1.5 rounded-md bg-black/40 backdrop-blur-md border border-white/10 text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black/60 hover:text-white z-10"
+          title="Копировать"
+        >
+          {isCopied ? <Check size={14} className="text-green-400" /> : <Copy size={14} />}
+        </button>
         {isUser ? (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-2 pr-6">
             {message.image_base64 && (
               <>
                 <img 
@@ -64,7 +83,7 @@ export function MessageView({ message }: Props) {
             <p className="whitespace-pre-wrap">{message.content}</p>
           </div>
         ) : (
-          <div className="prose-deep-space">
+          <div className="prose-deep-space pr-6">
             <ReactMarkdown>{message.content}</ReactMarkdown>
           </div>
         )}

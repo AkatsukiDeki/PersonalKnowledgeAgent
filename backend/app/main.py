@@ -7,6 +7,10 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.router import api_router
 from .core.config import settings
+from .core.security import limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import _rate_limit_exceeded_handler
+from slowapi.middleware import SlowAPIMiddleware
 from .db.init_db import init_database
 import logging
 
@@ -44,6 +48,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 app.include_router(api_router, prefix="/api/v1")
 

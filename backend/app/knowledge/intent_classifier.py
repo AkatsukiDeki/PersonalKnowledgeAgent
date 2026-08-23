@@ -3,8 +3,22 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def is_code_query(text: str) -> bool:
+    CODE_TRIGGERS = {"def ", "class ", "SELECT ", "FROM ", "import ", "curl ", "docker ", "const ", "function"}
+    CODE_SYMBOLS = {"{", "}", "();", "=>", "==", "!=", "::"}
+    if any(trigger in text for trigger in CODE_TRIGGERS):
+        return True
+    if any(symbol in text for symbol in CODE_SYMBOLS):
+        return True
+    return False
+
+
 async def classify_intent(query: str) -> str:
     """Classify user query into FACTUAL, ANALYTICAL, TEMPORAL, or META using fast deterministic rules (~0 ms)."""
+    if is_code_query(query):
+        logger.info(f"[IntentClassifier] Deterministic: detected code query -> FACTUAL")
+        return "FACTUAL"
+
     query_lower = query.lower()
 
     # 0. Personal profile & memory queries

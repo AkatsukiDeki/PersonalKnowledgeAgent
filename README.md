@@ -1,10 +1,15 @@
-# Personal Knowledge Agent (PKA) — v1.4.0 (Graph-Augmented Multimodal RAG)
+# Personal Knowledge Agent (PKA) — v1.4.1 (Graph-Augmented Multimodal RAG)
 
 **Personal Knowledge Agent (PKA)** — это локально-ориентированная мультимодальная система управления личным опытом и базой знаний с графовым RAG. Архитектура отделяет веса нейросетей от структуры памяти: система векторизует документы, код, изображения и заметки (Obsidian), извлекает атомарные факты (*Claims*), отслеживает эволюцию решений (*Superseded Decisions*) и обеспечивает контекстный диалог через локальные (Qwen 2.5) или облачные (Gemini) модели.
 
 ---
 
 ## 🚀 Что нового (Changelog)
+
+### v1.4.1 — Security Hardening & Stabilization
+* **API Security**: Внедрена строгая авторизация через `X-API-Key` и лимитирование запросов (Rate Limiting, SlowAPI) для защиты API от DDoS и неконтролируемого флуда.
+* **Source Pruning**: Реализован механизм полного удаления (`DELETE /api/v1/sources/{id}`) устаревших источников с каскадным удалением графа знаний.
+* **UI/UX Stabilization**: Исправлены критические баги Z-index, зависания `Uvicorn` при холодном старте и синтаксические ошибки React.
 
 ### v1.4.0 — Vision, Multimodality & Two-Tier Grounding
 * **Multimodal Ingestion & Chat Stream**: Поддержка обработки изображений (схемы, диаграммы, скриншоты кода, документы) через связку `qwen2.5-vl` (локально) с автоматическим отказоустойчивым переключением на `Gemini Vision` (Cloud Fallback).

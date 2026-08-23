@@ -80,9 +80,15 @@ async def hybrid_search(
     LIMIT :limit
     """)
 
+    import re
+    # Очистка и усечение запроса для GIN-индекса (предотвращает зависания на кусках кода)
+    raw_combined = f"{original_query} {search_query}"
+    safe_text_query = re.sub(r'[^\w\s]', ' ', raw_combined)
+    safe_text_query = " ".join(safe_text_query.split()[:30])
+
     result = await db.execute(sql, {
         "embedding": emb_str,
-        "combined_query": f"{original_query} {search_query}",
+        "combined_query": safe_text_query,
         "limit": limit,
         "include_history": include_history,
     })

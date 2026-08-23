@@ -23,7 +23,12 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('');
 
-  const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [activeConvId, setActiveConvId] = useState<string | null>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('pka_active_conv_id');
+    }
+    return null;
+  });
   const [isSeeded, setIsSeeded] = useState(false);
 
   const [attachedFiles, setAttachedFiles] = useState<{id: string, name: string}[]>([]);
@@ -48,12 +53,14 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
   useEffect(() => {
     if (activeConvId) {
+      localStorage.setItem('pka_active_conv_id', activeConvId);
       if (skipLoadRef.current) {
         skipLoadRef.current = false;
       } else {
         loadConversation(activeConvId);
       }
     } else {
+      localStorage.removeItem('pka_active_conv_id');
       setMessages([]);
       pushOrbit(null);
     }
