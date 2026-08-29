@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     
     # Embedding settings
-    EMBEDDING_BACKEND: str = "local"  # "local" | "gemini"
+    EMBEDDING_BACKEND: str = "ollama"  # "local" | "gemini" | "ollama"
     EMBEDDING_MODEL: str = "BAAI/bge-m3"  # or "nomic-ai/nomic-embed-text-v1.5", "models/text-embedding-004"
+    OLLAMA_EMBEDDING_MODEL: str = "bge-m3"
     EMBEDDING_DIMENSION: int = 1024
     EMBEDDING_VERSION: str = "local-bge-m3-v1"
     EMBEDDING_DEVICE: str = "cpu"  # "cpu" | "cuda"
@@ -36,15 +37,23 @@ class Settings(BaseSettings):
     
     # Ollama Settings
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
-    OLLAMA_EXTRACTION_MODEL: str = "qwen2.5:7b"
-    OLLAMA_QA_MODEL: str = "qwen2.5:7b"
+    OLLAMA_EXTRACTION_MODEL: str = "qwen2.5:3b"
+    OLLAMA_QA_MODEL: str = "qwen2.5:3b"
     OLLAMA_VISION_MODEL: str = "qwen2.5vl:7b"
     OLLAMA_TIMEOUT_SECONDS: float = 3000.0
     EXTRACTION_BATCH_SIZE: int = 2
     
-    FAST_LLM_MODEL: str = "gemini-3.5-flash-lite"
-    REASONING_LLM_MODEL: str = "gemini-3.6-flash"
+    FAST_LLM_MODEL: str = "gemini-1.5-flash"
+    REASONING_LLM_MODEL: str = "gemini-1.5-pro"
     OPENAI_API_KEY: str | None = None
+
+    @property
+    def CAPABILITY_TO_MODEL(self) -> dict[str, str]:
+        return {
+            "fast_local": self.OLLAMA_QA_MODEL,
+            "balanced_local": self.OLLAMA_EXTRACTION_MODEL,
+            "deep_reasoning": self.REASONING_LLM_MODEL
+        }
     
     # Obsidian Connector Settings
     OBSIDIAN_VAULT_PATH: Optional[str] = None

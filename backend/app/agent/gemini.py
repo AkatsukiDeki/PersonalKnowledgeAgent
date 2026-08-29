@@ -78,9 +78,14 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
         
     active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
 
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY in ("your_gemini_api_key_here", "dummy") or settings.REASONING_PROVIDER == "ollama":
+    target_model = model_manager.get_model('reasoning')
+    is_gemini_model = "gemini" in target_model.lower()
+    has_valid_key = settings.GEMINI_API_KEY and settings.GEMINI_API_KEY not in ("your_gemini_api_key_here", "dummy")
+    
+    if not is_gemini_model or not has_valid_key or settings.REASONING_PROVIDER == "ollama":
+        local_model = target_model if not is_gemini_model else settings.OLLAMA_QA_MODEL
         ollama = OllamaClient()
-        return await ollama.generate("qwen2.5-coder:14b", prompt, system=active_system_prompt)
+        return await ollama.generate(local_model, prompt, system=active_system_prompt)
 
     response = await get_client().aio.models.generate_content(
         model=model_manager.get_model('reasoning'),
@@ -94,11 +99,15 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
 
 
 @tenacity_retry_reasoning_llm
-async def _do_stream(prompt: str, system_instruction: str):
-    if not settings.GEMINI_API_KEY or settings.GEMINI_API_KEY in ("your_gemini_api_key_here", "dummy") or settings.REASONING_PROVIDER == "ollama":
+async def _do_stream(prompt: str, system_instruction: str, target_model: str = "qwen2.5:3b"):
+    is_gemini_model = "gemini" in target_model.lower()
+    has_valid_key = settings.GEMINI_API_KEY and settings.GEMINI_API_KEY not in ("your_gemini_api_key_here", "dummy")
+    
+    if not is_gemini_model or not has_valid_key or settings.REASONING_PROVIDER == "ollama":
         # Simulate streaming by yielding chunks of Ollama's full response
+        local_model = target_model if not is_gemini_model else settings.OLLAMA_QA_MODEL
         ollama = OllamaClient()
-        full_resp = await ollama.generate("qwen2.5-coder:14b", prompt, system=system_instruction)
+        full_resp = await ollama.generate(local_model, prompt, system=system_instruction)
 
         async def fake_stream():
             import asyncio
@@ -109,7 +118,7 @@ async def _do_stream(prompt: str, system_instruction: str):
         return fake_stream()
 
     return await get_client().aio.models.generate_content_stream(
-        model=model_manager.get_model('reasoning'),
+        model=target_model if "gemini" in target_model else model_manager.get_model('reasoning'),
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
@@ -123,13 +132,11 @@ async def stream_rag_response(
         retrieved_chunks: List[Dict[str, Any]],
         user_profile: str = "",
         mode: str = "assistant",
-        history: list = None
+        history: list = None,
+        target_model: str = "qwen2.5:3b"
 ) -> AsyncGenerator[str, None]:
     """Потоковая генерация ответа на базе чанков."""
-    if not retrieved_chunks:
-        yield "К сожалению, я не нашел информации по вашему вопросу."
-        return
-
+    # LLM is allowed to answer without chunks (e.g. in FAST mode or generic questions)
     context_blocks = [
         f"--- Чанк {i + 1} ---\n{chunk['text_content']}"
         for i, chunk in enumerate(retrieved_chunks)
@@ -146,7 +153,7 @@ async def stream_rag_response(
     active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
 
     try:
-        response_stream = await _do_stream(prompt, system_instruction=active_system_prompt)
+        response_stream = await _do_stream(prompt, system_instruction=active_system_prompt, target_model=target_model)
         async for chunk in response_stream:
             if chunk.text:
                 yield chunk.text

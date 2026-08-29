@@ -7,6 +7,8 @@ import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose } from
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
 import { profileApi } from '../../api/profile';
+import { ChatModeSelector } from './ChatModeSelector';
+import { ChatMode, LearningContext } from '../../types/chat';
 
 interface Props {
   onOrbitUpdate?: (ctx: OrbitContext | null) => void;
@@ -22,6 +24,18 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [isCooldown, setIsCooldown] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('');
+
+  const [chatMode, setChatMode] = useState<ChatMode>(() => {
+    if (typeof window !== 'undefined') {
+      return (localStorage.getItem('pka_chat_mode') as ChatMode) || 'vault';
+    }
+    return 'vault';
+  });
+  const [learningContext, setLearningContext] = useState<LearningContext | undefined>(undefined);
+
+  useEffect(() => {
+    localStorage.setItem('pka_chat_mode', chatMode);
+  }, [chatMode]);
 
   const [activeConvId, setActiveConvId] = useState<string | null>(() => {
     if (typeof window !== 'undefined') {
@@ -88,8 +102,17 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       }
     };
     
+    const handleOpenChatContext = (e: Event) => {
+      const customEvent = e as CustomEvent;
+      if (customEvent.detail) {
+        if (customEvent.detail.chatMode) setChatMode(customEvent.detail.chatMode);
+        if (customEvent.detail.learningContext) setLearningContext(customEvent.detail.learningContext);
+      }
+    };
+    
     window.addEventListener('openConversation', handleOpenConv);
     window.addEventListener('injectChatPrompt', handleInjectPrompt);
+    window.addEventListener('openChatWithContext', handleOpenChatContext);
     
     // Check if user is already seeded
     profileApi.getProfile().then(profile => {
@@ -101,6 +124,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     return () => {
       window.removeEventListener('openConversation', handleOpenConv);
       window.removeEventListener('injectChatPrompt', handleInjectPrompt);
+      window.removeEventListener('openChatWithContext', handleOpenChatContext);
     };
   }, []);
 
@@ -267,7 +291,9 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         setIsCooldown(true);
         setTimeout(() => setIsCooldown(false), 2500);
       },
-      'rag',
+      chatMode,
+      learningContext,
+      'assistant',
       imagePayload?.base64,
       imagePayload?.mimeType
     );
@@ -450,7 +476,18 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         )}
 
         {/* Glass Input Bar */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-3xl w-[calc(100%-3rem)] shrink-0 z-10">
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-3xl w-[calc(100%-3rem)] shrink-0 z-10 flex flex-col items-start">
+          
+          <ChatModeSelector 
+            value={chatMode} 
+            onChange={setChatMode} 
+            learningSubject={learningContext?.subject_name}
+            onClearSubject={() => {
+              setLearningContext(undefined);
+              if (chatMode === 'learning') setChatMode('vault');
+            }}
+          />
+
           {(attachedFiles.length > 0 || attachedImage) && (
             <div className="flex flex-wrap gap-2 mb-2 px-1">
               {attachedFiles.map(file => (
@@ -483,7 +520,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
           <form
             id="chat-input-form"
             onSubmit={handleSubmit}
-            className="bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-3 p-3 shadow-2xl transition-all focus-within:border-white/20"
+            className="w-full bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-3 p-3 shadow-2xl transition-all focus-within:border-white/20"
           >
             <input 
               type="file" 

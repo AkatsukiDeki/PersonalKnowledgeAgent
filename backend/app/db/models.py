@@ -23,6 +23,13 @@ class Source(Base, TimestampedUUIDMixin):
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    
+    subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("subjects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
 
     # Legacy / deprecated fields (to be cleaned up or used for transition)
     content: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
@@ -78,7 +85,8 @@ class Chunk(Base, TimestampedUUIDMixin):
     source_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("sources.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=False,
+        index=True
     )
     revision_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -225,7 +233,8 @@ class TimelineEvent(Base):
                                             index=True)  # decision_change, tool_replacement, strategy_shift
     old_claim_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True),
                                                               ForeignKey("claims.id", ondelete="SET NULL"),
-                                                              nullable=True)
+                                                              nullable=True,
+                                                              index=True)
     new_claim_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("claims.id", ondelete="CASCADE"),
                                                     index=True)
     source_id: Mapped[Optional[uuid.UUID]] = mapped_column(PG_UUID(as_uuid=True),

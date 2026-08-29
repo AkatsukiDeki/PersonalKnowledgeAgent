@@ -10,7 +10,7 @@ async def rewrite_query(query: str, history: List[Dict[str, str]]) -> Tuple[bool
     Condense query only if necessary. If query is self-contained or no history exists,
     bypass LLM entirely (~0 ms budget rule).
     """
-    if not history:
+    if not history or len(history) <= 1:
         return True, query
 
     # Быстрая эвристика: если в сообщении > 4 слов и нет местоимений-анафор,
@@ -21,8 +21,8 @@ async def rewrite_query(query: str, history: List[Dict[str, str]]) -> Tuple[bool
     anaphors = {"он", "она", "оно", "они", "это", "этот", "эта", "эти", "тот", "та", "те", "почему", "зачем", "как", "ее", "его", "их", "туда"}
     has_anaphors = any(word.lower() in anaphors for word in words)
     
-    if len(words) > 4 and not has_anaphors:
-        logger.info(f"[QueryCondenser] Query is self-contained (length > 4, no anaphors). Skipping LLM rewrite.")
+    if not has_anaphors and len(words) > 2:
+        logger.info(f"[QueryCondenser] Query is self-contained (no anaphors). Skipping LLM rewrite.")
         return True, query
 
     recent_history = history[-4:]

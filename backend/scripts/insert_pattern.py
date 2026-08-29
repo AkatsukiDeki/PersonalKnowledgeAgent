@@ -4,6 +4,7 @@ from app.db.session import async_session_factory
 from app.db.models import Pattern, Claim
 from sqlalchemy import select
 
+
 async def insert_pattern():
     async with async_session_factory() as db:
         claims = (await db.execute(select(Claim).limit(2))).scalars().all()

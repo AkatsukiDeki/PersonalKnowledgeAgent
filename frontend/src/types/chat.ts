@@ -1,3 +1,11 @@
+export type ChatMode = 'fast' | 'vault' | 'learning' | 'reasoning';
+
+export interface LearningContext {
+  subject_id?: string;
+  topic_id?: string;
+  subject_name?: string;
+}
+
 export interface Citation {
   chunk_id: string;
   source_id: string;

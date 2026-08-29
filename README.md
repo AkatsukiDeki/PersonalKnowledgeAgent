@@ -6,6 +6,13 @@
 
 ## 🚀 Что нового (Changelog)
 
+### v1.5.0 — Engineering Optimizations & Reranking
+* **Cross-Encoder Reranking (FlashRank)**: Внедрен легковесный реранкер (`ms-marco-TinyBERT-L-2-v2`) для финальной фильтрации гибридного поиска (отсекает мусор от BM25/pgvector перед подачей в LLM).
+* **Zero-Latency Embeddings**: Интегрирован асинхронный LRU-кэш на векторизацию запросов. Одинаковые/нормализованные запросы обрабатываются за 0 мс.
+* **FastAPI Lifespan Warmup**: Асинхронный прогрев LLM и Embedding моделей (через `keep_alive: -1`) на старте сервера полностью устраняет зависания при первых запросах.
+* **SQL Indexing & DB Optimization**: Оптимизированы внешние ключи и цепочки `selectinload` для L3/L4 выборки (Timeline Events, Графовые связи), снижая нагрузку на базу.
+* **Capability-Based Routing**: Надежный фоллбэк-маршрутизатор: автоматическое переключение на `qwen2.5` при невалидных ключах Gemini API.
+
 ### v1.4.1 — Security Hardening & Stabilization
 * **API Security**: Внедрена строгая авторизация через `X-API-Key` и лимитирование запросов (Rate Limiting, SlowAPI) для защиты API от DDoS и неконтролируемого флуда.
 * **Source Pruning**: Реализован механизм полного удаления (`DELETE /api/v1/sources/{id}`) устаревших источников с каскадным удалением графа знаний.

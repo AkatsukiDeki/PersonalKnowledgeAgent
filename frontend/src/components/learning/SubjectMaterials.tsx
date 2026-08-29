@@ -9,7 +9,8 @@ import {
   RefreshCw,
   ExternalLink,
   CheckSquare,
-  Square
+  Square,
+  MessageSquare
 } from 'lucide-react';
 import { sourcesApi, SourceItem } from '../../api/sources';
 import { subjectsApi } from '../../api/subjects';
@@ -27,6 +28,8 @@ export const SubjectMaterials: React.FC<SubjectMaterialsProps> = ({ subjectId })
   const [parsingUrl, setParsingUrl] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const [subjectName, setSubjectName] = useState('');
+
   const fetchData = async () => {
     try {
       setLoading(true);
@@ -35,6 +38,7 @@ export const SubjectMaterials: React.FC<SubjectMaterialsProps> = ({ subjectId })
         subjectsApi.getSubject(subjectId)
       ]);
 
+      setSubjectName(currentSubject.title || 'Предмет');
       setAllSources(sourcesData);
       const attached = new Set(
         (currentSubject.sources || []).map((s: any) => s.id)
@@ -121,6 +125,27 @@ export const SubjectMaterials: React.FC<SubjectMaterialsProps> = ({ subjectId })
 
   return (
     <div className="space-y-6">
+      {/* Mentor Quick Link */}
+      <div className="flex justify-end">
+        <button
+          onClick={() => {
+            window.dispatchEvent(new CustomEvent('switchTab', { detail: 'chat' }));
+            setTimeout(() => {
+              window.dispatchEvent(new CustomEvent('openChatWithContext', { 
+                detail: { 
+                  chatMode: 'learning', 
+                  learningContext: { subject_id: subjectId, subject_name: subjectName } 
+                } 
+              }));
+            }, 50);
+          }}
+          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg shadow-lg shadow-indigo-500/20 transition-all"
+        >
+          <MessageSquare className="w-4 h-4" />
+          Спросить ментора
+        </button>
+      </div>
+
       {/* Upload and Ingest Actions */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* File Upload Card */}

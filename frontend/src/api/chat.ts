@@ -1,4 +1,4 @@
-import { Citation } from '../types/chat';
+import { Citation, ChatMode, LearningContext } from '../types/chat';
 
 const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api/v1';
 
@@ -13,7 +13,9 @@ export async function streamChat(
   onToken: (token: string) => void,
   onError: (error: string) => void,
   onDone: () => void,
-  mode: string = 'rag',
+  chat_mode: ChatMode = 'vault',
+  learning_context?: LearningContext,
+  mode: string = 'assistant',
   image_base64?: string,
   image_mime_type?: string
 ) {
@@ -27,7 +29,17 @@ export async function streamChat(
     const response = await fetch(`${BASE_URL}/chat/stream`, {
       method: 'POST',
       headers,
-      body: JSON.stringify({ query, history, conversation_id, attached_source_ids, mode, image_base64, image_mime_type }),
+      body: JSON.stringify({ 
+        query, 
+        history, 
+        conversation_id, 
+        attached_source_ids, 
+        chat_mode,
+        learning_context,
+        mode, 
+        image_base64, 
+        image_mime_type 
+      }),
     });
 
     if (!response.ok) {

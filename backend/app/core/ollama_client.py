@@ -89,6 +89,7 @@ class OllamaClient:
             "model": target_model,
             "prompt": prompt,
             "stream": False,
+            "keep_alive": -1,
             "options": {
                 "num_predict": num_predict,
                 "temperature": 0.1,
@@ -138,6 +139,7 @@ class OllamaClient:
             "model": target_model,
             "prompt": prompt,
             "stream": True,
+            "keep_alive": -1,
         }
         if system:
             payload["system"] = system

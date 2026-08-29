@@ -19,6 +19,9 @@ def get_embedding_provider() -> BaseEmbeddingProvider:
     elif backend == "gemini":
         from app.knowledge.embeddings.gemini_provider import GeminiEmbeddingProvider
         _provider_instance = GeminiEmbeddingProvider()
+    elif backend == "ollama":
+        from app.knowledge.embeddings.ollama_provider import OllamaEmbeddingProvider
+        _provider_instance = OllamaEmbeddingProvider()
     else:
         raise ValueError(f"Unknown EMBEDDING_BACKEND: {backend}")
 
