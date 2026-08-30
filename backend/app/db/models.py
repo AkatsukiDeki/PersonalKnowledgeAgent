@@ -11,6 +11,17 @@ from sqlalchemy.sql.sqltypes import Boolean
 from .base import Base, TimestampedUUIDMixin
 
 
+class UserProfile(Base, TimestampedUUIDMixin):
+    __tablename__ = "user_profiles"
+
+    role: Mapped[str] = mapped_column(String, nullable=False)
+    stack: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    invariants: Mapped[str] = mapped_column(Text, nullable=False)
+    learning_style: Mapped[str] = mapped_column(Text, nullable=False)
+    projects: Mapped[str] = mapped_column(Text, nullable=False)
+    is_seeded: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
+
+
 class Source(Base, TimestampedUUIDMixin):
     __tablename__ = "sources"
 
