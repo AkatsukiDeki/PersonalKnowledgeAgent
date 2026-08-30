@@ -1,25 +1,1 @@
-import asyncio
-import uuid
-from app.db.session import async_session_factory
-from app.db.models import Pattern, Claim
-from sqlalchemy import select
-
-
-async def insert_pattern():
-    async with async_session_factory() as db:
-        claims = (await db.execute(select(Claim).limit(2))).scalars().all()
-        if len(claims) >= 2:
-            pattern = Pattern(
-                title="Systematic Approach in Development and Life",
-                description="Applying systemic breakdown to both coding problems and calisthenics.",
-                pattern_type="behavioral",
-                domains=["programming", "sport"],
-                confidence=0.9,
-                evidence_summary="Both domains show a pattern of breaking down complex goals into smaller manageable intervals.",
-                evidence_claim_ids=[claims[0].id, claims[1].id]
-            )
-            db.add(pattern)
-            await db.commit()
-            print("Inserted pattern manually.")
-
-asyncio.run(insert_pattern())
+import asyncioimport uuidfrom app.db.session import async_session_factoryfrom app.db.models import Pattern, Claimfrom sqlalchemy import selectasync def insert_pattern():    async with async_session_factory() as db:        claims = (await db.execute(select(Claim).limit(2))).scalars().all()        if len(claims) >= 2:            pattern = Pattern(                title="Systematic Approach in Development and Life",                description="Applying systemic breakdown to both coding problems and calisthenics.",                pattern_type="behavioral",                domains=["programming", "sport"],                confidence=0.9,                evidence_summary="Both domains show a pattern of breaking down complex goals into smaller manageable intervals.",                evidence_claim_ids=[claims[0].id, claims[1].id]            )            db.add(pattern)            await db.commit()            print("Inserted pattern manually.")asyncio.run(insert_pattern())

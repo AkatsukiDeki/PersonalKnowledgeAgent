@@ -49,6 +49,7 @@ async def warmup_models():
     except Exception as e:
         logging.getLogger(__name__).warning(f"Failed to warmup models: {e}")
 
+@asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run DB initialisation and background tasks on startup."""
     await init_database()
