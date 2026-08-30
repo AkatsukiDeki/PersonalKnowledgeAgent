@@ -6,7 +6,8 @@ from sqlalchemy import text
 from typing import Optional
 
 from .deps import get_db
-from ..schemas.profile import UserProfileCreate, UserProfile
+from ..schemas.profile import UserProfileCreate, UserProfile as UserProfileSchema
+from ..db.models import UserProfile
 from ..knowledge.ingestion import create_source_db, process_source_chunks_bg
 
 logger = logging.getLogger(__name__)
@@ -38,17 +39,19 @@ async def seed_profile(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        # Save to user_profiles table
-        await db.execute(text("""
-            INSERT INTO user_profiles (role, stack, invariants, learning_style, projects, is_seeded)
-            VALUES (:role, :stack, :invariants, :learning_style, :projects, TRUE)
-        """), {
-            "role": payload.role,
-            "stack": json.dumps(payload.stack),
-            "invariants": payload.invariants,
-            "learning_style": payload.learning_style,
-            "projects": payload.projects
-        })
+        import uuid
+
+        # Save to user_profiles table using ORM with explicit ID
+        profile_obj = UserProfile(
+            id=uuid.uuid4(),
+            role=payload.role,
+            stack=payload.stack,
+            invariants=payload.invariants,
+            learning_style=payload.learning_style,
+            projects=payload.projects,
+            is_seeded=True
+        )
+        db.add(profile_obj)
         await db.commit()
 
         # Generate markdown source for ingestion
@@ -71,7 +74,7 @@ async def seed_profile(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/", response_model=Optional[UserProfile])
+@router.get("/", response_model=Optional[UserProfileSchema])
 async def get_profile(db: AsyncSession = Depends(get_db)):
     try:
         result = await db.execute(text("SELECT * FROM user_profiles ORDER BY created_at DESC LIMIT 1"))

@@ -57,6 +57,41 @@ async def _generate_rewrite(prompt: str) -> str:
     return response.text.strip() if response.text else ""
 
 
+def build_chat_messages(
+    system_prompt: str,
+    history: list,
+    current_query: str,
+    retrieved_context: str
+) -> list[Dict[str, str]]:
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    
+    if history:
+        for msg in history:
+            role = msg.get("role")
+            if role not in ("user", "assistant"):
+                continue
+            content = msg.get("content", "").strip()
+            if not content:
+                continue
+            messages.append({"role": role, "content": content})
+            
+    final_prompt = build_rag_prompt(current_query, retrieved_context)
+    messages.append({"role": "user", "content": final_prompt})
+    
+    return messages
+
+def _to_gemini_contents(messages: list) -> list:
+    contents = []
+    for msg in messages:
+        if msg["role"] == "system":
+            continue
+        role = "model" if msg["role"] == "assistant" else "user"
+        contents.append(types.Content(role=role, parts=[types.Part.from_text(msg["content"])]))
+    return contents
+
+
 @tenacity_retry_reasoning_llm
 async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any]], user_profile: str = "", mode: str = "assistant", history: list = None) -> str:
     """Генерация ответа на базе извлеченных чанков (RAG)."""
@@ -68,7 +103,6 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
         for i, chunk in enumerate(retrieved_chunks)
     ]
     context_text = "\n\n".join(context_blocks)
-    prompt = build_rag_prompt(query, context_text, history)
 
     # Формируем итоговый промпт с директивой-взломщиком
     base_instruction = get_rag_system_instruction(user_profile)
@@ -77,6 +111,7 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
         base_instruction += "\n\n--- СОКРАТОВСКИЙ ТЬЮТОР ---\nТы выступаешь в роли Сократовского ментора. Не давай прямых ответов сразу. Задавай наводящие вопросы, приводи инженерные аналогии и предлагай практические задачки для размышления. Поощряй пользователя думать самостоятельно."
         
     active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
+    messages = build_chat_messages(active_system_prompt, history, query, context_text)
 
     target_model = model_manager.get_model('reasoning')
     is_gemini_model = "gemini" in target_model.lower()
@@ -85,11 +120,11 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
     if not is_gemini_model or not has_valid_key or settings.REASONING_PROVIDER == "ollama":
         local_model = target_model if not is_gemini_model else settings.OLLAMA_QA_MODEL
         ollama = OllamaClient()
-        return await ollama.generate(local_model, prompt, system=active_system_prompt)
+        return await ollama.chat(messages=messages, model=local_model)
 
     response = await get_client().aio.models.generate_content(
         model=model_manager.get_model('reasoning'),
-        contents=prompt,
+        contents=_to_gemini_contents(messages),
         config=types.GenerateContentConfig(
             system_instruction=active_system_prompt,
             temperature=0.1,
@@ -99,27 +134,23 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
 
 
 @tenacity_retry_reasoning_llm
-async def _do_stream(prompt: str, system_instruction: str, target_model: str = "qwen2.5:3b"):
+async def _do_stream(messages: list, system_instruction: str, target_model: str = "qwen2.5:3b"):
     is_gemini_model = "gemini" in target_model.lower()
     has_valid_key = settings.GEMINI_API_KEY and settings.GEMINI_API_KEY not in ("your_gemini_api_key_here", "dummy")
     
     if not is_gemini_model or not has_valid_key or settings.REASONING_PROVIDER == "ollama":
-        # Simulate streaming by yielding chunks of Ollama's full response
         local_model = target_model if not is_gemini_model else settings.OLLAMA_QA_MODEL
         ollama = OllamaClient()
-        full_resp = await ollama.generate(local_model, prompt, system=system_instruction)
-
-        async def fake_stream():
-            import asyncio
-            for word in full_resp.split(" "):
-                yield type('FakeChunk', (), {'text': word + " "})()
-                await asyncio.sleep(0.01)
-
-        return fake_stream()
+        
+        async def ollama_stream():
+            async for chunk in ollama.stream_chat(messages=messages, model=local_model):
+                yield type('FakeChunk', (), {'text': chunk})()
+                
+        return ollama_stream()
 
     return await get_client().aio.models.generate_content_stream(
         model=target_model if "gemini" in target_model else model_manager.get_model('reasoning'),
-        contents=prompt,
+        contents=_to_gemini_contents(messages),
         config=types.GenerateContentConfig(
             system_instruction=system_instruction,
             temperature=0.1,
@@ -136,24 +167,21 @@ async def stream_rag_response(
         target_model: str = "qwen2.5:3b"
 ) -> AsyncGenerator[str, None]:
     """Потоковая генерация ответа на базе чанков."""
-    # LLM is allowed to answer without chunks (e.g. in FAST mode or generic questions)
     context_blocks = [
         f"--- Чанк {i + 1} ---\n{chunk['text_content']}"
         for i, chunk in enumerate(retrieved_chunks)
     ]
     context_text = "\n\n".join(context_blocks)
-    prompt = build_rag_prompt(query, context_text, history)
 
-    # Формируем итоговый промпт с директивой-взломщиком для стриминга
     base_instruction = get_rag_system_instruction(user_profile)
-    
     if mode == "learning_tutor":
         base_instruction += "\n\n--- СОКРАТОВСКИЙ ТЬЮТОР ---\nТы выступаешь в роли Сократовского ментора. Не давай прямых ответов сразу. Задавай наводящие вопросы, приводи инженерные аналогии и предлагай практические задачки для размышления. Поощряй пользователя думать самостоятельно."
 
     active_system_prompt = f"{base_instruction}{PKA_JAILBREAK}"
+    messages = build_chat_messages(active_system_prompt, history, query, context_text)
 
     try:
-        response_stream = await _do_stream(prompt, system_instruction=active_system_prompt, target_model=target_model)
+        response_stream = await _do_stream(messages, system_instruction=active_system_prompt, target_model=target_model)
         async for chunk in response_stream:
             if chunk.text:
                 yield chunk.text

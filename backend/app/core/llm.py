@@ -127,20 +127,16 @@ class ModelManager:
         
         raise ValueError(f"Unsupported text task type: {task_type}")
 
-    async def generate_vision(self, prompt: str, image_bytes: bytes, mime_type: str, allow_cloud_fallback: bool = True) -> str:
+    async def generate_vision(self, messages: list, image_bytes: bytes, mime_type: str, allow_cloud_fallback: bool = True) -> str:
         """
         Обработка изображений через Vision-модель (Ollama -> Gemini Fallback).
         """
-        import base64
-        b64_image = base64.b64encode(image_bytes).decode("utf-8")
-        
         # 1. Ollama (Local)
         vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5-vl")
         try:
-            return await self.ollama_client.generate(
+            return await self.ollama_client.chat(
                 model=vision_model,
-                prompt=prompt,
-                images=[b64_image]
+                messages=messages
             )
         except Exception as e:
             logger.error(f"[ModelManager] Ollama Vision failed ({e}).")
@@ -150,13 +146,18 @@ class ModelManager:
                 logger.warning("[ModelManager] Falling back to Gemini for Vision.")
                 try:
                     from google.genai import types
+                    from ..agent.gemini import _to_gemini_contents
+                    
                     config = types.GenerateContentConfig(temperature=0.2)
+                    
+                    # Gemini expects image bytes in the part, not base64. 
+                    # We inject the image bytes into the last message manually.
+                    gemini_contents = _to_gemini_contents(messages)
+                    gemini_contents[-1].parts.insert(0, types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
+                    
                     response = await self._cloud_client.aio.models.generate_content(
                         model=self.fast_model,
-                        contents=[
-                            types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                            prompt
-                        ],
+                        contents=gemini_contents,
                         config=config
                     )
                     return response.text or ""
@@ -168,25 +169,18 @@ class ModelManager:
 
     async def stream_vision(
         self,
-        prompt: str,
+        messages: list,
         image_bytes: bytes,
         mime_type: str = "image/png",
         allow_cloud_fallback: bool = True,
-        system_instruction: Optional[str] = None
     ):
         """Стриминг мультимодального ответа (Ollama -> Cloud Fallback)"""
-        import base64
-        import asyncio
-        
         # 1. Попытка локально через Ollama
         try:
-            b64_img = base64.b64encode(image_bytes).decode("utf-8")
-            vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5vl:7b")
-            async for chunk in self.ollama_client.stream_generate(
-                prompt=prompt,
+            vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5-vl")
+            async for chunk in self.ollama_client.stream_chat(
+                messages=messages,
                 model=vision_model,
-                system=system_instruction,
-                images=[b64_img]
             ):
                 yield chunk
             return
@@ -197,20 +191,17 @@ class ModelManager:
         if allow_cloud_fallback and self.cloud_available and self._cloud_client:
             try:
                 from google.genai import types
+                from ..agent.gemini import _to_gemini_contents
                 
-                # Gemini SDK is mostly sync for streaming or uses async generators.
-                # In google.genai, generate_content_stream returns an iterator or async iterator depending on client.
-                # Let's use the async client if available:
                 config = types.GenerateContentConfig(temperature=0.2)
-                if system_instruction:
-                    config.system_instruction = system_instruction
+                
+                # We inject the image bytes into the last user turn.
+                gemini_contents = _to_gemini_contents(messages)
+                gemini_contents[-1].parts.insert(0, types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
                 
                 response_stream = await self._cloud_client.aio.models.generate_content_stream(
                     model=self.fast_model,
-                    contents=[
-                        types.Part.from_bytes(data=image_bytes, mime_type=mime_type),
-                        prompt
-                    ],
+                    contents=gemini_contents,
                     config=config
                 )
                 async for chunk in response_stream:

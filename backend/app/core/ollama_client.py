@@ -1,7 +1,8 @@
 import json
 import logging
 import re
-from typing import Any, Dict, Optional, Type, TypeVar
+from typing import Any, Dict, Optional, Type, TypeVar, TypedDict
+from typing_extensions import NotRequired
 import httpx
 from pydantic import BaseModel, ValidationError
 from fastapi import HTTPException
@@ -9,6 +10,11 @@ from fastapi import HTTPException
 from .config import settings
 
 logger = logging.getLogger(__name__)
+
+class ChatMessage(TypedDict):
+    role: str
+    content: str
+    images: NotRequired[list[str]]
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -160,6 +166,87 @@ class OllamaClient:
                                 pass
             except Exception as e:
                 logger.error(f"[Ollama Stream Error]: {repr(e)}")
+                raise
+
+    async def chat(
+            self,
+            messages: list[ChatMessage],
+            model: Optional[str] = None,
+            num_predict: int = 4096,
+            format_schema: Optional[str] = None,
+    ) -> str:
+        target_model = model or self.default_model
+        payload = {
+            "model": target_model,
+            "messages": messages,
+            "stream": False,
+            "keep_alive": -1,
+            "options": {
+                "num_predict": num_predict,
+                "temperature": 0.1,
+                "repeat_penalty": 1.15,
+                "top_p": 0.9,
+                "num_ctx": 8192,
+            }
+        }
+
+        if format_schema:
+            payload["format"] = format_schema
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                response = await client.post(f"{self.base_url}/api/chat", json=payload)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("message", {}).get("content", "")
+            except httpx.HTTPStatusError as e:
+                error_body = e.response.text
+                logger.error(f"[Ollama Error] HTTP {e.response.status_code} on {e.request.url}: {error_body}")
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Ошибка Ollama ({target_model}): {error_body}"
+                )
+            except httpx.RequestError as e:
+                logger.error(f"[Ollama Connection Error]: {repr(e)}")
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"Не удалось подключиться к Ollama по адресу {self.base_url}."
+                )
+
+    async def stream_chat(
+            self,
+            messages: list[ChatMessage],
+            model: Optional[str] = None,
+    ):
+        target_model = model or self.default_model
+        payload = {
+            "model": target_model,
+            "messages": messages,
+            "stream": True,
+            "keep_alive": -1,
+            "options": {
+                "num_predict": 4096,
+                "temperature": 0.1,
+                "repeat_penalty": 1.15,
+                "top_p": 0.9,
+                "num_ctx": 8192,
+            }
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                async with client.stream("POST", f"{self.base_url}/api/chat", json=payload) as response:
+                    response.raise_for_status()
+                    async for line in response.aiter_lines():
+                        if line:
+                            try:
+                                data = json.loads(line)
+                                if "message" in data and "content" in data["message"]:
+                                    yield data["message"]["content"]
+                            except json.JSONDecodeError:
+                                pass
+            except Exception as e:
+                logger.error(f"[Ollama Stream Chat Error]: {repr(e)}")
                 raise
 
     async def generate_json(

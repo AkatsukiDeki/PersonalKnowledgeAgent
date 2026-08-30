@@ -3,7 +3,7 @@ import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose } from 'lucide-react';
+import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose, Zap, Database, HelpCircle } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
 import { profileApi } from '../../api/profile';
@@ -24,6 +24,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [isCooldown, setIsCooldown] = useState(false);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('');
+  const [showHelpPopover, setShowHelpPopover] = useState(false);
 
   const [chatMode, setChatMode] = useState<ChatMode>(() => {
     if (typeof window !== 'undefined') {
@@ -429,29 +430,85 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         >
           <div className="max-w-3xl w-full mx-auto px-6 h-full">
             {messages.length === 0 ? (
-              !isSeeded && (
-                <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm">
-                  <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
-                    🪐
+              <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm pt-10">
+                {!isSeeded ? (
+                  <>
+                    <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
+                      🪐
+                    </div>
+                    <div className="text-center space-y-2">
+                      <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
+                      <p className="font-light max-w-sm">База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).</p>
+                    </div>
+                    {!activeConvId && (
+                      <button
+                        onClick={(e) => {
+                          const seedText = 'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
+                          setInput(seedText);
+                          handleSubmit(e as any, seedText);
+                        }}
+                        className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
+                      >
+                        Начать инициализацию (Primary Seed)
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <div className="flex flex-col items-center gap-6 max-w-2xl w-full">
+                    <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-4 shadow-[0_0_30px_-5px_rgba(99,102,241,0.3)]">
+                      <Sparkles size={28} />
+                    </div>
+                    
+                    <h2 className="text-2xl text-white font-semibold tracking-tight">Как обращаться к агенту?</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                      <div 
+                        onClick={(e) => {
+                          setChatMode('fast');
+                          const text = 'Кто ты, что ты умеешь и какие у тебя функции?';
+                          setInput(text);
+                          handleSubmit(e as any, text);
+                        }}
+                        className="p-5 rounded-2xl bg-[#0f0f16]/80 border border-white/5 hover:border-indigo-500/30 hover:bg-indigo-500/5 transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2 text-indigo-300 font-medium mb-3 group-hover:text-indigo-200">
+                          <Zap size={16} /> Fast-режим (Мгновенный ответ)
+                        </div>
+                        <p className="text-xs text-white/50 mb-4 leading-relaxed group-hover:text-white/60">
+                          Без тяжелого поиска по базе. Подходит для мета-вопросов о системе и агенте. Нажмите, чтобы спросить:
+                        </p>
+                        <ul className="space-y-2 text-xs text-white/80">
+                          <li className="flex items-start gap-2"><span className="text-indigo-400 font-bold">›</span> кто ты, что ты умеешь, какие функции</li>
+                          <li className="flex items-start gap-2"><span className="text-indigo-400 font-bold">›</span> настройки, профиль, конфигурация</li>
+                          <li className="flex items-start gap-2"><span className="text-indigo-400 font-bold">›</span> очисти контекст, новый чат, справка</li>
+                        </ul>
+                      </div>
+
+                      <div 
+                        onClick={(e) => {
+                          setChatMode('vault');
+                          const text = 'Что известно о твоей архитектуре, как ты устроен?';
+                          setInput(text);
+                          handleSubmit(e as any, text);
+                        }}
+                        className="p-5 rounded-2xl bg-[#0f0f16]/80 border border-white/5 hover:border-emerald-500/30 hover:bg-emerald-500/5 transition-all cursor-pointer group"
+                      >
+                        <div className="flex items-center gap-2 text-emerald-400 font-medium mb-3 group-hover:text-emerald-300">
+                          <Database size={16} /> RAG-режим (База Знаний)
+                        </div>
+                        <p className="text-xs text-white/50 mb-4 leading-relaxed group-hover:text-white/60">
+                          Глубокий поиск по документам, графу и инвариантам. Нажмите, чтобы спросить:
+                        </p>
+                        <ul className="space-y-2 text-xs text-white/80">
+                          <li className="flex items-start gap-2"><span className="text-emerald-400 font-bold">›</span> найди, поищи, что известно о...</li>
+                          <li className="flex items-start gap-2"><span className="text-emerald-400 font-bold">›</span> когда, где, сколько, почему, как устроено</li>
+                          <li className="flex items-start gap-2"><span className="text-emerald-400 font-bold">›</span> документ, заметка, проект, инвариант</li>
+                        </ul>
+                      </div>
+                    </div>
                   </div>
-                  <div className="text-center space-y-2">
-                    <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
-                    <p className="font-light max-w-sm">База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).</p>
-                  </div>
-                  {!activeConvId && (
-                    <button
-                      onClick={(e) => {
-                        const seedText = 'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
-                        setInput(seedText);
-                        handleSubmit(e as any, seedText);
-                      }}
-                      className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
-                    >
-                      Начать инициализацию (Primary Seed)
-                    </button>
-                  )}
-                </div>
-              )
+                )}
+              </div>
             ) : (
               <div className="space-y-6">
                 {messages.map((msg) => (
@@ -478,15 +535,75 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         {/* Glass Input Bar */}
         <div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-3xl w-[calc(100%-3rem)] shrink-0 z-10 flex flex-col items-start">
           
-          <ChatModeSelector 
-            value={chatMode} 
-            onChange={setChatMode} 
-            learningSubject={learningContext?.subject_name}
-            onClearSubject={() => {
-              setLearningContext(undefined);
-              if (chatMode === 'learning') setChatMode('vault');
-            }}
-          />
+          <div className="flex justify-between items-center w-full relative mb-1">
+            <ChatModeSelector 
+              value={chatMode} 
+              onChange={setChatMode} 
+              learningSubject={learningContext?.subject_name}
+              onClearSubject={() => {
+                setLearningContext(undefined);
+                if (chatMode === 'learning') setChatMode('vault');
+              }}
+            />
+            
+            <button
+              type="button"
+              onClick={() => setShowHelpPopover(!showHelpPopover)}
+              className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${showHelpPopover ? 'bg-indigo-500/20 text-indigo-300' : 'bg-transparent hover:bg-white/5 text-white/40 hover:text-white/80'}`}
+              title="Показать подсказки по режимам"
+            >
+              <HelpCircle size={16} />
+            </button>
+
+            {showHelpPopover && (
+              <div className="absolute bottom-full right-0 mb-2 w-80 bg-[#0f0f16]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-bottom-2">
+                <div className="flex justify-between items-center mb-3">
+                  <h3 className="text-sm font-medium text-white">Быстрые команды</h3>
+                  <button onClick={() => setShowHelpPopover(false)} className="text-white/40 hover:text-white/80">
+                    <X size={14} />
+                  </button>
+                </div>
+                
+                <div className="space-y-2">
+                  <div 
+                    onClick={(e) => {
+                      setChatMode('fast');
+                      const text = 'Кто ты, что ты умеешь и какие у тебя функции?';
+                      setInput(text);
+                      setShowHelpPopover(false);
+                      handleSubmit(e as any, text);
+                    }}
+                    className="p-3 rounded-xl bg-white/5 hover:bg-indigo-500/20 border border-transparent hover:border-indigo-500/30 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium mb-1">
+                      <Zap size={14} /> Спросить про функции (Fast)
+                    </div>
+                    <p className="text-[10px] text-white/50 group-hover:text-white/70 leading-relaxed">
+                      Узнать, что умеет агент. Работает мгновенно без поиска по базе.
+                    </p>
+                  </div>
+
+                  <div 
+                    onClick={(e) => {
+                      setChatMode('vault');
+                      const text = 'Что известно о твоей архитектуре, как ты устроен?';
+                      setInput(text);
+                      setShowHelpPopover(false);
+                      handleSubmit(e as any, text);
+                    }}
+                    className="p-3 rounded-xl bg-white/5 hover:bg-emerald-500/20 border border-transparent hover:border-emerald-500/30 transition-all cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2 text-emerald-400 text-xs font-medium mb-1">
+                      <Database size={14} /> Найти информацию (RAG)
+                    </div>
+                    <p className="text-[10px] text-white/50 group-hover:text-white/70 leading-relaxed">
+                      Искать по всей вашей базе знаний (документы, инсайты, решения).
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
 
           {(attachedFiles.length > 0 || attachedImage) && (
             <div className="flex flex-wrap gap-2 mb-2 px-1">

@@ -80,7 +80,8 @@ META_SYSTEM_PROMPT = """Ты — PKA (Personal Knowledge Agent), персона�
 3. Поиск и безопасность: Гибридный RAG (векторный BGE-M3 + BM25 с RRF-ранжированием) с механизмом Evidence Gate для защиты от галлюцинаций.
 4. Модуль Обучения (Learning): Встроенная система смарт-карточек (Flashcards) по алгоритму интервальных повторений SM-2, а также голосовой Сократовский Тьютор, с которым можно общаться по конкретным темам.
 
-Отвечай кратко, четко, структурировано и строго о себе как о системе PKA."""
+Отвечай кратко, четко, структурировано и строго о себе как о системе PKA.
+ОБЯЗАТЕЛЬНО в конце ответа (особенно если это первый вопрос пользователя) ненавязчиво предложи ему протестировать RAG-режим. ОБЯЗАТЕЛЬНО приведи 2 конкретных примера того, что именно можно спросить, выделив их кавычками (например: "Что известно о проекте X?" или "Найди мои заметки по архитектуре")."""
 
 
 async def generate_meta_answer(query: str) -> str:
@@ -506,11 +507,11 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 "rrf_score": 1.0
             })
 
-        if thread_state:
+        if thread_state and not payload.history:
             retrieved.insert(0, {
                 "chunk_id": str(uuid.uuid4()),
                 "source_id": str(uuid.uuid4()),
-                "text_content": f"[CONVERSATION LOCAL STATE]\n{thread_state}",
+                "text_content": f"=== [CONVERSATION THREAD SUMMARY] ===\n{thread_state}",
                 "score": 1.0,
                 "rrf_score": 1.0
             })
@@ -617,9 +618,6 @@ async def chat_stream_endpoint(
             profiler.start_stage("01_routing")
             intent = await classify_intent(payload.query)
 
-            if intent == "META" and profile.retrieval_enabled:
-                intent = "FACTUAL"
-
             if intent == "META" and not payload.image_base64:
                 profiler.start_stage("06_llm_generation")
                 answer = await generate_meta_answer(payload.query)
@@ -655,11 +653,13 @@ async def chat_stream_endpoint(
                     "rrf_score": 1.0
                 })
 
-            if thread_state:
+            # If we don't have history (first message in a new session for an old thread), we can inject thread_state.
+            # But if we have recent history, injecting thread_state causes the LLM to repeat the summary format.
+            if thread_state and not payload.history:
                 retrieved.insert(0, {
                     "chunk_id": str(uuid.uuid4()),
                     "source_id": str(uuid.uuid4()),
-                    "text_content": f"[CONVERSATION LOCAL STATE]\n{thread_state}",
+                    "text_content": f"=== [CONVERSATION THREAD SUMMARY] ===\n{thread_state}",
                     "score": 1.0,
                     "rrf_score": 1.0
                 })
@@ -699,23 +699,27 @@ async def chat_stream_endpoint(
             if payload.image_base64:
                 import base64
                 from ..core.llm import model_manager
+                from ..agent.gemini import build_chat_messages
                 
                 image_bytes = base64.b64decode(payload.image_base64)
                 
-                vision_prompt = "Пожалуйста, ответь на вопрос пользователя, используя прикрепленное изображение.\n\n"
+                context_blocks = []
                 if profile_text:
-                    vision_prompt += f"ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n{profile_text}\n\n"
-                
+                    context_blocks.append(f"ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n{profile_text}")
                 if retrieved:
-                    vision_prompt += "КОНТЕКСТ:\n"
-                    for item in retrieved:
-                        vision_prompt += f"{item.get('text_content', '')}\n---\n"
-                vision_prompt += f"\nЗАПРОС ПОЛЬЗОВАТЕЛЯ:\n{payload.query}"
+                    context_blocks.extend([item.get('text_content', '') for item in retrieved])
+                context_text = "\n---\n".join(context_blocks)
                 
-                sys_prompt = "Ты мультимодальный AI-ассистент. Твоя задача детально описывать и анализировать изображения."
+                sys_prompt = "Ты мультимодальный AI-ассистент. Твоя задача детально описывать и анализировать изображения. Отвечай на вопросы пользователя с учетом истории диалога."
+                
+                messages = build_chat_messages(sys_prompt, payload.history, payload.query, context_text)
+                
+                # Прикрепляем base64-изображение к последнему запросу пользователя для Ollama
+                if messages and messages[-1]["role"] == "user":
+                    messages[-1]["images"] = [payload.image_base64]
                 
                 first_token = True
-                async for token in model_manager.stream_vision(vision_prompt, image_bytes, payload.image_mime_type or "image/png", system_instruction=sys_prompt):
+                async for token in model_manager.stream_vision(messages, image_bytes, payload.image_mime_type or "image/png"):
                     if first_token:
                         profiler.start_stage("07_llm_streaming")
                         first_token = False
@@ -738,7 +742,7 @@ async def chat_stream_endpoint(
 
             if conv:
                 msg_count = await db.scalar(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
-                if msg_count == 0:
+                if msg_count == 1:
                     background_tasks.add_task(generate_conversation_title_bg, conv.id, payload.query)
 
                 metrics.update({
