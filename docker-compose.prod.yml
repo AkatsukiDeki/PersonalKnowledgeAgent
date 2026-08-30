@@ -45,6 +45,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        VITE_API_URL: /api/v1
     container_name: pka_frontend
     restart: always
     depends_on:
