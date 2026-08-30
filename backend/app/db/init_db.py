@@ -1,7 +1,7 @@
 from sqlalchemy import text
 
 from .base import Base
-from .models import Chunk, Source  # noqa: F401
+from . import models  # Import all models to register with Base.metadata
 from .session import engine
 
 
