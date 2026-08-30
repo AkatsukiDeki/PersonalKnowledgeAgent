@@ -3,46 +3,49 @@ version: '3.8'
 services:
   db:
     image: pgvector/pgvector:pg16
+    container_name: pka_db
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
-      POSTGRES_DB: ${POSTGRES_DB:-pka}
+      POSTGRES_USER: ${POSTGRES_USER:-pka_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pka_password}
+      POSTGRES_DB: ${POSTGRES_DB:-pka_db}
     volumes:
-      - pg_data_prod:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-pka}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pka_user} -d ${POSTGRES_DB:-pka_db}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
   backend:
-    build: 
+    build:
       context: ./backend
       dockerfile: Dockerfile
+    container_name: pka_backend
     restart: always
     depends_on:
       db:
         condition: service_healthy
     environment:
-      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@db:5432/${POSTGRES_DB:-pka}
-      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL}
-      - FAST_LLM_PROVIDER=${FAST_LLM_PROVIDER:-gemini}
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-    env_file:
-      - .env.prod
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pka_user}:${POSTGRES_PASSWORD:-pka_password}@db:5432/${POSTGRES_DB:-pka_db}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      PROJECT_ROOT: /app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
-      - backend_data:/app/data
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      - flashrank_cache:/app/.cache/flashrank
+      - backend_uploads:/app/uploads
+    ports:
+      - "8000:8000"
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+    container_name: pka_frontend
     restart: always
     depends_on:
       - backend
@@ -50,5 +53,6 @@ services:
       - "80:80"
 
 volumes:
-  pg_data_prod:
-  backend_data:
+  postgres_data:
+  flashrank_cache:
+  backend_uploads:
