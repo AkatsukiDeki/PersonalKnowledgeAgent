@@ -39,8 +39,9 @@ class VideoSlideExtractor:
             "-y",
             "-i", video_path,
             "-vf", f"select='gt(scene,{self.scene_threshold})',showinfo",
-            "-vsync", "vfr",
+            "-fps_mode", "vfr",
             "-q:v", "2",
+            "-pix_fmt", "yuvj420p",
             output_pattern
         ]
 
