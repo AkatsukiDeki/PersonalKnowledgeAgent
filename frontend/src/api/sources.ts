@@ -140,6 +140,14 @@ export const sourcesApi = {
     });
   },
 
+  retranscribe: async (sourceId: string, options?: { language?: string; initial_prompt?: string }): Promise<any> => {
+    return fetchApi(`/media/${sourceId}/retranscribe`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(options || {}),
+    });
+  },
+
   uploadUrl: async (
     url: string,
     title?: string,
@@ -247,6 +255,14 @@ export const sourcesApi = {
   deleteFolder: async (folderPath: string): Promise<void> => {
     await fetchApi(`/sources/folders/${encodeURIComponent(folderPath)}`, {
       method: 'DELETE',
+    });
+  },
+
+  renameFolder: async (oldPath: string, newPath: string): Promise<{ status: string; renamed_count: number }> => {
+    return fetchApi<{ status: string; renamed_count: number }>('/sources/folders/rename', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ old_path: oldPath, new_path: newPath }),
     });
   },
 };

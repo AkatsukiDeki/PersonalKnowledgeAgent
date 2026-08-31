@@ -76,7 +76,9 @@ personal-knowledge-agent/
 │   └── package.json
 │
 ├── docker-compose.yml        # PostgreSQL с расширением pgvector + Backend
-└── .env                      # Конфигурационные переменные и API-ключи
+├── docker-compose.vps.yml    # Конфигурация для production-деплоя на VPS (включает frontend)
+├── .env                      # Конфигурационные переменные и API-ключи (локально)
+└── .env.vps                  # Шаблон переменных окружения для развертывания на VPS
 ```
 
 ---
@@ -142,3 +144,17 @@ npm run dev
 ```
 
 Приложение доступно по адресу: `http://localhost:5173`.
+
+### 3. Production Deployment (VPS)
+
+Для развертывания на удаленном сервере (включает встроенный Nginx/Frontend, Backend и базу данных в едином контуре):
+
+```bash
+# 1. Скопируйте шаблон переменных окружения и настройте под себя
+cp .env.vps .env
+
+# 2. Соберите и запустите полный стек в фоне
+docker compose -f docker-compose.vps.yml up -d --build
+```
+
+Приложение будет доступно на VPS по адресу `http://<IP_сервера>:8090`.

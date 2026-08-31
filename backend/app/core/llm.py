@@ -174,6 +174,66 @@ class ModelManager:
                     logger.error(f"[ModelManager] Gemini emergency text fallback failed: {cloud_err}")
             return ""
 
+    async def stream_text(
+        self,
+        task_type: TaskType,
+        prompt: str,
+        system_instruction: Optional[str] = None,
+        allow_cloud_fallback: bool = True
+    ):
+        """Стриминг текстового ответа (Ollama -> Cloud Fallback)"""
+        backend = (getattr(settings, "LLM_ROUTING_BACKEND", "hybrid") or "hybrid").lower()
+        has_gemini_key = self.cloud_available and self._cloud_client is not None
+        
+        async def _stream_gemini():
+            config = types.GenerateContentConfig(temperature=0.3)
+            if system_instruction:
+                config.system_instruction = system_instruction
+            response_stream = await self._cloud_client.aio.models.generate_content_stream(
+                model=self.fast_model,
+                contents=prompt,
+                config=config
+            )
+            async for chunk in response_stream:
+                if chunk.text:
+                    yield chunk.text
+
+        # 1. Cloud / Hybrid Priority
+        if backend in ("cloud", "hybrid") and has_gemini_key:
+            try:
+                # We yield from the generator
+                async for chunk in _stream_gemini():
+                    yield chunk
+                return
+            except Exception as e:
+                logger.warning(f"[ModelManager] Primary Gemini stream_text failed: {e}. Falling back to Ollama.")
+                if backend == "cloud":
+                    logger.error("Cloud-only mode forced, but cloud failed. Yielding empty.")
+                    yield f"\n\n[Ошибка генерации: Cloud API недоступен]"
+                    return
+
+        # 2. Local fallback
+        try:
+            async for chunk in self.ollama_client.stream_generate(
+                model=settings.OLLAMA_QA_MODEL,
+                prompt=prompt,
+                system=system_instruction
+            ):
+                yield chunk
+            return
+        except Exception as e:
+            logger.error(f"[ModelManager] Ollama stream_text failed ({e}).")
+            if backend == "local" and has_gemini_key and allow_cloud_fallback:
+                logger.info("[ModelManager] Attempting emergency fallback to Gemini for stream_text...")
+                try:
+                    async for chunk in _stream_gemini():
+                        yield chunk
+                    return
+                except Exception as cloud_err:
+                    logger.error(f"[ModelManager] Gemini emergency text stream fallback failed: {cloud_err}")
+            
+            yield f"\n\n[Ошибка генерации: Локальная модель недоступна]"
+
     async def generate_vision(self, messages: list, image_bytes: bytes, mime_type: str, allow_cloud_fallback: bool = True) -> str:
         """
         Обработка изображений через Vision-модель (Ollama -> Gemini Fallback).

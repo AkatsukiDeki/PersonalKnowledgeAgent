@@ -19,7 +19,7 @@ services:
 
   backend:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: pka_vps_backend
     restart: unless-stopped
@@ -33,6 +33,8 @@ services:
         condition: service_healthy
     networks:
       - pka_internal
+    ports:
+      - "8000:8000"
 
   frontend:
     build:
@@ -53,3 +55,5 @@ networks:
 
 volumes:
   pka_db_data:
+    external: true
+    name: pka_postgres_data

@@ -1,6 +1,7 @@
 import uuid
 import re
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
@@ -10,7 +11,7 @@ from ..core.llm import model_manager, TaskType
 from ..db.models import Source
 import logging
 
-from app.learning.schemas import GenerateRoadmapRequest, AdaptiveRoadmapPayload, GenerateStudyNoteRequest, StudyNoteResponse, GenerateSummaryNoteRequest, SaveAsSubjectRequest, SaveAsSubjectResponse
+from app.learning.schemas import GenerateRoadmapRequest, AdaptiveRoadmapPayload, GenerateStudyNoteRequest, StudyNoteResponse, GenerateSummaryNoteRequest, SaveAsSubjectRequest, SaveAsSubjectResponse, GenerateQuizRequest, QuizPayload, GradeQuizRequest, QuizGradeResult, CopilotChatRequest
 from app.learning.context_resolver import LearningContextResolver
 from app.learning.roadmap_generator import RoadmapGenerator
 from app.learning.note_generator import StudyNoteGenerator
@@ -18,19 +19,7 @@ from app.learning.note_generator import StudyNoteGenerator
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/learning", tags=["Learning"])
 
-def clean_cjk_prefix(text: str) -> str:
-    if not isinstance(text, str):
-        return text
-    # Удаляем случайные мета-фразы
-    return re.sub(r'^(这是一份|以下是|任务完成).*?[\n:]', '', text).strip()
-
-def get_learning_system_prompt(language: str = "🇷🇺 Русский", extra_instructions: str = "") -> str:
-    return f"""You are a precise educational assistant.
-IMPORTANT RULES:
-1. OUTPUT LANGUAGE: Always respond strictly in {language} (unless the user explicitly asked in English). Never use Chinese or any other language.
-2. OUTPUT FORMAT: Respond with ONLY a valid, raw JSON object matching the schema. No markdown backticks, no introductory text, no conversational filler.
-{extra_instructions}
-"""
+from app.learning.practice_generator import PracticeGenerator
 
 async def _get_context(payload: LearningRequest, db: AsyncSession) -> str:
     context = ""
@@ -51,65 +40,81 @@ async def _get_context(payload: LearningRequest, db: AsyncSession) -> str:
 @router.post("/flashcards", response_model=FlashcardResponse)
 async def generate_flashcards(payload: LearningRequest, db: AsyncSession = Depends(get_db)):
     context = await _get_context(payload, db)
-    
-    prompt = f"Сгенерируй {payload.count or 5} флешкарточек (вопрос-ответ) на основе следующего материала:\n\n{context[:20000]}"
     language = payload.language or "🇷🇺 Русский"
-    system_instruction = get_learning_system_prompt(
-        language, 
-        "Ты — опытный методист. Создавай лаконичные, понятные карточки для запоминания. Ответ должен быть точным и коротким."
-    )
     
     try:
-        result = await model_manager.generate_structured(
-            task_type=TaskType.EXTRACTION,
-            schema=FlashcardResponse,
-            prompt=prompt,
-            system_instruction=system_instruction
+        return await PracticeGenerator.generate_flashcards(
+            context_text=context,
+            count=payload.count or 5,
+            language=language,
+            difficulty="medium"
         )
-        if not result:
-            raise ValueError("Model returned empty result")
-            
-        for card in result.cards:
-            if not card.id:
-                card.id = str(uuid.uuid4())
-            card.question = clean_cjk_prefix(card.question)
-            card.answer = clean_cjk_prefix(card.answer)
-        return result
     except Exception as e:
         logger.exception("Error generating flashcards")
         raise HTTPException(status_code=502, detail=f"Не удалось сгенерировать карточки (ошибка модели или парсинга): {str(e)}")
 
 
-@router.post("/quiz", response_model=QuizResponse)
-async def generate_quiz(payload: LearningRequest, db: AsyncSession = Depends(get_db)):
-    context = await _get_context(payload, db)
+@router.post("/quiz", response_model=QuizPayload)
+async def generate_quiz(request: GenerateQuizRequest, db: AsyncSession = Depends(get_db)):
+    from app.learning.context_resolver import LearningContextResolver
+    from app.learning.quiz_generator import QuizGenerator
     
-    prompt = f"Сгенерируй тест из {payload.count or 5} вопросов на основе следующего материала:\n\n{context[:20000]}"
-    language = payload.language or "🇷🇺 Русский"
-    system_instruction = get_learning_system_prompt(
-        language, 
-        "Ты — строгий экзаменатор. Создавай вопросы с 4 вариантами ответов (один правильный). Обязательно дай развернутое объяснение `explanation` для правильного ответа."
-    )
+    resolver = LearningContextResolver(db)
+    sources, chunks, claims = await resolver.resolve(request.scope)
     
+    # Optional filtering by topic/module if we only want partial context
+    if request.topic_id and request.roadmap_payload:
+        pass # Can be refined later
+        
+    context = {
+        "sources": sources,
+        "chunks": chunks,
+        "claims": claims
+    }
+    
+    generator = QuizGenerator(db)
     try:
-        result = await model_manager.generate_structured(
-            task_type=TaskType.EXTRACTION,
-            schema=QuizResponse,
-            prompt=prompt,
-            system_instruction=system_instruction
-        )
-        if not result:
-            raise ValueError("Model returned empty result")
-            
-        for q in result.questions:
-            if not q.id:
-                q.id = str(uuid.uuid4())
-            q.question = clean_cjk_prefix(q.question)
-            q.explanation = clean_cjk_prefix(q.explanation)
-        return result
+        quiz = await generator.generate(request, context)
+        return quiz
     except Exception as e:
-        logger.exception("Error generating quiz")
-        raise HTTPException(status_code=502, detail=f"Не удалось сгенерировать тест (ошибка модели или парсинга): {str(e)}")
+        logger.error(f"Error generating quiz: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/quiz/grade", response_model=QuizGradeResult)
+async def grade_quiz(request: GradeQuizRequest):
+    correct_count = 0
+    total_count = len(request.quiz.questions)
+    feedback = {}
+
+    for q in request.quiz.questions:
+        user_sel = set(request.user_answers.get(q.id, []))
+        correct_sel = {opt.id for opt in q.options if opt.is_correct}
+
+        is_correct = user_sel == correct_sel
+        if is_correct:
+            correct_count += 1
+            feedback[q.id] = f"Верно! {q.explanation}"
+        else:
+            feedback[q.id] = f"Ошибка. {q.explanation}"
+
+    score_percentage = (correct_count / total_count) * 100 if total_count > 0 else 0.0
+
+    return QuizGradeResult(
+        score_percentage=score_percentage,
+        correct_count=correct_count,
+        total_count=total_count,
+        feedback=feedback
+    )
+
+@router.post("/copilot/chat")
+async def copilot_chat(request: CopilotChatRequest, db: AsyncSession = Depends(get_db)):
+    from app.learning.copilot import NoteCopilot
+    copilot = NoteCopilot(db)
+    
+    return StreamingResponse(
+        copilot.stream_chat(request),
+        media_type="text/event-stream"
+    )
 
 @router.post("/roadmap", response_model=AdaptiveRoadmapPayload)
 async def generate_roadmap(
@@ -130,29 +135,33 @@ async def generate_roadmap(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post("/generate-note", response_model=StudyNoteResponse)
+@router.post("/generate-note")
 async def generate_study_note(
     request: GenerateStudyNoteRequest,
     db: AsyncSession = Depends(get_db)
 ):
     try:
         generator = StudyNoteGenerator(db)
-        note = await generator.generate(request)
-        return note
+        return StreamingResponse(
+            generator.stream_generate(request),
+            media_type="text/event-stream"
+        )
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("Error generating study note")
         raise HTTPException(status_code=500, detail=str(e))
-@router.post("/generate-summary-note", response_model=StudyNoteResponse)
+@router.post("/generate-summary-note")
 async def generate_summary_note(
     request: GenerateSummaryNoteRequest,
     db: AsyncSession = Depends(get_db)
 ):
     try:
         generator = StudyNoteGenerator(db)
-        note = await generator.generate_summary(request)
-        return note
+        return StreamingResponse(
+            generator.stream_generate_summary(request),
+            media_type="text/event-stream"
+        )
     except HTTPException:
         raise
     except Exception as e:

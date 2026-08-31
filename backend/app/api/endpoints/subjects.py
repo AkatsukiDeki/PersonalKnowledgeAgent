@@ -21,7 +21,7 @@ from ...db.models import (
     SubjectTutorMessage,
     SubjectFlashcard,
 )
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
 from typing import Tuple
 from ...core.ollama_client import OllamaClient
 
@@ -443,29 +443,16 @@ async def generate_quiz(
         "exam": "Сертификационные вопросы высокого уровня сложности.",
     }.get(difficulty, "Средняя сложность.")
 
-    prompt = f"""Сгенерируй тест с вариантами ответов ({count} вопросов) по теме "{topic}".
-Материалы:
-{context_text}
-
-Сложность: {difficulty} ({difficulty_instructions})
-
-Ответь СТРОГО в формате JSON без markdown:
-{{
-  "questions": [
-    {{
-      "id": "q1",
-      "question": "Текст вопроса?",
-      "options": ["Вариант 1", "Вариант 2", "Вариант 3", "Вариант 4"],
-      "correct_answer": 0,
-      "explanation": "Подробное объяснение правильного ответа."
-    }}
-  ]
-}}"""
-
-    result = await ollama_client.generate_json(prompt)
-    if not result or "questions" not in result:
-        raise HTTPException(status_code=500, detail="Не удалось сгенерировать тест через LLM.")
-    return result
+    try:
+        from app.learning.practice_generator import PracticeGenerator
+        result_model = await PracticeGenerator.generate_quiz(
+            context_text=context_text,
+            count=count,
+            difficulty=difficulty
+        )
+        return result_model.model_dump()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Не удалось сгенерировать тест: {str(e)}")
 
 
 @router.post("/{subject_id}/flashcards/generate")
@@ -513,32 +500,22 @@ async def generate_flashcards(
         facts = claims_res.scalars().all()
         context_text = "\n".join([f"- {f}" for f in facts]) if facts else f"Ключевые понятия по теме: {topic}"
 
-        prompt = f"""Сгенерируй {needed} карточек для запоминания по теме "{topic}".
-Материалы:
-{context_text}
-
-Сложность: {difficulty}
-
-Ответь СТРОГО в формате JSON:
-{{
-  "flashcards": [
-    {{
-      "front": "Термин или вопрос",
-      "back": "Лаконичное объяснение",
-      "hint": "Подсказка"
-    }}
-  ]
-}}"""
-        result = await ollama_client.generate_json(prompt)
-        if result and "flashcards" in result:
+        try:
+            from app.learning.practice_generator import PracticeGenerator
+            result_model = await PracticeGenerator.generate_flashcards(
+                context_text=context_text,
+                count=needed,
+                difficulty=difficulty
+            )
+            
             new_cards = []
-            for fc in result["flashcards"]:
+            for fc in result_model.cards:
                 new_card = SubjectFlashcard(
                     subject_id=subject_id,
                     node_id=node_id,
-                    front=fc.get("front", ""),
-                    back=fc.get("back", ""),
-                    hint=fc.get("hint", "")
+                    front=fc.question,
+                    back=fc.answer,
+                    hint=""
                 )
                 db.add(new_card)
                 new_cards.append(new_card)
@@ -547,6 +524,8 @@ async def generate_flashcards(
             for c in new_cards:
                 await db.refresh(c)
             selected_cards.extend(new_cards)
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Не удалось сгенерировать карточки: {str(e)}")
     
     return {
         "flashcards": [
@@ -565,7 +544,7 @@ def calculate_sm2(quality: int, repetitions: int, interval: int, ease_factor: fl
     new_ef = max(1.3, new_ef)
     if quality < 3:
         new_repetitions = 0
-        new_interval = 1
+        new_interval = 0
     else:
         if repetitions == 0:
             new_interval = 1
@@ -602,8 +581,12 @@ async def review_flashcard(
     card.repetitions = new_rep
     card.interval = new_int
     card.ease_factor = new_ef
-    card.last_reviewed_at = datetime.now(timezone.utc)
-    card.due_date = card.last_reviewed_at + timedelta(days=new_int)
+    
+    now_utc = datetime.now(timezone.utc)
+    card.last_reviewed_at = now_utc
+    
+    base_date = now_utc.date()
+    card.due_date = datetime.combine(base_date + timedelta(days=new_int), datetime.min.time(), tzinfo=timezone.utc)
     
     await db.commit()
     return {"status": "ok", "next_due": card.due_date.isoformat()}
@@ -929,19 +912,28 @@ async def send_tutor_message(
         context_text = "\n".join([f"- {f}" for f in facts]) if facts else "Базовые концепции курса."
 
         # 4. Формирование промпта
-        socratic_system = (
-            f"Ты — дружелюбный преподаватель и AI-тьютор по предмету '{subject.title}'. "
-            f"Отвечай кратко, понятно, задавай наводящие вопросы. "
-            f"ВАЖНОЕ ПРАВИЛО: Всегда отвечай только на русском языке. Никогда не используй китайский или другие языки. "
-            f"Факты курса:\n{context_text}"
-        )
-        if data.topic_context:
-            socratic_system += f"\nТекущая тема: {data.topic_context}"
+        history_text = "\n".join([
+            f"{'Студент' if m.role == 'user' else 'Тьютор'}: {m.content}"
+            for m in conv.messages[-6:]
+        ])
 
-        # 5. Вызов Ollama
-        ai_reply = await ollama_client.generate(
-            prompt=data.message,
-            system=socratic_system,
+        system_instruction = f"""
+Ты — персональный ментор по предмету "{subject.title}".
+Правила:
+1. Отвечай ИСКЛЮЧИТЕЛЬНО на русском языке.
+2. Используй Сократовский метод: давай краткие пояснения и задавай 1 наводящий вопрос.
+3. Опирайся на факты:
+{context_text}
+"""
+        if data.topic_context:
+            system_instruction += f"\nТекущая тема: {data.topic_context}"
+
+        prompt = f"История диалога:\n{history_text}\n\nСтудент: {data.message}\nТьютор:"
+
+        from app.core.llm import model_manager
+        ai_reply = await model_manager.generate_text(
+            prompt=prompt,
+            system_instruction=system_instruction
         )
 
         if not ai_reply:

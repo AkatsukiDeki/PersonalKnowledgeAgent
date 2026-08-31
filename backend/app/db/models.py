@@ -503,8 +503,8 @@ class Subject(Base, TimestampedUUIDMixin):
                                                              cascade="all, delete-orphan", lazy="selectin")
     tutor_conversation: Mapped[Optional["SubjectTutorConversation"]] = relationship("SubjectTutorConversation", back_populates="subject",
                                                                                     cascade="all, delete-orphan", lazy="selectin")
-    conversations = relationship("Conversation", back_populates="subject")
-    sources: Mapped[List["Source"]] = relationship("Source", secondary=subject_sources)
+    conversations = relationship("Conversation", back_populates="subject", lazy="selectin")
+    sources: Mapped[List["Source"]] = relationship("Source", secondary=subject_sources, lazy="selectin")
     flashcards: Mapped[List["SubjectFlashcard"]] = relationship("SubjectFlashcard", back_populates="subject",
                                                                 cascade="all, delete-orphan", lazy="selectin")
 

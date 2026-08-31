@@ -22,7 +22,7 @@ from fastapi import (
     Query,
     Request,
 )
-from sqlalchemy import select, func, or_
+from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
 import magic
 
@@ -398,6 +398,50 @@ async def move_source(
     chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
     claims_count = await _count(db, Claim, Claim.source_id == source.id)
     return _enrich_source_response(source, chunks_count, claims_count)
+
+
+# ─── Rename folder ────────────────────────────────────────────────────────────
+
+class RenameFolderRequest(BaseModel):
+    old_path: str
+    new_path: str
+
+@router.patch("/folders/rename")
+async def rename_folder(
+    payload: RenameFolderRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    old_prefix = sanitize_folder_path(payload.old_path)
+    new_prefix = sanitize_folder_path(payload.new_path)
+    
+    if not old_prefix or not new_prefix:
+        raise HTTPException(status_code=400, detail="Invalid folder path")
+        
+    if old_prefix == new_prefix:
+        return {"status": "noop"}
+
+    # 1. Точное совпадение
+    await db.execute(
+        update(Source)
+        .where(Source.folder == old_prefix, Source.is_deleted.is_(False))
+        .values(folder=new_prefix)
+    )
+    
+    # 2. Вложенные подпапки (замена префикса)
+    stmt = select(Source).where(
+        Source.folder.like(f"{old_prefix}/%"),
+        Source.is_deleted.is_(False)
+    )
+    res = await db.execute(stmt)
+    sources_to_update = res.scalars().all()
+    
+    for s in sources_to_update:
+        # Заменяем только префиксную часть
+        relative_part = s.folder[len(old_prefix):]
+        s.folder = f"{new_prefix}{relative_part}"
+        
+    await db.commit()
+    return {"status": "ok", "renamed_count": len(sources_to_update)}
 
 
 # ─── Delete empty folder ──────────────────────────────────────────────────────

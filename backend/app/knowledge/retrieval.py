@@ -2,7 +2,7 @@
 
 import time
 import logging
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,7 @@ async def hybrid_search(
     db: AsyncSession,
     original_query: str,
     search_query: str,
+    source_ids: Optional[List[str]] = None,
     limit: int = 5,
     include_history: bool = False,
 ) -> List[Dict[str, Any]]:
@@ -36,6 +37,7 @@ async def hybrid_search(
                (c.embedding <=> CAST(:embedding AS vector)) as distance
         FROM chunks c
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
+          AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
           AND c.embedding IS NOT NULL
         ORDER BY c.embedding <=> CAST(:embedding AS vector)
         LIMIT 10
@@ -50,6 +52,7 @@ async def hybrid_search(
                ts_rank_cd(c.tsv, plainto_tsquery('russian', :combined_query)) as score
         FROM chunks c
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
+          AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
           AND c.tsv @@ plainto_tsquery('russian', :combined_query)
         ORDER BY score DESC
         LIMIT 10
@@ -91,6 +94,8 @@ async def hybrid_search(
         "combined_query": safe_text_query,
         "limit": limit,
         "include_history": include_history,
+        "has_source_filter": source_ids is not None and len(source_ids) > 0,
+        "source_ids": source_ids if source_ids else [],
     })
     rows = [dict(row) for row in result.mappings().all()]
     t_sql_duration = time.perf_counter() - t_sql_start

@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 class WhisperSTTService:
     def __init__(
         self,
-        model_size: str = os.getenv("PKA_WHISPER_MODEL", "base"), 
+        model_size: str = os.getenv("PKA_WHISPER_MODEL", "small"), 
         device: str = os.getenv("PKA_WHISPER_DEVICE", "cpu"), 
         compute_type: str = os.getenv("PKA_WHISPER_COMPUTE_TYPE", "int8"),
         cpu_threads: int = 4
@@ -30,6 +30,7 @@ class WhisperSTTService:
         segments, info = self.model.transcribe(
             str(audio_path),
             language="ru",
+            initial_prompt="Разговорная русская речь, технический сленг, мат, ненормативная лексика, программирование.",
             beam_size=5,
             best_of=5,
             temperature=0.0,

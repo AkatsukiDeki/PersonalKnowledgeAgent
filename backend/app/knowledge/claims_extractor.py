@@ -25,6 +25,8 @@ class ClaimExtraction(BaseModel):
     confidence: float = Field(description="Confidence score from 0.0 to 1.0")
     importance: float = Field(default=0.5, description="Важность знания от 0.1 до 1.0 (см. шкалу в системном промпте)")
     temporal_context: Optional[str] = Field(default=None, description="Явный временной контекст (например 'летом 2023', 'вчера', '2024-05'), если указан.")
+    valid_from: Optional[str] = Field(default=None, description="YYYY-MM-DD, YYYY-MM или YYYY")
+    valid_to: Optional[str] = Field(default=None, description="YYYY-MM-DD, YYYY-MM или YYYY")
 
 class ExtractedEntity(BaseModel):
     chunk_index: int = Field(description="Индекс чанка (от 0), к которому относится эта сущность")
@@ -61,7 +63,7 @@ SYSTEM_PROMPT = """Ты — аналитический модуль извлеч
    - 0.6 - 0.8: Принятые решения по фичам, настройки, устойчивые привычки.
    - 0.3 - 0.5: Временные эксперименты, черновики, промежуточные статусы задач.
    - (Факты с важностью ниже 0.3 лучше отбрасывать на этапе извлечения).
-6. ВРЕМЯ (`temporal_context`): Если в тексте явно указано время, период или дата актуальности факта (например, "в 2023 году", "вчера", "на прошлой неделе"), сохрани эту строку в поле `temporal_context` как есть.
+6. ВРЕМЯ (`temporal_context`, `valid_from`, `valid_to`): Если в тексте упомянут временной интервал или точная дата события, обязательно заполни поля `valid_from` и `valid_to` в формате `YYYY-MM-DD` (или `YYYY-MM` / `YYYY`, если точный день неизвестен). Если дата относительная, рассчитай ее исходя из контекста документа. Сохрани оригинальную фразу в `temporal_context`.
 """
 
 async def extract_claims_from_chunks(chunks_texts: List[str]) -> Optional[ClaimsList]:

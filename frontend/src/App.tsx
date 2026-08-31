@@ -12,7 +12,7 @@ import { InsightsWorkspace } from './pages/InsightsWorkspace';
 import { TranscriptsWorkspace } from './pages/TranscriptsWorkspace';
 import { TimelineWorkspace } from './pages/TimelineWorkspace';
 import { UniverseCanvas } from './components/universe/UniverseCanvas';
-import { LearningDashboard } from './pages/LearningDashboard';
+import { LearningStudio } from './components/learning/LearningStudio';
 import { SemanticSearchModal } from './components/search/SemanticSearchModal';
 import { DocumentEditorModal } from './components/sources/DocumentEditorModal';
 import { SettingsModal } from './components/settings/SettingsModal';
@@ -275,10 +275,7 @@ export function App() {
                     {activeView === 'transcripts' && <TranscriptsWorkspace />}
                     {activeView === 'timeline' && <TimelineWorkspace />}
                     {activeView === 'learning' && (
-                      <LearningDashboard 
-                        initialSubjectId={learningSubjectId} 
-                        initialTab={learningInitialTab} 
-                      />
+                      <LearningStudio />
                     )}
                   </div>
                 </div>

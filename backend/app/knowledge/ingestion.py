@@ -12,6 +12,20 @@ from ..db.models import Source, Chunk
 from .chunking import create_chunks
 from .embeddings.factory import get_embedding_provider
 from .claims_extractor import extract_claims_from_chunks
+import datetime
+
+def parse_partial_date(date_str: str) -> Optional[datetime.date]:
+    if not date_str: return None
+    date_str = date_str.strip()
+    try:
+        if len(date_str) == 4:
+            return datetime.date(int(date_str), 1, 1)
+        elif len(date_str) == 7:
+            return datetime.date(int(date_str[:4]), int(date_str[5:7]), 1)
+        else:
+            return datetime.date.fromisoformat(date_str[:10])
+    except ValueError:
+        return None
 from .graph_extractor import extract_and_save_entities_batch, extract_and_save_relations_batch
 from ..core.config import settings
 from ..db.models import Claim
@@ -112,6 +126,8 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
                         importance=1.0 if c.importance == "high" else 0.5,
                         memory_score=1.0 if c.importance == "high" else 0.5,
                         quote=c.supporting_excerpt[:500] if c.supporting_excerpt else None,
+                        valid_from=parse_partial_date(c.valid_from) if hasattr(c, 'valid_from') else None,
+                        valid_to=parse_partial_date(c.valid_to) if hasattr(c, 'valid_to') else None,
                         is_active=True,
                         meta_info={}
                     )

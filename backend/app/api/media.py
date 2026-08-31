@@ -4,12 +4,15 @@ from pathlib import Path
 import shutil
 import tempfile
 import uuid
+from typing import Optional
 
 from ..db.session import get_db
 from ..db.models import Source
 from ..api.sources import _enrich_source_response, SourceResponse
 from ..core.queue import task_queue
-from ..media.pipeline import run_media_ingestion_job
+from ..media.pipeline import run_media_ingestion_job, run_retranscribe_job
+from ..schemas.media import RetranscribeRequest
+import os
 
 router = APIRouter(prefix="/media", tags=["Media"])
 
@@ -56,3 +59,37 @@ async def upload_media(
     )
 
     return _enrich_source_response(new_source, 0, 0)
+
+@router.post("/{source_id}/retranscribe", status_code=status.HTTP_202_ACCEPTED)
+async def retranscribe_media(
+    source_id: uuid.UUID,
+    payload: Optional[RetranscribeRequest] = None,
+    db: AsyncSession = Depends(get_db)
+):
+    source = await db.get(Source, source_id)
+    if not source or source.source_type != "audio":
+        raise HTTPException(status_code=404, detail="Media source not found")
+        
+    original_path = source.meta_info.get("original_file_path") if source.meta_info else None
+    # We must have original_file_path in meta_info and the file must exist
+    if not original_path or not os.path.exists(original_path):
+        raise HTTPException(status_code=409, detail="Original media file is missing on disk")
+
+    req = payload or RetranscribeRequest()
+    
+    source.status = "processing" # or queued
+    await db.commit()
+
+    task_queue.enqueue(
+        run_retranscribe_job,
+        source_id=str(source.id),
+        file_path=original_path,
+        language=req.language,
+        initial_prompt=req.initial_prompt
+    )
+    
+    return {
+        "status": "success",
+        "source_id": str(source.id),
+        "message": "Media retranscription queued"
+    }
