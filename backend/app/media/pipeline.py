@@ -241,6 +241,7 @@ async def run_media_ingestion_job(
                     content=full_text,
                     meta_info=meta,
                     status="completed",
+                    error_message=None,
                     completed_at=datetime.utcnow()
                 )
             )
@@ -429,7 +430,8 @@ async def run_retranscribe_job(
                 .values(
                     content=full_text,
                     meta_info=meta,
-                    status="completed"
+                    status="completed",
+                    error_message=None
                 )
             )
             

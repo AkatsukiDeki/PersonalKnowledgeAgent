@@ -106,8 +106,11 @@ export function TranscriptsWorkspace() {
                   </div>
                 </div>
                 
-                {source.error_message && (
-                  <p className="text-xs text-red-400 mt-2 p-2 bg-red-500/10 rounded-lg">
+                {source.status === 'error' && source.error_message && (
+                  <p 
+                    className="text-[10px] leading-tight text-red-400/80 mt-2 p-2 bg-red-500/10 rounded-lg line-clamp-3 break-all cursor-help"
+                    title={source.error_message}
+                  >
                     {source.error_message}
                   </p>
                 )}
