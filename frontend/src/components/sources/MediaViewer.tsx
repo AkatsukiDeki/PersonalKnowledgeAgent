@@ -64,7 +64,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ sourceId, source, meta
             controls
             src={streamUrl}
             className="w-full max-w-2xl max-h-[300px] rounded-lg"
-            type={mimeType}
           />
         ) : (
           <audio
@@ -72,7 +71,6 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ sourceId, source, meta
             controls
             src={streamUrl}
             className="w-full"
-            type={mimeType}
           />
         )}
       </div>
@@ -80,7 +78,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ sourceId, source, meta
       <div className="flex-1 overflow-y-auto p-6" ref={scrollRef}>
         <div className="max-w-3xl mx-auto space-y-2">
           {segments.length > 0 ? (
-            segments.map((seg, idx) => {
+            segments.map((seg: TranscriptSegment, idx: number) => {
               const isActive = currentTime >= seg.start && currentTime <= seg.end;
               return (
                 <div

@@ -1,11 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Source } from '@/types/source';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Play, Pause, CheckSquare, Lightbulb, HelpCircle, FileText, CheckCircle2 } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Checkbox } from '@/components/ui/checkbox';
+import { Source } from '@/types/source';
+const Card = ({ children, className = '' }: any) => <div className={`rounded-xl border bg-black/20 ${className}`}>{children}</div>;
+const CardHeader = ({ children, className = '' }: any) => <div className={`px-4 py-3 border-b ${className}`}>{children}</div>;
+const CardTitle = ({ children, className = '' }: any) => <h3 className={`text-sm font-medium ${className}`}>{children}</h3>;
+const CardContent = ({ children, className = '' }: any) => <div className={`p-4 ${className}`}>{children}</div>;
+const ScrollArea = ({ children, className = '' }: any) => <div className={`overflow-y-auto ${className}`}>{children}</div>;
+const Button = ({ children, className = '', onClick }: any) => <button onClick={onClick} className={`inline-flex items-center justify-center rounded-md font-medium transition-colors hover:bg-white/10 ${className}`}>{children}</button>;
+const Checkbox = ({ id, className = '' }: any) => <input type="checkbox" id={id} className={`rounded border-white/20 bg-transparent ${className}`} />;
 
 interface VoiceNoteViewerProps {
   source: Source;

@@ -55,8 +55,8 @@ export function TranscriptsWorkspace() {
               <Headphones size={24} className="text-indigo-400" />
             </div>
             <div>
-              <h1 className="text-2xl font-light text-white/90">Расшифровки</h1>
-              <p className="text-sm text-white/40">Аудио, видео и подкасты</p>
+              <h1 className="text-2xl font-light text-white/90">{t('transcripts.title')}</h1>
+              <p className="text-sm text-white/40">{t('transcripts.subtitle')}</p>
             </div>
           </div>
         </div>
@@ -69,7 +69,7 @@ export function TranscriptsWorkspace() {
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Поиск по расшифровкам..."
+              placeholder={t('transcripts.search')}
               className="w-full bg-white/5 border border-white/10 rounded-lg pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-indigo-500/50 transition-colors"
             />
           </div>
@@ -85,7 +85,7 @@ export function TranscriptsWorkspace() {
         ) : sources.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-64 text-white/30">
             <Headphones size={48} className="mb-4 opacity-20" />
-            <p>Нет загруженных расшифровок</p>
+            <p>{t('transcripts.empty')}</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">

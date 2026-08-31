@@ -5,6 +5,7 @@ export const translations: Record<string, Record<string, Record<string, string>>
     nav: {
       dialogs: "Диалог",
       insights: "Инсайты",
+      transcripts: "Расшифровки",
       universe: "Вселенная памяти",
       contradictions: "Противоречия",
       timeline: "Таймлайн",
@@ -20,6 +21,12 @@ export const translations: Record<string, Record<string, Record<string, string>>
       noInsights: "Нет подтвержденных инсайтов.",
       needMoreData: "Продолжайте общаться с агентом, чтобы он смог выявить паттерны.",
       syncing: "Синхронизация..."
+    },
+    transcripts: {
+      title: "Расшифровки",
+      subtitle: "Аудио, видео и подкасты",
+      search: "Поиск по расшифровкам...",
+      empty: "Нет загруженных расшифровок"
     },
     learning: {
       title: "Станция знаний",
@@ -81,6 +88,7 @@ export const translations: Record<string, Record<string, Record<string, string>>
     nav: {
       dialogs: "Chat",
       insights: "Insights",
+      transcripts: "Transcripts",
       universe: "Memory Universe",
       contradictions: "Contradictions",
       timeline: "Timeline",
@@ -96,6 +104,12 @@ export const translations: Record<string, Record<string, Record<string, string>>
       noInsights: "No confirmed insights yet.",
       needMoreData: "Continue chatting with the agent to help it discover patterns.",
       syncing: "Syncing..."
+    },
+    transcripts: {
+      title: "Transcripts",
+      subtitle: "Audio, video, and podcasts",
+      search: "Search transcripts...",
+      empty: "No transcripts uploaded yet"
     },
     learning: {
       title: "Knowledge Station",

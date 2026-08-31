@@ -448,7 +448,7 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
 
               {activeTab === 'media' && (
                 <div className="flex-1 relative flex flex-col min-h-0 bg-zinc-950">
-                  <MediaViewer sourceId={sourceId} source={detail} metaInfo={detail.meta_info} />
+                  <MediaViewer sourceId={sourceId} source={detail as any} metaInfo={detail.meta_info} />
                 </div>
               )}
 
