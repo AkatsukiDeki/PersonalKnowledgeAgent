@@ -41,14 +41,23 @@ async def ingest_file_revision(
     normalised_text, file_type, metadata = parse_file(filename, file_bytes)
 
     if source:
-        # Check for exact duplicate in this source
-        rev_stmt = select(FileRevision).where(FileRevision.source_id == source.id, FileRevision.file_hash == file_hash)
-        existing_rev = (await db.execute(rev_stmt)).scalars().first()
-        if existing_rev:
-            logger.info(f"[Ingestion] Exact file duplicate found for '{title}' (hash: {file_hash}). Skipping.")
-            return source, "unchanged"
+        if source.is_deleted:
+            # Воскрешаем удаленный ресурс
+            source.is_deleted = False
+            source.status = "pending"
+            source.error_message = None
+            status = "updated"
+            logger.info(f"[Ingestion] Resurrecting soft-deleted source '{title}'.")
+        else:
+            # Check for exact duplicate in this source
+            rev_stmt = select(FileRevision).where(FileRevision.source_id == source.id, FileRevision.file_hash == file_hash)
+            existing_rev = (await db.execute(rev_stmt)).scalars().first()
+            if existing_rev:
+                logger.info(f"[Ingestion] Exact file duplicate found for '{title}' (hash: {file_hash}). Skipping.")
+                return source, "unchanged"
 
-        status = "updated"
+            status = "updated"
+            
         source.version += 1
         source.importance = importance
         if domain:

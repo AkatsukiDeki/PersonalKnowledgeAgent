@@ -6,9 +6,9 @@ import shutil
 from datetime import datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, text
-from app.db.models import ImportJob, Source, Chunk
-from app.connectors.chats.chatgpt import ChatGPTParser
-from app.connectors.chats.segmenter import TopicSegmenter
+from ...db.models import ImportJob, Source, Chunk
+from ...connectors.chats.chatgpt import ChatGPTParser
+from ...connectors.chats.segmenter import TopicSegmenter
 
 PREVIEW_DIR = "/tmp/pka_previews"
 os.makedirs(PREVIEW_DIR, exist_ok=True)
@@ -63,10 +63,10 @@ class ChatImportService:
             if provider == "chatgpt":
                 parser = ChatGPTParser()
             elif provider == "claude":
-                from app.connectors.chats.claude import ClaudeParser
+                from ...connectors.chats.claude import ClaudeParser
                 parser = ClaudeParser()
             elif provider == "gemini":
-                from app.connectors.chats.gemini import GeminiParser
+                from ...connectors.chats.gemini import GeminiParser
                 parser = GeminiParser()
             else:
                 parser = None

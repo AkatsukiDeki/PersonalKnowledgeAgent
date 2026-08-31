@@ -52,3 +52,28 @@ class GraphLink(BaseModel):
 class GraphTopologyResponse(BaseModel):
     nodes: List[GraphNode]
     links: List[GraphLink]
+
+class BridgeClaimItem(BaseModel):
+    id: str
+    content: str
+    source_id: str
+    source_title: str
+    domain: str
+    confidence: float = 1.0
+    is_superseded: bool = False
+
+class CrossDomainBridgeItem(BaseModel):
+    bridge_id: str
+    relation_type: str
+    strength: float = 1.0
+    evidence_score: float = 0.0
+    source_claim: BridgeClaimItem
+    target_claim: BridgeClaimItem
+    supporting_snippet: Optional[str] = None
+
+class BridgeContextResponse(BaseModel):
+    domain_a: str
+    domain_b: str
+    total_bridges: int
+    top_bridges: List[CrossDomainBridgeItem]
+    evidence_sufficient: bool

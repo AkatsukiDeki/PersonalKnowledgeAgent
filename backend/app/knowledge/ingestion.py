@@ -56,7 +56,7 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             source.started_at = datetime.utcnow()
             await db.commit()
 
-            raw_chunks: Sequence[str] = await task_queue.run_cpu_bound(create_chunks, source.content)
+            raw_chunks: Sequence[str] = await task_queue.run_cpu_bound(create_chunks, source.content, 2500, 250)
 
             provider = get_embedding_provider()
             embeddings = await provider.embed_documents(list(raw_chunks)) if raw_chunks else []
@@ -81,132 +81,50 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             if db_chunks:
                 db.add_all(db_chunks)
 
-            source.status = "completed"
-            source.completed_at = datetime.utcnow()
             await db.commit()
             await resolve_granular_error("chunking", source_id=source_id)
 
-            # --- Phase 3A: Batch Extraction & Commit ---
-            logger.info(f"[Ingestion] Source {source_id} completed chunking. Starting Batch Extraction.")
+            # --- Phase 3A: Document Concept Extraction ---
+            logger.info(f"[Ingestion] Source {source_id} completed chunking. Starting Concept Extraction.")
             all_new_claims = []
 
-            from .claims_extractor import extract_claims_from_chunks
+            from .extraction.router import select_extraction_strategy
             from sqlalchemy.dialects.postgresql import insert as pg_insert
-            from ..db.models import Entity, claim_entities
+            
+            strategy = select_extraction_strategy(source.source_type, len(source.content))
+            concepts = await strategy.extract(source.content, source.title)
+            
+            if concepts:
+                concept_texts = [f"{c.title}: {c.statement}" for c in concepts]
+                concept_embeddings = await provider.embed_documents(concept_texts)
+                
+                for idx, c in enumerate(concepts):
+                    emb = concept_embeddings[idx] if idx < len(concept_embeddings) else None
+                    
+                    claim = Claim(
+                        source_id=source.id,
+                        chunk_id=None,
+                        content=f"{c.title}: {c.statement}",
+                        embedding=emb,
+                        claim_type="concept",
+                        category="study",
+                        confidence=1.0,
+                        importance=1.0 if c.importance == "high" else 0.5,
+                        memory_score=1.0 if c.importance == "high" else 0.5,
+                        quote=c.supporting_excerpt[:500] if c.supporting_excerpt else None,
+                        is_active=True,
+                        meta_info={}
+                    )
+                    all_new_claims.append(claim)
+                    db.add(claim)
+                
+                await db.flush() # get IDs for claims
+                await db.commit()
 
-            # Batch processing
-            batch_size = settings.EXTRACTION_BATCH_SIZE
-            for i in range(0, len(db_chunks), batch_size):
-                batch = db_chunks[i:i + batch_size]
-                batch_texts = [c.text_content for c in batch]
-
-                try:
-                    claims_data = await extract_claims_from_chunks(batch_texts)
-                    if claims_data:
-                        # 1. Prepare and insert claims
-                        from sqlalchemy import select
-                        claim_texts = [c.content for c in claims_data.claims]
-                        if claim_texts:
-                            claim_embeddings = await provider.embed_documents(claim_texts)
-                        else:
-                            claim_embeddings = []
-
-                        batch_claims = []
-                        chunk_idx_to_claim = {}
-
-                        for i_claim, c in enumerate(claims_data.claims):
-                            if c.chunk_index < 0 or c.chunk_index >= len(batch):
-                                continue
-                            chunk = batch[c.chunk_index]
-                            emb = claim_embeddings[i_claim] if i_claim < len(claim_embeddings) else None
-
-                            # Поиск дубликатов (Cosine Sim >= 0.88 -> Distance <= 0.12)
-                            existing_claim = None
-                            if emb:
-                                stmt = select(Claim).filter(Claim.embedding.cosine_distance(emb) <= 0.12).order_by(Claim.embedding.cosine_distance(emb)).limit(1)
-                                result = await db.execute(stmt)
-                                existing_claim = result.scalars().first()
-
-                            if existing_claim:
-                                existing_claim.recurrence += 1
-                                # Обновляем memory_score, например: importance * (1.0 + min(recurrence, 10)/20.0)
-                                existing_claim.memory_score = existing_claim.importance * (1.0 + min(existing_claim.recurrence, 10) / 20.0)
-
-                                if c.temporal_context:
-                                    if "temporal_context" not in existing_claim.meta_info:
-                                        existing_claim.meta_info["temporal_context"] = c.temporal_context
-                                    else:
-                                        existing_claim.meta_info["temporal_context"] += f"; {c.temporal_context}"
-
-                                db.add(existing_claim)
-                                chunk_idx_to_claim[c.chunk_index] = existing_claim
-                            else:
-                                meta = {}
-                                if c.temporal_context:
-                                    meta["temporal_context"] = c.temporal_context
-
-                                claim = Claim(
-                                    source_id=source.id,
-                                    chunk_id=chunk.id,
-                                    content=c.content,
-                                    embedding=emb,
-                                    claim_type=c.claim_type,
-                                    category=c.category,
-                                    confidence=c.confidence,
-                                    importance=c.importance,
-                                    memory_score=c.importance,
-                                    meta_info=meta
-                                )
-                                batch_claims.append(claim)
-                                chunk_idx_to_claim[c.chunk_index] = claim
-
-                        if batch_claims:
-                            db.add_all(batch_claims)
-                            await db.flush() # get IDs for claims
-
-                            # 2. Prepare and insert entities
-                            for ent in claims_data.entities:
-                                if ent.chunk_index not in chunk_idx_to_claim:
-                                    continue
-                                claim = chunk_idx_to_claim[ent.chunk_index]
-
-                                stmt = pg_insert(Entity).values(
-                                    canonical_name=ent.canonical_name.strip().lower(),
-                                    entity_type=ent.entity_type,
-                                    description=ent.description,
-                                    aliases=ent.aliases,
-                                    meta_info={}
-                                )
-                                stmt = stmt.on_conflict_do_update(
-                                    index_elements=["canonical_name"],
-                                    set_=dict(description=stmt.excluded.description)
-                                ).returning(Entity.id)
-
-                                res = await db.execute(stmt)
-                                inserted_id = res.scalar_one_or_none()
-                                if inserted_id:
-                                    stmt_link = pg_insert(claim_entities).values(
-                                        claim_id=claim.id,
-                                        entity_id=inserted_id
-                                    ).on_conflict_do_nothing(
-                                        index_elements=['claim_id', 'entity_id']
-                                    )
-                                    await db.execute(stmt_link)
-
-                            # Note: Relations are currently skipped from intra-batch until ClaimRelation logic is updated
-
-                            all_new_claims.extend(batch_claims)
-
-                    await db.commit()
-                except Exception as batch_err:
-                    await db.rollback()
-                    logger.error(f"[Ingestion] Failed to process extraction batch for source {source_id}: {batch_err}")
-                    await record_error(batch_err, "extraction", source_id=source_id, context={"batch_start_index": i})
-
-            logger.info(f"[Ingestion] Extraction for {source_id} finished. {len(all_new_claims)} claims extracted.")
+            logger.info(f"[Ingestion] Extraction for {source_id} finished. {len(all_new_claims)} concepts extracted.")
             # --- Phase 3D: Conflict Resolution & Timeline ---
             # Check for conflicts between newly extracted claims and existing ones
-            logger.info(f"[Ingestion] Running conflict resolver for {len(all_new_claims)} new claims...")
+            logger.info(f"[Ingestion] Running conflict resolver for {len(all_new_claims)} new concepts...")
             from .conflict_resolver import resolve_conflicts_for_new_claims
             await resolve_conflicts_for_new_claims(db, all_new_claims)
 
@@ -221,6 +139,12 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
 
             await resolve_granular_error("extraction", source_id=source_id)
             await resolve_granular_error("ingestion", source_id=source_id)
+            
+            source = await db.get(Source, source_id)
+            if source:
+                source.status = "completed"
+                source.completed_at = datetime.utcnow()
+                await db.commit()
 
         except Exception as e:
             await db.rollback()

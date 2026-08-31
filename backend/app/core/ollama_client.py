@@ -217,19 +217,38 @@ class OllamaClient:
             self,
             messages: list[ChatMessage],
             model: Optional[str] = None,
+            temperature: float = 0.2,
     ):
         target_model = model or self.default_model
+        
+        # Validation and cleanup
+        processed_messages = []
+        for msg in messages:
+            role = msg.get("role", "user").lower()
+            if role not in ("system", "user", "assistant"):
+                role = "user"
+            
+            clean_msg = {"role": role, "content": msg.get("content", "")}
+            
+            if "images" in msg and isinstance(msg["images"], list):
+                clean_images = []
+                for img in msg["images"]:
+                    if img.startswith("data:image"):
+                        # Remove base64 prefix if present
+                        img = img.split(",", 1)[-1]
+                    clean_images.append(img)
+                if clean_images:
+                    clean_msg["images"] = clean_images
+                    
+            processed_messages.append(clean_msg)
+
         payload = {
             "model": target_model,
-            "messages": messages,
+            "messages": processed_messages,
             "stream": True,
             "keep_alive": -1,
             "options": {
-                "num_predict": 4096,
-                "temperature": 0.1,
-                "repeat_penalty": 1.15,
-                "top_p": 0.9,
-                "num_ctx": 8192,
+                "temperature": temperature,
             }
         }
 

@@ -5,8 +5,8 @@ import math
 from typing import List
 from cachetools import LRUCache
 
-from app.core.config import settings
-from app.knowledge.embeddings.base import BaseEmbeddingProvider
+from ...core.config import settings
+from ...knowledge.embeddings.base import BaseEmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

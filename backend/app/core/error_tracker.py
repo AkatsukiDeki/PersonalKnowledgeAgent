@@ -7,9 +7,9 @@ from uuid import UUID
 from typing import Any
 from sqlalchemy import select, delete, update
 from sqlalchemy.dialects.postgresql import insert
-from app.core.config import settings
-from app.db.session import async_session_factory
-from app.db.models import SystemError
+from ..core.config import settings
+from ..db.session import async_session_factory
+from ..db.models import SystemError
 
 logger = logging.getLogger("error_tracker")
 

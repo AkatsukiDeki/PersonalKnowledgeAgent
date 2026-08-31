@@ -7,8 +7,8 @@ import uuid
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.db.models import Conversation, ConversationMessage, ConversationSegment, ConversationMemory, Decision, Claim
-from app.core.llm import model_manager, TaskType
+from ..db.models import Conversation, ConversationMessage, ConversationSegment, ConversationMemory, Decision, Claim
+from ..core.llm import model_manager, TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -137,7 +137,7 @@ async def process_chat_pipeline(db: AsyncSession, chat_data: Dict[str, Any], tit
             outcome=summary.outcome
         )
         # 3.5 Optional ML Enrichment (Embedding)
-        from app.knowledge.embeddings.factory import get_embedding_provider
+        from ..knowledge.embeddings.factory import get_embedding_provider
         provider = get_embedding_provider()
         memory_text = f"Problem: {summary.problem}\nOutcome: {summary.outcome}"
         try:
@@ -186,7 +186,7 @@ async def process_chat_pipeline(db: AsyncSession, chat_data: Dict[str, Any], tit
             if decisions_extract.claims:
                 # Need a Source and Chunk to link the claims to
                 # Create a generic Source for this conversation
-                from app.db.models import Source, Chunk
+                from ..db.models import Source, Chunk
                 
                 chat_source = Source(
                     title=f"Chat: {conversation.title}",

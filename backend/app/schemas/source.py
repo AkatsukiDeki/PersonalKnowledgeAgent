@@ -1,14 +1,22 @@
 import uuid
 from datetime import datetime
 from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SourceBase(BaseModel):
     title: str
-    domain: Optional[str] = None
+    domain: Optional[str] = Field(default=None, max_length=50)
     importance: str = "normal"
     folder: Optional[str] = None
+
+    @field_validator("domain", mode="before")
+    @classmethod
+    def normalize_domain(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = str(v).strip()
+        return cleaned if cleaned else None
 
 
 class SourceCreate(SourceBase):
@@ -19,7 +27,15 @@ class SourceCreate(SourceBase):
 
 class SourceUpdateContent(BaseModel):
     raw_content: str
-    domain: Optional[str] = None
+    domain: Optional[str] = Field(default=None, max_length=50)
+
+    @field_validator("domain", mode="before")
+    @classmethod
+    def normalize_domain(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return None
+        cleaned = str(v).strip()
+        return cleaned if cleaned else None
 
 
 class SourceUpdateFolder(BaseModel):

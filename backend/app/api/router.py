@@ -19,6 +19,8 @@ from .endpoints import timeline
 from .endpoints import subjects
 from .profile import router as profile_router
 from .learning import router as learning_router
+from .media import router as media_router
+from .focus import router as focus_router
 
 api_router = APIRouter()
 
@@ -39,3 +41,5 @@ api_router.include_router(timeline.router)
 api_router.include_router(profile_router)
 api_router.include_router(learning_router)
 api_router.include_router(subjects.router)
+api_router.include_router(media_router)
+api_router.include_router(focus_router)

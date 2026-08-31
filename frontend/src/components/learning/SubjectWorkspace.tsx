@@ -86,7 +86,7 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
   ] as const;
 
   return (
-    <div className="flex flex-col h-screen w-full bg-[#0a0a0c] overflow-hidden text-zinc-100">
+    <div className="flex flex-col h-[100dvh] w-full bg-[#0a0a0c] overflow-hidden text-zinc-100">
       {/* Header */}
       <header className="shrink-0 border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-md px-6 py-4">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">

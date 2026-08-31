@@ -5,14 +5,14 @@ from fastapi import APIRouter, Depends, UploadFile, File, Form, HTTPException, B
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from typing import Optional
-from app.db.session import get_db
-from app.db.models import ImportJob
-from app.schemas.chat_import import (
+from ..db.session import get_db
+from ..db.models import ImportJob
+from ..schemas.chat_import import (
     ImportJobResponse,
     ImportPreviewResponse,
     CommitImportRequest
 )
-from app.connectors.chats.service import ChatImportService
+from ..connectors.chats.service import ChatImportService
 
 router = APIRouter()
 

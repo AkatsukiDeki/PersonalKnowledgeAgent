@@ -45,10 +45,38 @@ export interface SourceDetail extends SourceItem {
   claims: SourceClaimSimple[];
 }
 
+export interface TaskPayload {
+  title?: string | null;
+  description?: string | null;
+  context_quote?: string | null;
+}
+
+export interface ContextActionRequest {
+  action: 'explain' | 'summarize' | 'create_task';
+  selected_text: string;
+  surrounding_context?: string;
+}
+
+export interface ContextActionResponse {
+  result_text?: string | null;
+  task_payload?: TaskPayload | null;
+}
+
+// Folder tree types
+export interface FolderTreeNode {
+  count: number;
+  children: Record<string, FolderTreeNode>;
+}
+
+export interface FolderTreeResponse {
+  children: Record<string, FolderTreeNode>;
+}
+
 export const sourcesApi = {
   getSources: async (params?: {
     domain?: string;
     folder?: string;
+    recursive?: boolean;
     search?: string;
     file_type?: string;
     include_deleted?: boolean;
@@ -56,6 +84,7 @@ export const sourcesApi = {
     const searchParams = new URLSearchParams();
     if (params?.domain) searchParams.append('domain', params.domain);
     if (params?.folder) searchParams.append('folder', params.folder);
+    if (params?.recursive) searchParams.append('recursive', 'true');
     if (params?.search) searchParams.append('search', params.search);
     if (params?.file_type) searchParams.append('file_type', params.file_type);
     if (params?.include_deleted) searchParams.append('include_deleted', 'true');
@@ -87,7 +116,7 @@ export const sourcesApi = {
     formData.append('file', file);
     if (title) formData.append('title', title);
     if (folder) formData.append('folder', folder);
-    if (domain) formData.append('domain', domain);
+    if (domain && domain.trim()) formData.append('domain', domain.trim());
     formData.append('importance', importance);
 
     return fetchApi<SourceItem>('/sources/upload', {
@@ -97,6 +126,18 @@ export const sourcesApi = {
   },
   upload: async (file: File, domain?: string, folder?: string): Promise<SourceItem> => {
     return sourcesApi.uploadFile(file, undefined, folder, domain, 'normal');
+  },
+
+  uploadMedia: async (file: File, profile: string = 'speech', subject_id?: string): Promise<SourceItem> => {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('profile', profile);
+    if (subject_id) formData.append('subject_id', subject_id);
+
+    return fetchApi<SourceItem>('/media/upload', {
+      method: 'POST',
+      body: formData,
+    });
   },
 
   uploadUrl: async (
@@ -164,5 +205,48 @@ export const sourcesApi = {
   },
   delete: async (id: string): Promise<void> => {
     return sourcesApi.deleteSource(id);
+  },
+
+  aiFixText: async (sourceId: string, text: string): Promise<{ fixed_text: string }> => {
+    return fetchApi<{ fixed_text: string }>(`/sources/${sourceId}/ai-fix`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text }),
+    });
+  },
+
+  runContextAction: async (
+    sourceId: string,
+    payload: ContextActionRequest
+  ): Promise<ContextActionResponse> => {
+    return fetchApi<ContextActionResponse>(`/sources/${sourceId}/context-action`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+  },
+
+  // ── Folder management ──────────────────────────────────────────────────────
+
+  getFolderTree: async (): Promise<FolderTreeResponse> => {
+    return fetchApi<FolderTreeResponse>('/sources/folders/tree');
+  },
+
+  moveSource: async (sourceId: string, folder: string | null): Promise<SourceItem> => {
+    return fetchApi<SourceItem>(`/sources/${sourceId}/move`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder }),
+    });
+  },
+
+  deleteFolder: async (folderPath: string): Promise<void> => {
+    await fetchApi(`/sources/folders/${encodeURIComponent(folderPath)}`, {
+      method: 'DELETE',
+    });
   },
 };

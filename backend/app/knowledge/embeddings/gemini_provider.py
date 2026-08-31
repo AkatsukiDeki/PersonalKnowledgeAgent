@@ -8,8 +8,8 @@ from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_excep
 from google import genai
 from google.genai import types
 
-from app.core.config import settings
-from app.knowledge.embeddings.base import BaseEmbeddingProvider
+from ...core.config import settings
+from ...knowledge.embeddings.base import BaseEmbeddingProvider
 
 logger = logging.getLogger(__name__)
 

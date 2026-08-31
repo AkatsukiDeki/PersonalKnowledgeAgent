@@ -1,7 +1,7 @@
 import uuid
 from typing import List, Optional
 from pydantic import BaseModel
-from app.schemas.profiles import ChatMode
+from ..schemas.profiles import ChatMode
 
 
 class ChatRequest(BaseModel):

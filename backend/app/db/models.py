@@ -30,7 +30,7 @@ class Source(Base, TimestampedUUIDMixin):
     importance: Mapped[str] = mapped_column(String(20), default="normal",
                                             index=True)  # temporary, normal, important, critical
     domain: Mapped[Optional[str]] = mapped_column(String(50), nullable=True, index=True)
-    folder: Mapped[Optional[str]] = mapped_column(String(100), nullable=True, index=True)
+    folder: Mapped[Optional[str]] = mapped_column(String(500), nullable=True, index=True)
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
@@ -109,6 +109,7 @@ class Chunk(Base, TimestampedUUIDMixin):
     text_content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
     tsv: Mapped[Optional[Any]] = mapped_column(TSVECTOR, nullable=True)
+    meta_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     # Chunk versioning (mirrors Claim pattern)
     is_active: Mapped[bool] = mapped_column(default=True, index=True)
@@ -170,16 +171,17 @@ class Claim(Base, TimestampedUUIDMixin):
         ForeignKey("sources.id", ondelete="CASCADE"),
         nullable=False
     )
-    chunk_id: Mapped[uuid.UUID] = mapped_column(
+    chunk_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("chunks.id", ondelete="CASCADE"),
-        nullable=False
+        nullable=True
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
     claim_type: Mapped[str] = mapped_column(String, nullable=False)
     category: Mapped[str] = mapped_column(String, index=True, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, default=1.0)
+    quote: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Phase 3D fields
@@ -584,3 +586,18 @@ class SubjectFlashcard(Base):
     last_reviewed_at = Column(DateTime(timezone=True), nullable=True)
 
     subject = relationship("Subject", back_populates="flashcards")
+
+
+class FocusSession(Base, TimestampedUUIDMixin):
+    __tablename__ = "focus_sessions"
+
+    session_type = Column(String(32), nullable=False, default="focus")  # "focus", "short_break", "long_break"
+    target_duration_min = Column(Integer, nullable=False, default=25)
+    actual_duration_sec = Column(Integer, nullable=False, default=0)
+    
+    subject_id = Column(PG_UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="SET NULL"), nullable=True, index=True)
+    task_name = Column(String(255), nullable=True)
+    session_notes = Column(Text, nullable=True)
+    
+    completed = Column(Boolean, nullable=False, default=False)
+    interrupted = Column(Boolean, nullable=False, default=False)

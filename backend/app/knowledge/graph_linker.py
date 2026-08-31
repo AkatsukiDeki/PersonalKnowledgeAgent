@@ -50,26 +50,24 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
     for i, claim in enumerate(claims_to_process):
         logger.info(f"[GraphLinker] Processing claim {i+1}/{len(claims_to_process)}: {claim.id}")
         
-        chunk = await db.get(Chunk, claim.chunk_id)
-        if not chunk or not chunk.embedding:
+        if not claim.embedding:
             continue
             
-        # Search for candidates to link to using pgvector cosine distance
-        # cos(E_new, E_existing) >= 0.65 => distance <= 0.35
-        distance = Chunk.embedding.cosine_distance(chunk.embedding)
-        candidates_stmt = (
-            select(Claim)
-            .join(Chunk, Claim.chunk_id == Chunk.id)
-            .where(
-                Claim.is_active == True,
-                Claim.id != claim.id,
-                distance <= 0.35
-            )
-            .order_by(distance)
-            .limit(10)
+        from ..services.claim_candidate_retriever import ClaimCandidateRetriever
+        from ..db.models import Source
+        
+        source = await db.get(Source, claim.source_id)
+        domain = source.domain if source else None
+        
+        retriever = ClaimCandidateRetriever(db)
+        candidates = await retriever.get_candidates(
+            claim_id=str(claim.id),
+            embedding=claim.embedding,
+            domain=domain,
+            global_limit=5,
+            domain_limit=5,
+            min_similarity=0.65
         )
-        candidates_res = await db.execute(candidates_stmt)
-        candidates = candidates_res.scalars().all()
         
         if not candidates:
             continue
@@ -93,6 +91,13 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
                 if rel.confidence < 0.70:
                     continue
                 if rel.source_claim_id == rel.target_claim_id:
+                    continue
+                
+                # Verify both claim IDs actually exist in the DB (LLM can hallucinate IDs)
+                source_claim_exists = await db.get(Claim, rel.source_claim_id)
+                target_claim_exists = await db.get(Claim, rel.target_claim_id)
+                if not source_claim_exists or not target_claim_exists:
+                    logger.warning(f"[GraphLinker] Skipping relation: one or both claim IDs are phantoms: {rel.source_claim_id} -> {rel.target_claim_id}")
                     continue
                     
                 # Create relation

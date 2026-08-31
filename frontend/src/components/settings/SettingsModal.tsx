@@ -112,31 +112,31 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
           </button>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col md:flex-row flex-1 overflow-hidden min-h-0">
           {/* Sidebar */}
-          <div className="w-48 border-r border-white/5 bg-white/[0.01] p-2 flex flex-col gap-1 shrink-0">
+          <div className="w-full md:w-48 border-b md:border-b-0 md:border-r border-white/5 bg-white/[0.01] p-2 flex flex-row md:flex-col overflow-x-auto gap-1 shrink-0 scrollbar-thin scrollbar-thumb-white/10">
             <button
               onClick={() => setActiveTab('profile')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'profile' ? 'bg-indigo-500/20 text-indigo-300' : 'text-white/50 hover:bg-white/5 hover:text-white/90'}`}
+              className={`flex items-center gap-2 sm:gap-3 px-3 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'profile' ? 'bg-indigo-500/20 text-indigo-300' : 'text-white/50 hover:bg-white/5 hover:text-white/90'}`}
             >
               <User size={16} /> {t('settings.profile')}
             </button>
             <button
               onClick={() => setActiveTab('llm')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'llm' ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'text-white/50 hover:bg-white/5 hover:text-white/90'}`}
+              className={`flex items-center gap-2 sm:gap-3 px-3 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'llm' ? 'bg-fuchsia-500/20 text-fuchsia-300' : 'text-white/50 hover:bg-white/5 hover:text-white/90'}`}
             >
               <Cpu size={16} /> {t('settings.models')}
             </button>
             <button
               onClick={() => setActiveTab('system')}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${activeTab === 'system' ? 'bg-emerald-500/20 text-emerald-300' : 'text-white/50 hover:bg-white/5 hover:text-white/90'}`}
+              className={`flex items-center gap-2 sm:gap-3 px-3 py-2 sm:py-2.5 rounded-xl text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${activeTab === 'system' ? 'bg-emerald-500/20 text-emerald-300' : 'text-white/50 hover:bg-white/5 hover:text-white/90'}`}
             >
               <Server size={16} /> {t('settings.system')}
             </button>
           </div>
 
           {/* Content */}
-          <div className="flex-1 overflow-y-auto p-6 scrollbar-thin scrollbar-thumb-white/10">
+          <div className="flex-1 overflow-y-auto p-4 sm:p-6 min-w-0 scrollbar-thin scrollbar-thumb-white/10">
             {activeTab === 'profile' && (
               <div className="space-y-6 text-sm text-white/80 font-light">
                 {profileLoading ? (

@@ -1,8 +1,8 @@
 import asyncio
 import logging
 from sqlalchemy import text
-from app.db.session import async_session_factory
-from app.knowledge.pattern_engine import run_pattern_discovery_pipeline
+from ..db.session import async_session_factory
+from ..knowledge.pattern_engine import run_pattern_discovery_pipeline
 
 logger = logging.getLogger(__name__)
 

@@ -2,7 +2,7 @@ from fastapi import Security, HTTPException, status, Request
 from fastapi.security import APIKeyHeader
 from slowapi import Limiter
 from slowapi.util import get_remote_address
-from app.core.config import settings
+from ..core.config import settings
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 

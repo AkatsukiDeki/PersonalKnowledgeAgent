@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { sourcesApi } from '../../api/sources';
 import { chatImportApi, ImportPreviewResponse } from '../../api/chat_import';
-import { X, UploadCloud, CheckCircle2, MessageSquare, AlertCircle, Clock } from 'lucide-react';
+import { X, UploadCloud, CheckCircle2, MessageSquare, AlertCircle, Clock, FileText, Upload, Loader2 } from 'lucide-react';
+import { DomainInput } from './DomainInput';
 
 interface Props {
   isOpen: boolean;
@@ -10,10 +11,21 @@ interface Props {
 }
 
 export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
-  const [activeTab, setActiveTab] = useState<'manual' | 'chats'>('manual');
+  const [activeTab, setActiveTab] = useState<'files' | 'manual' | 'chats'>('files');
+  
+  // Domains
+  const [existingDomains, setExistingDomains] = useState<string[]>([]);
+  
+  // Batch Files State
+  const [batchFiles, setBatchFiles] = useState<File[]>([]);
+  const [isBatchUploading, setIsBatchUploading] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Manual State
   const [title, setTitle] = useState('');
+  const [domain, setDomain] = useState(() => localStorage.getItem('pka_last_domain') || '');
   const [content, setContent] = useState('');
   const [sourceType, setSourceType] = useState('note');
   const [isManualLoading, setIsManualLoading] = useState(false);
@@ -26,6 +38,21 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
   const [jobStatus, setJobStatus] = useState<'idle' | 'processing' | 'preview' | 'ingesting' | 'completed' | 'failed'>('idle');
   const [previewData, setPreviewData] = useState<ImportPreviewResponse | null>(null);
   const [chatError, setChatError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      sourcesApi.list().then((data) => {
+        const uniqueDomains = Array.from(
+          new Set(
+            data
+              .map((s: any) => s.domain?.trim())
+              .filter((d: any): d is string => Boolean(d))
+          )
+        ).sort((a, b) => a.localeCompare(b));
+        setExistingDomains(uniqueDomains);
+      }).catch(console.error);
+    }
+  }, [isOpen]);
 
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
@@ -57,17 +84,55 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
   if (!isOpen) return null;
 
   const handleClose = () => {
-    setActiveTab('manual');
+    setActiveTab('files');
     setTitle('');
+    setDomain(localStorage.getItem('pka_last_domain') || '');
     setContent('');
     setJobId(null);
     setJobStatus('idle');
     setPreviewData(null);
     setSelectedFile(null);
     setChatError(null);
+    setBatchFiles([]);
+    setBatchProgress(null);
+    setBatchError(null);
     onClose();
     if (jobStatus === 'completed' && onSuccess) {
       onSuccess();
+    }
+  };
+
+  const handleBatchSubmit = async () => {
+    if (batchFiles.length === 0) return;
+    setIsBatchUploading(true);
+    setBatchError(null);
+    try {
+      const finalDomain = domain.trim();
+      let count = 0;
+      for (const f of batchFiles) {
+        setBatchProgress(`Uploading ${count + 1} of ${batchFiles.length}: ${f.name}`);
+        if (f.type.startsWith('audio/') || f.type.startsWith('video/')) {
+          await sourcesApi.uploadMedia(f);
+        } else {
+          await sourcesApi.upload(f, finalDomain || undefined, '');
+        }
+        count++;
+      }
+
+      if (finalDomain) {
+        localStorage.setItem('pka_last_domain', finalDomain);
+      } else {
+        localStorage.removeItem('pka_last_domain');
+      }
+
+      setBatchProgress(null);
+      setIsBatchUploading(false);
+      handleClose();
+      if (onSuccess) onSuccess();
+    } catch (err: any) {
+      setBatchError(err.message || 'Error uploading files');
+      setIsBatchUploading(false);
+      setBatchProgress(null);
     }
   };
 
@@ -79,12 +144,20 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
     setManualError(null);
 
     try {
+      const finalDomain = domain.trim();
       await sourcesApi.create({
         title: title.trim(),
+        domain: finalDomain || undefined,
         content: content.trim(),
         source_type: sourceType,
         meta_info: { added_via: 'web_ui' },
       });
+
+      if (finalDomain) {
+        localStorage.setItem('pka_last_domain', finalDomain);
+      } else {
+        localStorage.removeItem('pka_last_domain');
+      }
 
       setIsManualLoading(false);
       handleClose();
@@ -138,16 +211,22 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
 
         {/* Tabs */}
         {jobStatus === 'idle' && (
-          <div className="flex border-b border-zinc-800 bg-zinc-950/50 shrink-0 px-2">
+          <div className="flex border-b border-zinc-800 bg-zinc-950/50 shrink-0 px-2 overflow-x-auto hide-scrollbar">
+            <button
+              onClick={() => setActiveTab('files')}
+              className={`px-4 py-3 text-sm font-medium border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'files' ? 'border-indigo-500 text-indigo-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+            >
+              <FileText size={14} /> Batch Files
+            </button>
             <button
               onClick={() => setActiveTab('manual')}
-              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors \${activeTab === 'manual' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-4 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === 'manual' ? 'border-emerald-500 text-emerald-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
             >
               Manual Import
             </button>
             <button
               onClick={() => setActiveTab('chats')}
-              className={`px-4 py-3 text-sm font-medium border-b-2 flex items-center gap-2 transition-colors \${activeTab === 'chats' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+              className={`px-4 py-3 text-sm font-medium border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap ${activeTab === 'chats' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
             >
               <MessageSquare size={14} /> Import AI Chats
             </button>
@@ -156,6 +235,103 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
 
         {/* Body */}
         <div className="overflow-y-auto flex-1">
+          {activeTab === 'files' && jobStatus === 'idle' && (
+            <div className="p-5 flex flex-col gap-4">
+              {batchError && (
+                <div className="bg-red-950/60 border border-red-800 text-red-300 text-xs px-3 py-2 rounded">
+                  {batchError}
+                </div>
+              )}
+              
+              <div
+                className="border-2 border-dashed border-zinc-700/50 hover:border-indigo-500/50 rounded-xl p-8 flex flex-col items-center justify-center cursor-pointer bg-zinc-950/30 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => { e.preventDefault(); e.currentTarget.classList.add('border-indigo-500', 'bg-indigo-500/10'); }}
+                onDragLeave={(e) => { e.preventDefault(); e.currentTarget.classList.remove('border-indigo-500', 'bg-indigo-500/10'); }}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  e.currentTarget.classList.remove('border-indigo-500', 'bg-indigo-500/10');
+                  if (e.dataTransfer.files) {
+                    setBatchFiles(prev => [...prev, ...Array.from(e.dataTransfer.files)]);
+                  }
+                }}
+              >
+                <input
+                  type="file"
+                  multiple
+                  ref={fileInputRef}
+                  className="hidden"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      setBatchFiles(prev => [...prev, ...Array.from(e.target.files!)]);
+                    }
+                  }}
+                />
+                <Upload size={32} className="text-zinc-500 mb-3" />
+                <p className="text-sm text-zinc-300 font-medium">Click to select or drag & drop files here</p>
+                <p className="text-xs text-zinc-500 mt-1">PDF, TXT, MD, MP3, MP4, DOCX, etc.</p>
+              </div>
+
+              {batchFiles.length > 0 && (
+                <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-3 max-h-40 overflow-y-auto">
+                  <div className="text-xs font-medium text-zinc-400 mb-2 border-b border-zinc-800 pb-2 flex justify-between">
+                    <span>Selected Files ({batchFiles.length})</span>
+                    <button 
+                      onClick={() => setBatchFiles([])}
+                      className="text-red-400 hover:text-red-300"
+                    >
+                      Clear all
+                    </button>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    {batchFiles.map((file, idx) => (
+                      <div key={idx} className="text-xs text-zinc-300 truncate flex items-center justify-between group">
+                        <span>{file.name}</span>
+                        <button 
+                          onClick={(e) => { e.stopPropagation(); setBatchFiles(prev => prev.filter((_, i) => i !== idx)); }}
+                          className="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-2">
+                <label className="block text-xs font-medium text-zinc-400 mb-1">Общий домен для всей пачки (опционально)</label>
+                <DomainInput
+                  value={domain}
+                  onChange={setDomain}
+                  suggestions={existingDomains}
+                  disabled={isBatchUploading}
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t border-zinc-800">
+                <button type="button" onClick={handleClose} disabled={isBatchUploading} className="px-4 py-2 text-xs font-medium text-zinc-300 hover:bg-zinc-800 rounded-lg">
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBatchSubmit}
+                  disabled={isBatchUploading || batchFiles.length === 0}
+                  className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 text-xs font-medium rounded-lg disabled:opacity-50 transition-colors"
+                >
+                  {isBatchUploading ? <Loader2 size={14} className="animate-spin" /> : <UploadCloud size={14} />}
+                  Upload All ({batchFiles.length})
+                </button>
+              </div>
+
+              {batchProgress && (
+                <div className="mt-2 text-xs text-indigo-400 font-mono text-center">
+                  {batchProgress}
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === 'manual' && jobStatus === 'idle' && (
             <form onSubmit={handleManualSubmit} className="p-5 flex flex-col gap-4">
               {manualError && (
@@ -172,6 +348,15 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
                   placeholder="e.g. System Architecture Design"
                   disabled={isManualLoading}
                   className="w-full bg-zinc-950 border border-zinc-700 rounded-lg px-3.5 py-2 text-sm text-zinc-100 focus:outline-hidden focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-zinc-400 mb-1">Домен / Категория (опционально)</label>
+                <DomainInput
+                  value={domain}
+                  onChange={setDomain}
+                  suggestions={existingDomains}
+                  disabled={isManualLoading}
                 />
               </div>
               <div>

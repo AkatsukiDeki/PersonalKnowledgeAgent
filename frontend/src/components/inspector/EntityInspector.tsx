@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useInspector } from '../../context/InspectorContext';
 import { 
   X, 
@@ -9,12 +9,40 @@ import {
   MessageSquare, 
   ExternalLink, 
   Layers, 
-  Compass
+  Compass,
+  Link2,
+  Brain,
+  HelpCircle,
+  Loader2,
+  Copy,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import clsx from 'clsx';
+import { graphApi, GraphCopilotAction } from '../../api/graph';
+
+const COPILOT_ACTIONS: { id: GraphCopilotAction; label: string; icon: React.ReactNode }[] = [
+  { id: 'explain_connections', label: 'Связи', icon: <Link2 size={14} /> },
+  { id: 'active_recall', label: 'Проверка', icon: <Brain size={14} /> },
+  { id: 'find_blindspots', label: 'Пробелы', icon: <HelpCircle size={14} /> },
+];
 
 export const EntityInspector: React.FC = () => {
   const { activeEntity, isOpen, closeInspector } = useInspector();
+
+  const [copilotOpen, setCopilotOpen] = useState(false);
+  const [copilotLoading, setCopilotLoading] = useState(false);
+  const [copilotAction, setCopilotAction] = useState<GraphCopilotAction | null>(null);
+  const [copilotResult, setCopilotResult] = useState<string | null>(null);
+  const [copilotError, setCopilotError] = useState<string | null>(null);
+
+  // Reset copilot state when entity changes
+  useEffect(() => {
+    setCopilotOpen(false);
+    setCopilotResult(null);
+    setCopilotError(null);
+    setCopilotAction(null);
+  }, [activeEntity?.id]);
 
   // Закрытие по Escape
   useEffect(() => {
@@ -28,6 +56,25 @@ export const EntityInspector: React.FC = () => {
   }, [isOpen, closeInspector]);
 
   if (!isOpen || !activeEntity) return null;
+
+  const handleCopilotAction = async (action: GraphCopilotAction) => {
+    if (!activeEntity) return;
+    try {
+      setCopilotLoading(true);
+      setCopilotAction(action);
+      setCopilotError(null);
+      setCopilotResult(null);
+      const res = await graphApi.runCopilotAction(activeEntity.id, {
+        action,
+        node_type: activeEntity.type || 'unknown'
+      });
+      setCopilotResult(res.result_text);
+    } catch (err: any) {
+      setCopilotError(err.message || 'Ошибка Graph Copilot');
+    } finally {
+      setCopilotLoading(false);
+    }
+  };
 
   const getTypeIcon = (type: string) => {
     switch (type) {
@@ -137,6 +184,75 @@ export const EntityInspector: React.FC = () => {
               </span>
             </div>
           ))}
+        </div>
+
+        {/* Graph Copilot Section */}
+        <div className="border border-indigo-500/20 rounded-xl overflow-hidden">
+          <button
+            onClick={() => setCopilotOpen(prev => !prev)}
+            className="w-full flex items-center justify-between px-3.5 py-2.5 bg-indigo-500/5 hover:bg-indigo-500/10 transition-colors"
+          >
+            <div className="flex items-center gap-2">
+              <Sparkles size={14} className="text-indigo-400" />
+              <span className="text-xs font-semibold text-indigo-300">Graph Copilot</span>
+            </div>
+            {copilotOpen ? <ChevronUp size={14} className="text-zinc-500" /> : <ChevronDown size={14} className="text-zinc-500" />}
+          </button>
+
+          {copilotOpen && (
+            <div className="px-3.5 py-3 space-y-3 bg-zinc-950/50">
+              <div className="flex gap-1.5">
+                {COPILOT_ACTIONS.map(a => (
+                  <button
+                    key={a.id}
+                    onClick={() => handleCopilotAction(a.id)}
+                    disabled={copilotLoading}
+                    className={clsx(
+                      "flex-1 flex flex-col items-center gap-1 px-2 py-2 rounded-lg text-[10px] font-medium transition-all",
+                      copilotAction === a.id
+                        ? "bg-indigo-500/15 text-indigo-300 border border-indigo-500/30"
+                        : "bg-zinc-900/60 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200 border border-zinc-800/50",
+                      "disabled:opacity-50"
+                    )}
+                  >
+                    {copilotLoading && copilotAction === a.id
+                      ? <Loader2 size={14} className="animate-spin" />
+                      : a.icon
+                    }
+                    {a.label}
+                  </button>
+                ))}
+              </div>
+
+              {copilotLoading && (
+                <div className="flex items-center justify-center gap-2 text-zinc-500 text-xs py-4">
+                  <Loader2 size={14} className="animate-spin" />
+                  Анализирую граф...
+                </div>
+              )}
+
+              {copilotError && (
+                <div className="text-red-400 text-xs bg-red-500/10 border border-red-500/20 rounded-lg p-2.5">
+                  {copilotError}
+                </div>
+              )}
+
+              {copilotResult && !copilotLoading && (
+                <div className="space-y-2">
+                  <div className="text-xs text-zinc-300 leading-relaxed whitespace-pre-wrap bg-zinc-900/60 border border-zinc-800/50 rounded-lg p-3 max-h-[200px] overflow-y-auto">
+                    {copilotResult}
+                  </div>
+                  <button
+                    onClick={() => navigator.clipboard.writeText(copilotResult)}
+                    className="flex items-center gap-1 px-2.5 py-1 bg-zinc-800/80 hover:bg-zinc-700 text-zinc-400 hover:text-zinc-200 text-[10px] font-medium rounded-lg transition-colors ml-auto"
+                  >
+                    <Copy size={11} />
+                    Копировать
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 

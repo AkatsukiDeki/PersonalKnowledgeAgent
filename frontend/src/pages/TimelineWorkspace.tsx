@@ -77,17 +77,17 @@ export function TimelineWorkspace() {
   return (
     <div className="flex flex-col text-slate-200">
       {/* Header */}
-      <div className="flex items-center justify-between pb-6 mb-8 border-b border-white/5">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 sm:pb-6 mb-6 sm:mb-8 border-b border-white/5">
         <div>
-          <h1 className="text-2xl font-semibold text-white flex items-center gap-2.5">
-            <Clock className="w-6 h-6 text-emerald-400" />
+          <h1 className="text-xl sm:text-2xl font-semibold text-white flex items-center gap-2.5">
+            <Clock className="w-5 h-5 sm:w-6 sm:h-6 text-emerald-400" />
             {t('timeline.title')}
           </h1>
-          <p className="text-sm text-zinc-400 mt-1">
+          <p className="text-xs sm:text-sm text-zinc-400 mt-1">
             {t('timeline.subtitle')}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 self-start sm:self-auto">
           <button
             onClick={handleRebuild}
             disabled={rebuilding}
@@ -122,7 +122,7 @@ export function TimelineWorkspace() {
             <p className="text-xs font-light text-white/40 mt-1">Эволюция начинается после изменения ранее принятых решений.</p>
           </div>
         ) : (
-          <div className="relative before:absolute before:inset-y-0 before:left-[39px] before:w-[1px] before:bg-white/10 pl-4 py-4">
+          <div className="relative before:absolute before:inset-y-0 before:left-[36px] before:w-[1px] before:bg-white/10 pl-4 py-4 overflow-x-hidden">
             {events.map((ev, i) => {
               const style = getEventStyle(ev.event_type);
               const isExpanded = expandedDesc[ev.id];
@@ -142,8 +142,8 @@ export function TimelineWorkspace() {
                 <React.Fragment key={ev.id}>
                   {showMonthHeader && (
                     <div className="relative mb-8 mt-2 first:mt-0 flex items-center">
-                      <div className="absolute left-0 w-10 border-t border-white/10" />
-                      <div className="ml-14 px-3 py-1 bg-white/[0.04] text-white/80 text-[10px] font-mono tracking-widest uppercase rounded-lg border border-white/10 shadow-sm backdrop-blur-md">
+                      <div className="absolute left-0 w-8 sm:w-10 border-t border-white/10" />
+                      <div className="ml-12 sm:ml-14 px-2 sm:px-3 py-1 bg-white/[0.04] text-white/80 text-[10px] font-mono tracking-widest uppercase rounded-lg border border-white/10 shadow-sm backdrop-blur-md">
                         {formatMonthYear(ev.timestamp)}
                       </div>
                     </div>
@@ -157,12 +157,12 @@ export function TimelineWorkspace() {
                       </div>
                     </div>
 
-                    <div className="ml-16">
+                    <div className="ml-14 sm:ml-16">
                       <div className="flex flex-col mb-1">
                         <span className="text-[10px] font-mono text-white/40">
                           {formatDateTime(ev.timestamp)}
                         </span>
-                        <div className="flex items-center gap-3 mt-1">
+                        <div className="flex flex-wrap items-center gap-2 sm:gap-3 mt-1">
                           <h3 className="text-white/95 font-medium text-base tracking-tight">{ev.title}</h3>
                           {ev.domain && (
                             <span className="px-2 py-0.5 bg-white/5 text-white/60 rounded-md text-[10px] font-mono uppercase tracking-wider border border-white/5">

@@ -66,17 +66,21 @@ async def resolve_conflicts_for_new_claims(db: AsyncSession, new_claims: List[Cl
         if not new_claim.category:
             continue
             
-        # Find active claims in the same category
-        stmt = select(Claim).where(
-            and_(
-                Claim.is_active == True,
-                Claim.id != new_claim.id,
-                Claim.source_id != new_claim.source_id  # optionally skip same source? Let's not.
-            )
-        ).order_by(Claim.created_at.desc()).limit(15)
+        from ..services.claim_candidate_retriever import ClaimCandidateRetriever
+        from ..db.models import Source
         
-        res = await db.execute(stmt)
-        old_claims = res.scalars().all()
+        source = await db.get(Source, new_claim.source_id)
+        domain = source.domain if source else None
+        
+        retriever = ClaimCandidateRetriever(db)
+        old_claims = await retriever.get_candidates(
+            claim_id=str(new_claim.id),
+            embedding=new_claim.embedding,
+            domain=domain,
+            global_limit=3,
+            domain_limit=3,
+            min_similarity=0.75  # 1.0 - 0.75 = 0.25 max distance
+        )
         
         for old_claim in old_claims:
             resolution = await analyze_claim_pair(new_claim, old_claim)

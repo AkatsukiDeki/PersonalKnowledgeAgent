@@ -61,8 +61,9 @@ def build_chat_messages(
     system_prompt: str,
     history: list,
     current_query: str,
-    retrieved_context: str
-) -> list[Dict[str, str]]:
+    retrieved_context: str,
+    images: list[str] = None
+) -> list[Dict[str, Any]]:
     messages = []
     if system_prompt:
         messages.append({"role": "system", "content": system_prompt})
@@ -75,20 +76,47 @@ def build_chat_messages(
             content = msg.get("content", "").strip()
             if not content:
                 continue
-            messages.append({"role": role, "content": content})
+            # Preserve images in history if they exist (though typically we don't store them in db to save space, but schema allows it)
+            hist_msg = {"role": role, "content": content}
+            if msg.get("images"):
+                hist_msg["images"] = msg["images"]
+            messages.append(hist_msg)
             
     final_prompt = build_rag_prompt(current_query, retrieved_context)
-    messages.append({"role": "user", "content": final_prompt})
+    user_msg = {"role": "user", "content": final_prompt}
+    if images:
+        user_msg["images"] = images
+    messages.append(user_msg)
     
     return messages
+
+import base64
 
 def _to_gemini_contents(messages: list) -> list:
     contents = []
     for msg in messages:
-        if msg["role"] == "system":
+        if msg.get("role") == "system":
             continue
-        role = "model" if msg["role"] == "assistant" else "user"
-        contents.append(types.Content(role=role, parts=[types.Part.from_text(msg["content"])]))
+        role = "model" if msg.get("role") == "assistant" else "user"
+        
+        parts = []
+        if "content" in msg and msg["content"]:
+            parts.append(types.Part.from_text(msg["content"]))
+            
+        if "images" in msg and isinstance(msg["images"], list):
+            for img_b64 in msg["images"]:
+                try:
+                    # Remove base64 prefix if it exists
+                    if img_b64.startswith("data:image"):
+                        img_b64 = img_b64.split(",", 1)[-1]
+                    img_bytes = base64.b64decode(img_b64)
+                    # For simplicity, assuming JPEG/PNG. Gemini usually sniffs it or we can pass a generic image type
+                    parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
+                except Exception as e:
+                    logger.error(f"Failed to decode base64 image: {e}")
+                    
+        if parts:
+            contents.append(types.Content(role=role, parts=parts))
     return contents
 
 

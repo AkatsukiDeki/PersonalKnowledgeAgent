@@ -3,7 +3,7 @@ import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose, Zap, Database, HelpCircle } from 'lucide-react';
+import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose, Zap, Database, HelpCircle, Rocket, Satellite, AudioLines } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
 import { profileApi } from '../../api/profile';
@@ -46,7 +46,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   });
   const [isSeeded, setIsSeeded] = useState(false);
 
-  const [attachedFiles, setAttachedFiles] = useState<{id: string, name: string}[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<{id: string, name: string, status?: string}[]>([]);
   const [attachedImage, setAttachedImage] = useState<{
     file: File;
     previewUrl: string;
@@ -56,6 +56,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [mediaProfile, setMediaProfile] = useState<'speech' | 'music'>('speech');
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const skipLoadRef = React.useRef(false);
 
@@ -360,8 +361,13 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const handleFileUpload = async (file: File) => {
     setIsUploading(true);
     try {
-      const source = await sourcesApi.upload(file);
-      setAttachedFiles(prev => [...prev, { id: source.id, name: file.name }]);
+      if (file.type.startsWith('audio/') || file.type.startsWith('video/')) {
+        const source = await sourcesApi.uploadMedia(file, mediaProfile);
+        setAttachedFiles(prev => [...prev, { id: source.id, name: file.name, status: source.status }]);
+      } else {
+        const source = await sourcesApi.upload(file);
+        setAttachedFiles(prev => [...prev, { id: source.id, name: file.name, status: source.status }]);
+      }
     } catch (err) {
       console.error("Failed to upload file", err);
       alert("Ошибка при загрузке файла");
@@ -370,14 +376,41 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     }
   };
 
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files.length > 0) {
+      for (let i = 0; i < e.target.files.length; i++) {
+        const file = e.target.files[i];
+        if (file.type.startsWith('image/')) {
+          handleImageAttach(file);
+        } else {
+          await handleFileUpload(file);
+        }
+      }
+      e.target.value = '';
+    }
+  };
+
   return (
     <div className="flex h-full w-full bg-transparent">
       {isSidebarOpen && (
-        <ConversationSidebar
-          activeConversationId={activeConvId}
-          onSelectConversation={setActiveConvId}
-          onNewConversation={handleNewConversation}
-        />
+        <>
+          {/* Mobile backdrop */}
+          <div 
+            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[90] sm:hidden transition-opacity"
+            onClick={() => setIsSidebarOpen(false)}
+          />
+          <ConversationSidebar
+            activeConversationId={activeConvId}
+            onSelectConversation={(id) => {
+              setActiveConvId(id);
+              if (window.innerWidth < 640) setIsSidebarOpen(false);
+            }}
+            onNewConversation={() => {
+              handleNewConversation();
+              if (window.innerWidth < 640) setIsSidebarOpen(false);
+            }}
+          />
+        </>
       )}
 
       <div 
@@ -400,33 +433,33 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         )}
 
         {/* Action Header */}
-        <div className="absolute top-6 left-6 z-20">
+        <header className="flex-shrink-0 w-full pt-[calc(1rem+env(safe-area-inset-top))] px-4 sm:px-6 pb-2 flex items-center justify-between z-20 relative">
           <button
             onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 rounded-xl transition-colors shadow-lg"
+            className="p-2 sm:p-2.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center w-10 h-10 sm:w-auto sm:h-auto shrink-0"
             title="Переключить боковую панель"
           >
-            {isSidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeft size={18} />}
+            {isSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
           </button>
-        </div>
-
-        {activeConvId && messages.length > 0 && (
-          <div className="absolute top-6 right-8 z-20">
+          
+          <div className="flex-1 min-w-0" />
+          
+          {activeConvId && messages.length > 0 && (
             <button
               onClick={() => window.dispatchEvent(new CustomEvent('focusNode', { detail: activeConvId }))}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-xl transition-colors shadow-lg"
+              className="shrink-0 flex items-center gap-1.5 px-3 py-2 sm:py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-xl transition-all shadow-lg active:scale-95"
               title="Показать на карте Вселенной"
             >
-              <Sparkles size={14} />
+              <Sparkles size={16} className="sm:w-[14px] sm:h-[14px]" />
               <span className="hidden sm:inline">В Galaxy</span>
             </button>
-          </div>
-        )}
+          )}
+        </header>
 
         {/* Message stream */}
-        <div 
-          className="flex-1 overflow-y-auto pt-24 w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
-          style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 80px, black 100%)' }}
+        <main 
+          className="flex-1 min-h-0 overflow-y-auto w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
+          style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 20px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 20px, black 100%)' }}
         >
           <div className="max-w-3xl w-full mx-auto px-6 h-full">
             {messages.length === 0 ? (
@@ -515,12 +548,12 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
                   <MessageView key={msg.id} message={msg} />
                 ))}
                 {/* Spacer so the last message is pushed above the input bar when scrolling to the end */}
-                <div className="h-40 shrink-0" />
+                <div className="h-8 shrink-0" />
                 <div ref={messagesEndRef} />
               </div>
             )}
           </div>
-        </div>
+        </main>
 
         {/* Loading status */}
         {loadingStatus && (
@@ -533,7 +566,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         )}
 
         {/* Glass Input Bar */}
-        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 max-w-3xl w-[calc(100%-3rem)] shrink-0 z-10 flex flex-col items-start">
+        <footer className="flex-shrink-0 w-full pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2 px-2 sm:px-4 relative z-20">
+          <div className="max-w-3xl mx-auto w-full flex flex-col items-start select-none">
           
           <div className="flex justify-between items-center w-full relative mb-1">
             <ChatModeSelector 
@@ -549,18 +583,18 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
             <button
               type="button"
               onClick={() => setShowHelpPopover(!showHelpPopover)}
-              className={`p-1.5 rounded-lg transition-colors flex items-center justify-center ${showHelpPopover ? 'bg-indigo-500/20 text-indigo-300' : 'bg-transparent hover:bg-white/5 text-white/40 hover:text-white/80'}`}
+              className={`p-2.5 rounded-xl transition-colors flex items-center justify-center active:scale-95 ${showHelpPopover ? 'bg-indigo-500/20 text-indigo-300' : 'bg-transparent hover:bg-white/5 text-white/40 hover:text-white/80'}`}
               title="Показать подсказки по режимам"
             >
-              <HelpCircle size={16} />
+              <HelpCircle size={20} />
             </button>
 
             {showHelpPopover && (
-              <div className="absolute bottom-full right-0 mb-2 w-80 bg-[#0f0f16]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-bottom-2">
+              <div className="absolute bottom-full right-0 mb-2 w-[calc(100vw-2rem)] sm:w-80 max-w-xs bg-[#0f0f16]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-bottom-2">
                 <div className="flex justify-between items-center mb-3">
                   <h3 className="text-sm font-medium text-white">Быстрые команды</h3>
-                  <button onClick={() => setShowHelpPopover(false)} className="text-white/40 hover:text-white/80">
-                    <X size={14} />
+                  <button onClick={() => setShowHelpPopover(false)} className="p-2 -mr-2 text-white/40 hover:text-white/80 active:scale-95">
+                    <X size={16} />
                   </button>
                 </div>
                 
@@ -573,7 +607,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
                       setShowHelpPopover(false);
                       handleSubmit(e as any, text);
                     }}
-                    className="p-3 rounded-xl bg-white/5 hover:bg-indigo-500/20 border border-transparent hover:border-indigo-500/30 transition-all cursor-pointer group"
+                    className="p-3 rounded-xl bg-white/5 hover:bg-indigo-500/20 border border-transparent hover:border-indigo-500/30 transition-all cursor-pointer group active:scale-95"
                   >
                     <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium mb-1">
                       <Zap size={14} /> Спросить про функции (Fast)
@@ -591,7 +625,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
                       setShowHelpPopover(false);
                       handleSubmit(e as any, text);
                     }}
-                    className="p-3 rounded-xl bg-white/5 hover:bg-emerald-500/20 border border-transparent hover:border-emerald-500/30 transition-all cursor-pointer group"
+                    className="p-3 rounded-xl bg-white/5 hover:bg-emerald-500/20 border border-transparent hover:border-emerald-500/30 transition-all cursor-pointer group active:scale-95"
                   >
                     <div className="flex items-center gap-2 text-emerald-400 text-xs font-medium mb-1">
                       <Database size={14} /> Найти информацию (RAG)
@@ -609,8 +643,9 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
             <div className="flex flex-wrap gap-2 mb-2 px-1">
               {attachedFiles.map(file => (
                 <div key={file.id} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-200 text-xs px-2.5 py-1 rounded-md border border-indigo-500/30">
+                  {file.status === 'processing' && <Loader2 size={12} className="animate-spin text-amber-400" />}
                   <span className="truncate max-w-[150px]">{file.name}</span>
-                  <button onClick={() => setAttachedFiles(prev => prev.filter(f => f.id !== file.id))} className="hover:text-white transition-colors">
+                  <button onClick={() => setAttachedFiles(prev => prev.filter(f => f.id !== file.id))} className="p-1 hover:text-white transition-colors active:scale-95">
                     <X size={12} />
                   </button>
                 </div>
@@ -625,9 +660,9 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
                   <button
                     type="button"
                     onClick={() => setAttachedImage(null)}
-                    className="absolute top-1.5 right-1.5 w-4 h-4 bg-black/60 hover:bg-red-500/80 text-white rounded-full flex items-center justify-center transition-colors opacity-0 group-hover:opacity-100"
+                    className="absolute top-1.5 right-1.5 w-6 h-6 bg-black/60 hover:bg-red-500/80 text-white rounded-full flex items-center justify-center transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 active:scale-95"
                   >
-                    <X size={10} />
+                    <X size={12} />
                   </button>
                 </div>
               )}
@@ -637,49 +672,74 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
           <form
             id="chat-input-form"
             onSubmit={handleSubmit}
-            className="w-full bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-3 p-3 shadow-2xl transition-all focus-within:border-white/20"
+            className="w-full bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-2 p-1.5 sm:gap-3 sm:p-2 shadow-2xl transition-all focus-within:border-white/20"
           >
             <input 
               type="file" 
-              accept="image/*"
+              accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.json,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a,.mp4,.mkv,.webm,.ogg,audio/*,video/*"
+              multiple
               ref={fileInputRef} 
               className="hidden" 
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  handleImageAttach(e.target.files[0]);
-                  e.target.value = '';
-                }
-              }}
+              onChange={handleFileChange}
             />
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={isUploading}
-              className="text-white/40 hover:text-white/80 transition-colors p-2 shrink-0 disabled:opacity-50"
-            >
-              {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
-            </button>
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={isCooldown ? 'Подождите…' : 'Введите запрос... (Shift+Enter — новая строка, Ctrl+V — картинка)'}
-              disabled={isLoading || isCooldown}
-              rows={1}
-              className="flex-1 bg-transparent border-none text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-2 px-2 disabled:opacity-40 font-light scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent [&::-webkit-scrollbar-button]:hidden"
-              style={{ minHeight: '38px' }}
-            />
-            <button
-              type="submit"
-              onClick={handleSubmit}
-              disabled={isLoading || isCooldown || !input.trim()}
-              className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white p-2.5 rounded-xl flex items-center justify-center transition-all shrink-0 shadow-lg shadow-indigo-500/20 disabled:shadow-none"
-            >
-              {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} strokeWidth={1.5} />}
-            </button>
+            
+            <div className="flex flex-col items-center shrink-0 self-stretch justify-end pb-0.5">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={isUploading}
+                className="text-white/40 hover:text-white/80 hover:bg-white/5 rounded-xl transition-colors p-2.5 disabled:opacity-50 active:scale-95 flex items-center justify-center w-10 h-10"
+              >
+                {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+              </button>
+            </div>
+
+            <div className="flex-1 flex flex-col justify-end min-h-[44px]">
+              <textarea
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder={isCooldown ? 'Подождите…' : 'Сообщение...'}
+                disabled={isLoading || isCooldown}
+                rows={1}
+                className="w-full bg-transparent border-none text-base sm:text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-3 px-1 disabled:opacity-40 font-light scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent [&::-webkit-scrollbar-button]:hidden"
+                style={{ minHeight: '44px' }}
+              />
+            </div>
+
+            <div className="flex items-center gap-1.5 shrink-0 self-stretch justify-end pb-0.5 pr-0.5">
+              <button
+                type="button"
+                onClick={() => setMediaProfile(p => p === 'speech' ? 'music' : 'speech')}
+                className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white/90 rounded-xl px-3 py-1.5 transition-all cursor-pointer h-10 border border-transparent flex items-center justify-center gap-2 group active:scale-95"
+                title={mediaProfile === 'speech' ? "Прием сигнала (Речь)" : "Акустические волны (Музыка)"}
+              >
+                {mediaProfile === 'speech' ? (
+                  <>
+                    <Satellite size={16} className="text-blue-400 group-hover:animate-pulse" />
+                    <span className="text-[11px] font-medium tracking-wide uppercase">Сигнал</span>
+                  </>
+                ) : (
+                  <>
+                    <AudioLines size={16} className="text-purple-400 group-hover:animate-pulse" />
+                    <span className="text-[11px] font-medium tracking-wide uppercase">Спектр</span>
+                  </>
+                )}
+              </button>
+
+              <button
+                type="submit"
+                onClick={handleSubmit}
+                disabled={isLoading || isCooldown || !input.trim()}
+                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-all shadow-lg shadow-indigo-500/20 disabled:shadow-none active:scale-95 group"
+              >
+                {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} strokeWidth={1.5} className="group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" />}
+              </button>
+            </div>
           </form>
-        </div>
+          </div>
+        </footer>
       </div>
     </div>
   );

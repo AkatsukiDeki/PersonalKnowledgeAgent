@@ -75,3 +75,65 @@ async def semantic_search(
         )
 
     return SearchResponse(results=results)
+
+
+class QuickSearchResultItem(BaseModel):
+    id: str
+    type: str  # "claim" | "source" | "subject"
+    title: str
+    snippet: str
+    score: float
+
+class QuickSearchResponse(BaseModel):
+    query: str
+    results: list[QuickSearchResultItem]
+
+@router.get("/quick-lookup", response_model=QuickSearchResponse)
+async def quick_lookup(
+    q: str = Query(..., min_length=2, max_length=200),
+    db: AsyncSession = Depends(get_db)
+):
+    rows = await hybrid_search(db, q, q, limit=5)
+    
+    chunk_ids = []
+    for r in rows:
+        parsed = _as_uuid(r.get("chunk_id"))
+        if parsed is not None:
+            chunk_ids.append(parsed)
+            
+    claim_by_chunk = {}
+    if chunk_ids:
+        stmt = select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active.is_(True))
+        claims = (await db.execute(stmt)).scalars().all()
+        for claim in claims:
+            claim_by_chunk[str(claim.chunk_id)] = claim
+            
+    results = []
+    for r in rows:
+        chunk_id = str(r.get("chunk_id") or "")
+        claim = claim_by_chunk.get(chunk_id)
+        
+        snippet = str(r.get("text_content") or "")
+        if len(snippet) > 150:
+            snippet = snippet[:150] + "..."
+            
+        if claim:
+            title = claim.content[:50] + "..." if len(claim.content) > 50 else claim.content
+            results.append(QuickSearchResultItem(
+                id=str(claim.id),
+                type="claim",
+                title=title,
+                snippet=snippet,
+                score=float(r.get("rrf_score") or 0.0)
+            ))
+        else:
+            source_id_str = str(r.get("source_id") or "")
+            results.append(QuickSearchResultItem(
+                id=source_id_str,
+                type="source",
+                title=f"Source snippet ({source_id_str[:8]})",
+                snippet=snippet,
+                score=float(r.get("rrf_score") or 0.0)
+            ))
+            
+    return QuickSearchResponse(query=q, results=results)

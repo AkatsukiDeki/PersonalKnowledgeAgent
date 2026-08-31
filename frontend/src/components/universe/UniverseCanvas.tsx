@@ -4,6 +4,9 @@ import { conversationsApi } from '../../api/conversations';
 import { claimsApi, ClaimItem } from '../../api/claims';
 import { useInspector } from '../../context/InspectorContext';
 import { UniverseSpotlight, SearchableEntity } from './UniverseSpotlight';
+import { UniverseDomainFilter } from './UniverseDomainFilter';
+import { BridgeContextInspector } from './BridgeContextInspector';
+import { GraphCopilotPanel } from './GraphCopilotPanel';
 import { Sparkles, ZoomIn, ZoomOut, RotateCcw, Search, Clock, Orbit, Play, Pause, X } from 'lucide-react';
 
 interface Moon {
@@ -18,6 +21,7 @@ interface Moon {
   supersededAt?: number;
   supersededById?: string | null;
   isActive: boolean;
+  domain?: string;
 }
 
 interface CausalEdge {
@@ -49,6 +53,7 @@ interface Planet {
   timelineY?: number;
   renderX?: number;
   renderY?: number;
+  domain?: string;
 }
 
 interface StarSystem {
@@ -113,6 +118,46 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   const [tracedNodeId, setTracedNodeId] = useState<string | null>(null);
   const [tracedNodesMap, setTracedNodesMap] = useState<Set<string>>(new Set());
   const traceZoomRef = useRef(false);
+
+  const [selectedDomain, setSelectedDomain] = useState<string | null>(null);
+  const [compareDomain, setCompareDomain] = useState<string | null>(null);
+  const [copilotTarget, setCopilotTarget] = useState<{ id: string; label: string; group: string; type: 'node' | 'edge' } | null>(null);
+  const [showBridges, setShowBridges] = useState(true);
+  const [availableDomains, setAvailableDomains] = useState<string[]>([]);
+  const domainZoomRef = useRef(false);
+  const bridgeTargetsMapRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    const bridgeTargets = new Set<string>();
+    if (selectedDomain && showBridges) {
+      const domainNodeIds = new Set<string>();
+      
+      constellations.forEach(c => c.stars.forEach(s => s.planets.forEach(p => {
+        if (p.domain === selectedDomain) {
+          domainNodeIds.add(p.id);
+          p.moons.forEach(m => domainNodeIds.add(m.id));
+        }
+      })));
+      rootStars.forEach(s => s.planets.forEach(p => {
+        if (p.domain === selectedDomain) {
+          domainNodeIds.add(p.id);
+          p.moons.forEach(m => domainNodeIds.add(m.id));
+        }
+      }));
+
+      edgesRef.current.forEach(edge => {
+        const fromInDomain = domainNodeIds.has(edge.fromId);
+        const toInDomain = domainNodeIds.has(edge.toId);
+        
+        if (fromInDomain && !toInDomain) {
+          bridgeTargets.add(edge.toId);
+        } else if (!fromInDomain && toInDomain) {
+          bridgeTargets.add(edge.fromId);
+        }
+      });
+    }
+    bridgeTargetsMapRef.current = bridgeTargets;
+  }, [selectedDomain, showBridges, constellations, rootStars]);
 
   useEffect(() => {
     if (!tracedNodeId) {
@@ -238,6 +283,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
         const newConstellations: Constellation[] = [];
         const extractedEdges: CausalEdge[] = [];
+        const domainSet = new Set<string>();
         let cIdx = 0;
         const activeClusters = Object.entries(clusterMap).filter(([_, val]) => val.subjects.length > 0);
 
@@ -254,6 +300,11 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             const planets: Planet[] = currentSources.map((src: any, pIdx: number) => {
               const srcTs = src.created_at ? new Date(src.created_at).getTime() : subTs;
               extractedEdges.push({ fromId: String(src.id), toId: String(sub.id), type: 'source_to_subject' });
+              
+              if (src.domain) {
+                 domainSet.add(src.domain);
+              }
+
               return {
                 id: String(src.id),
                 title: src.title || 'Документ',
@@ -263,11 +314,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 speed: 0.003 + (pIdx % 3) * 0.001,
                 size: 6,
                 color: '#38bdf8',
-                meta: { type: src.source_type || 'document', created_at: src.created_at },
+                meta: { type: src.source_type || 'document', created_at: src.created_at, domain: src.domain },
                 moons: [],
                 timestamp: srcTs,
                 timelineX: starTimelineX,
                 timelineY: laneY - 35 - pIdx * 18,
+                domain: src.domain,
               };
             });
 
@@ -431,6 +483,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           setConstellations(newConstellations);
           setRootStars([coreSystem]);
           edgesRef.current = extractedEdges;
+          setAvailableDomains(Array.from(domainSet).sort());
         }
       } catch (err) {
         console.error('Failed to load real timeline universe data:', err);
@@ -486,8 +539,9 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     let animationFrameId: number;
 
     const resizeCanvas = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
     };
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
@@ -518,7 +572,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
-      ctx.translate(canvas.width / 2 + cam.x, canvas.height / 2 + cam.y);
+      const dpr = window.devicePixelRatio || 1;
+      ctx.scale(dpr, dpr);
+      const logicalWidth = window.innerWidth;
+      const logicalHeight = window.innerHeight;
+      
+      ctx.translate(Math.round(logicalWidth / 2 + cam.x), Math.round(logicalHeight / 2 + cam.y));
       ctx.scale(currentZoom, currentZoom);
 
       starsBackground.forEach((star) => {
@@ -676,7 +735,19 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         if (!isMacro || morph > 0.3) {
           star.planets.forEach((planet) => {
             const isPlanetBorn = planet.timestamp <= cutoffTimestamp;
-            const planetAlpha = isPlanetBorn ? 1.0 : morph > 0 ? 0.0 : 0.06;
+            let domainAlpha = 1.0;
+            let isBridgeTarget = false;
+            if (selectedDomain) {
+              if (planet.domain === selectedDomain) {
+                domainAlpha = 1.0;
+              } else if (showBridges && bridgeTargetsMapRef.current.has(planet.id)) {
+                domainAlpha = 0.4;
+                isBridgeTarget = true;
+              } else {
+                domainAlpha = 0.05;
+              }
+            }
+            const planetAlpha = (isPlanetBorn ? 1.0 : morph > 0 ? 0.0 : 0.06) * domainAlpha;
 
             if (planetAlpha <= 0) return;
 
@@ -695,7 +766,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             planet.renderY = py;
 
             nodePositionsRef.current[planet.id] = { x: px, y: py, color: planet.color, alpha: starAlpha * planetAlpha };
-
+            
             ctx.save();
             ctx.globalAlpha = starAlpha * planetAlpha;
 
@@ -711,6 +782,14 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             ctx.beginPath();
             ctx.arc(px, py, planet.size, 0, Math.PI * 2);
             ctx.fill();
+
+            if (isBridgeTarget) {
+              ctx.strokeStyle = planet.color;
+              ctx.lineWidth = 1;
+              ctx.beginPath();
+              ctx.arc(px, py, planet.size + 3, 0, Math.PI * 2);
+              ctx.stroke();
+            }
 
             if (isMicro) {
               ctx.fillStyle = '#a1a1aa';
@@ -777,7 +856,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           const centerY = minY + h / 2;
           
           const maxDim = Math.max(w, h);
-          let optimalZoom = Math.min(canvas.width, canvas.height) / (maxDim * 1.6);
+          let optimalZoom = Math.min(window.innerWidth, window.innerHeight) / (maxDim * 1.6);
           optimalZoom = Math.max(0.12, Math.min(optimalZoom, 1.8));
 
           cam.targetX = -centerX * optimalZoom;
@@ -785,6 +864,44 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           cam.targetZoom = optimalZoom;
           traceZoomRef.current = false;
         }
+      }
+
+      if (domainZoomRef.current && selectedDomain) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        
+        // Find all planets belonging to selectedDomain
+        rootStars.forEach(s => s.planets.forEach(p => {
+          if (p.domain === selectedDomain && positions[p.id]) {
+             minX = Math.min(minX, positions[p.id].x);
+             maxX = Math.max(maxX, positions[p.id].x);
+             minY = Math.min(minY, positions[p.id].y);
+             maxY = Math.max(maxY, positions[p.id].y);
+          }
+        }));
+        constellations.forEach(c => c.stars.forEach(s => s.planets.forEach(p => {
+          if (p.domain === selectedDomain && positions[p.id]) {
+             minX = Math.min(minX, positions[p.id].x);
+             maxX = Math.max(maxX, positions[p.id].x);
+             minY = Math.min(minY, positions[p.id].y);
+             maxY = Math.max(maxY, positions[p.id].y);
+          }
+        })));
+
+        if (minX !== Infinity) {
+          const w = Math.max(maxX - minX, 100);
+          const h = Math.max(maxY - minY, 100);
+          const centerX = minX + w / 2;
+          const centerY = minY + h / 2;
+          
+          const maxDim = Math.max(w, h);
+          let optimalZoom = Math.min(window.innerWidth, window.innerHeight) / (maxDim * 1.6);
+          optimalZoom = Math.max(0.12, Math.min(optimalZoom, 1.8));
+
+          cam.targetX = -centerX * optimalZoom;
+          cam.targetY = -centerY * optimalZoom;
+          cam.targetZoom = optimalZoom;
+        }
+        domainZoomRef.current = false;
       }
 
       edgesRef.current.forEach((edge, i) => {
@@ -798,7 +915,23 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         if (isTracing && !isEdgeTraced) return;
 
         // Base alpha depends on connected nodes
-        const baseAlpha = Math.min(fromPos.alpha, toPos.alpha) * (isTracing ? 0.8 : 0.15);
+        let baseAlpha = Math.min(fromPos.alpha, toPos.alpha) * (isTracing ? 0.8 : 0.15);
+        let isBridge = false;
+
+        if (selectedDomain && !isTracing) {
+           const fromInDomain = fromPos.alpha >= 0.9;
+           const toInDomain = toPos.alpha >= 0.9;
+           
+           if (fromInDomain && toInDomain) {
+              baseAlpha = 0.8;
+           } else if (showBridges && ((fromInDomain && toPos.alpha > 0.1) || (toInDomain && fromPos.alpha > 0.1))) {
+              baseAlpha = 0.75;
+              isBridge = true;
+           } else {
+              baseAlpha = 0.02;
+           }
+        }
+
         if (baseAlpha <= 0.01) return;
 
         ctx.save();
@@ -811,11 +944,21 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         const cx = fromPos.x + dx * 0.5 + dy * 0.2;
         const cy = fromPos.y + dy * 0.5 - dx * 0.2;
 
-        ctx.strokeStyle = fromPos.color;
-        ctx.lineWidth = isTracing ? 1.5 : 0.8;
-        if (edge.type === 'superseded') {
+        ctx.lineWidth = isTracing ? 1.5 : (isBridge ? 1.2 : 0.8);
+        
+        if (isBridge) {
+           const grad = ctx.createLinearGradient(fromPos.x, fromPos.y, toPos.x, toPos.y);
+           grad.addColorStop(0, fromPos.color);
+           grad.addColorStop(1, toPos.color);
+           ctx.strokeStyle = grad;
            ctx.setLineDash([4, 4]);
-           ctx.strokeStyle = '#f59e0b';
+           ctx.lineDashOffset = -performance.now() * 0.03;
+        } else {
+           ctx.strokeStyle = fromPos.color;
+           if (edge.type === 'superseded') {
+              ctx.setLineDash([4, 4]);
+              ctx.strokeStyle = '#f59e0b';
+           }
         }
         
         ctx.beginPath();
@@ -827,18 +970,46 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       });
 
       // Spawn particles
-      if (Math.random() < (isTracing ? 0.8 : 0.2)) {
+      if (Math.random() < (isTracing ? 0.8 : (selectedDomain ? 0.4 : 0.2))) {
         const activeEdges = edgesRef.current.map((e, idx) => ({ e, idx })).filter(({ e }) => {
            if (isTracing) return tracedNodesMap.has(e.fromId) && tracedNodesMap.has(e.toId);
-           return positions[e.fromId] && positions[e.toId] && positions[e.fromId].alpha > 0.1 && positions[e.toId].alpha > 0.1;
+           const pFrom = positions[e.fromId];
+           const pTo = positions[e.toId];
+           if (!pFrom || !pTo) return false;
+           
+           if (selectedDomain && showBridges) {
+             const fromIn = pFrom.alpha >= 0.9;
+             const toIn = pTo.alpha >= 0.9;
+             return (fromIn && pTo.alpha > 0.1) || (toIn && pFrom.alpha > 0.1);
+           }
+           
+           return pFrom.alpha > 0.1 && pTo.alpha > 0.1;
         });
 
         if (activeEdges.length > 0) {
-           const rand = activeEdges[Math.floor(Math.random() * activeEdges.length)];
+           let rand = activeEdges[Math.floor(Math.random() * activeEdges.length)];
+           
+           if (selectedDomain && showBridges) {
+              const bridgesOnly = activeEdges.filter(ae => {
+                 const pFrom = positions[ae.e.fromId];
+                 const pTo = positions[ae.e.toId];
+                 return (pFrom.alpha >= 0.9 && pTo.alpha < 0.9) || (pFrom.alpha < 0.9 && pTo.alpha >= 0.9);
+              });
+              if (bridgesOnly.length > 0 && Math.random() < 0.7) {
+                 rand = bridgesOnly[Math.floor(Math.random() * bridgesOnly.length)];
+              }
+           }
+
+           let flowReverse = false;
+           if (selectedDomain && showBridges) {
+               const pFrom = positions[rand.e.fromId];
+               if (pFrom && pFrom.alpha < 0.9) flowReverse = true;
+           }
+
            particlesRef.current.push({
              edgeIndex: rand.idx,
-             progress: 0,
-             speed: 0.005 + Math.random() * 0.01,
+             progress: flowReverse ? 1 : 0,
+             speed: (0.005 + Math.random() * 0.01) * (flowReverse ? -1 : 1),
              spawnDelay: 0
            });
         }
@@ -858,7 +1029,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         }
 
         p.progress += p.speed * (1 - morph * 0.5);
-        if (p.progress >= 1) {
+        if (p.progress >= 1 || p.progress <= 0) {
            particlesRef.current.splice(i, 1);
            continue;
         }
@@ -1055,8 +1226,10 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     const cam = cameraRef.current;
     
     // hit testing ...
-    const worldX = (clickX - canvas.width / 2 - cam.targetX) / cam.targetZoom;
-    const worldY = (clickY - canvas.height / 2 - cam.targetY) / cam.targetZoom;
+    const logicalWidth = window.innerWidth;
+    const logicalHeight = window.innerHeight;
+    const worldX = (clickX - logicalWidth / 2 - cam.targetX) / cam.targetZoom;
+    const worldY = (clickY - logicalHeight / 2 - cam.targetY) / cam.targetZoom;
 
     const allStars: StarSystem[] = [...rootStars, ...constellations.flatMap((c) => c.stars)];
 
@@ -1194,6 +1367,54 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     setTracedNodeId(null);
   };
 
+  const handleCanvasDoubleClick = (e: React.MouseEvent<HTMLCanvasElement>) => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const rect = canvas.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const cam = cameraRef.current;
+    
+    const logicalWidth = window.innerWidth;
+    const logicalHeight = window.innerHeight;
+    const worldX = (clickX - logicalWidth / 2 - cam.targetX) / cam.targetZoom;
+    const worldY = (clickY - logicalHeight / 2 - cam.targetY) / cam.targetZoom;
+
+    const allStars: StarSystem[] = [...rootStars, ...constellations.flatMap((c) => c.stars)];
+
+    for (const star of allStars) {
+      for (const planet of star.planets) {
+        if (planet.renderX !== undefined && planet.renderY !== undefined) {
+          for (const moon of planet.moons) {
+            const mx = planet.renderX + Math.cos(moon.angle) * moon.dist;
+            const my = planet.renderY + Math.sin(moon.angle) * moon.dist;
+            if (Math.hypot(worldX - mx, worldY - my) <= 6) {
+              setCopilotTarget({ id: moon.id, label: moon.title, group: 'claim', type: 'node' });
+              return;
+            }
+          }
+
+          const dist = Math.hypot(worldX - planet.renderX, worldY - planet.renderY);
+          if (dist <= planet.size + 8) {
+            setCopilotTarget({ id: planet.id, label: planet.title, group: planet.type === 'conversation' ? 'claim' : 'source', type: 'node' });
+            return;
+          }
+        }
+      }
+    }
+
+    for (const star of allStars) {
+      if (star.renderX !== undefined && star.renderY !== undefined) {
+        const dist = Math.hypot(worldX - star.renderX, worldY - star.renderY);
+        if (dist <= star.size + 10) {
+          setCopilotTarget({ id: star.id, label: star.title, group: star.type === 'subject' ? 'subject' : 'chat_folder', type: 'node' });
+          return;
+        }
+      }
+    }
+  };
+
   const resetCamera = () => {
     cameraRef.current.targetX = 0;
     cameraRef.current.targetY = 0;
@@ -1209,13 +1430,47 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         </div>
       )}
 
+      {!loading && availableDomains.length > 0 && (
+        <UniverseDomainFilter
+          domains={availableDomains}
+          selectedDomain={selectedDomain}
+          compareDomain={compareDomain}
+          onSelect={(domain) => {
+            setSelectedDomain(domain);
+            if (!domain) setCompareDomain(null);
+            domainZoomRef.current = true;
+          }}
+          onCompare={(domain) => {
+            setCompareDomain(domain);
+          }}
+          showBridges={showBridges}
+          onToggleBridges={setShowBridges}
+        />
+      )}
+
+      {selectedDomain && compareDomain && (
+        <BridgeContextInspector
+          domainA={selectedDomain}
+          domainB={compareDomain}
+          onClose={() => setCompareDomain(null)}
+          onExplainConnection={(bridgeId, relationType) => {
+            setCopilotTarget({
+              id: bridgeId,
+              label: `Связь: ${relationType}`,
+              group: 'edge',
+              type: 'edge'
+            });
+          }}
+        />
+      )}
+
       {/* Верхняя панель */}
-      <div className="absolute top-24 left-1/2 -translate-x-1/2 z-20 flex items-center gap-2 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 p-1.5 rounded-xl shadow-lg">
-        <div className="px-2.5 py-1 text-xs font-bold text-white flex items-center gap-1.5">
+      <div className="absolute top-24 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5 sm:gap-2 overflow-x-auto no-scrollbar w-[95vw] sm:w-auto max-w-full px-2 py-1.5 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 rounded-xl shadow-lg">
+        <div className="px-2 py-1 text-xs font-bold text-white flex items-center gap-1.5 shrink-0">
           <Sparkles size={14} className="text-indigo-400" />
           Galaxy Universe 4D
         </div>
-        <div className="h-4 w-[1px] bg-zinc-800" />
+        <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />
 
         <button
           onClick={() => {
@@ -1223,7 +1478,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             setViewMode(nextMode);
             resetCamera();
           }}
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 ${
             viewMode === 'timeline'
               ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
               : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
@@ -1234,53 +1489,57 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           <span>{viewMode === 'timeline' ? 'Timeline' : 'Galaxy'}</span>
         </button>
 
-        <div className="h-4 w-[1px] bg-zinc-800" />
+        <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />
 
         <button
           onClick={() => setIsSpotlightOpen(true)}
-          className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all flex items-center gap-1.5 px-2 text-xs"
+          className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all flex items-center gap-1.5 px-2 text-xs shrink-0"
           title="Быстрый поиск (Ctrl+K)"
         >
           <Search size={13} />
           <span>Поиск</span>
-          <kbd className="text-[10px] text-zinc-500 font-mono bg-zinc-900 px-1 rounded">Ctrl+K</kbd>
+          <kbd className="hidden sm:inline-block text-[10px] text-zinc-500 font-mono bg-zinc-900 px-1 rounded">Ctrl+K</kbd>
         </button>
 
-        <div className="h-4 w-[1px] bg-zinc-800" />
+          {tracedNodeId && (
+            <>
+              <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />
+              <button
+                onClick={() => setTracedNodeId(null)}
+                className="flex items-center gap-1 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-medium rounded-lg transition-all shrink-0"
+                title="Сбросить трассировку потока (Esc или клик в пустоту)"
+              >
+                <X size={14} />
+                Trace Active
+              </button>
+            </>
+          )}
+      </div>
 
+      {/* Элементы управления камерой (мобильные/десктопные) */}
+      <div className="absolute bottom-24 right-4 sm:bottom-6 sm:right-6 z-20 flex flex-col items-center gap-2 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 p-1.5 rounded-xl shadow-lg">
         <button
           onClick={() => { cameraRef.current.targetZoom = Math.min(3.5, cameraRef.current.targetZoom * 1.25); }}
-          className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
+          className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
           title="Приблизить"
         >
-          <ZoomIn size={15} />
+          <ZoomIn size={18} />
         </button>
         <button
           onClick={() => { cameraRef.current.targetZoom = Math.max(0.12, cameraRef.current.targetZoom * 0.75); }}
-          className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
+          className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
           title="Отдалить"
         >
-          <ZoomOut size={15} />
+          <ZoomOut size={18} />
         </button>
+        <div className="w-6 h-[1px] bg-zinc-800" />
         <button
           onClick={resetCamera}
-          className="p-1.5 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all flex items-center gap-1 px-2.5 text-xs"
+          className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all flex flex-col items-center justify-center gap-0.5"
           title="Сброс камеры"
         >
-          <RotateCcw size={13} />
-          <span>Центр</span>
+          <RotateCcw size={16} />
         </button>
-          
-          {tracedNodeId && (
-            <button
-              onClick={() => setTracedNodeId(null)}
-              className="flex items-center gap-1 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-medium rounded-lg transition-all"
-              title="Сбросить трассировку потока (Esc или клик в пустоту)"
-            >
-              <X size={14} />
-              Trace Active
-            </button>
-          )}
       </div>
 
       {/* Нижняя плавающая панель скраббера времени */}
@@ -1327,12 +1586,23 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         onSelectEntity={handleSelectSearchEntity}
       />
 
+      {copilotTarget && (
+        <GraphCopilotPanel
+          nodeId={copilotTarget.id}
+          nodeLabel={copilotTarget.label}
+          nodeGroup={copilotTarget.group}
+          nodeType={copilotTarget.type}
+          onClose={() => setCopilotTarget(null)}
+        />
+      )}
+
       <canvas
         ref={canvasRef}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
         onClick={handleCanvasClick}
+        onDoubleClick={handleCanvasDoubleClick}
         className="w-full h-full cursor-grab active:cursor-grabbing"
       />
     </div>

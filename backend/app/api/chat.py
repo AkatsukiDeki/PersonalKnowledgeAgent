@@ -712,11 +712,7 @@ async def chat_stream_endpoint(
                 
                 sys_prompt = "Ты мультимодальный AI-ассистент. Твоя задача детально описывать и анализировать изображения. Отвечай на вопросы пользователя с учетом истории диалога."
                 
-                messages = build_chat_messages(sys_prompt, payload.history, payload.query, context_text)
-                
-                # Прикрепляем base64-изображение к последнему запросу пользователя для Ollama
-                if messages and messages[-1]["role"] == "user":
-                    messages[-1]["images"] = [payload.image_base64]
+                messages = build_chat_messages(sys_prompt, payload.history, payload.query, context_text, images=[payload.image_base64])
                 
                 first_token = True
                 async for token in model_manager.stream_vision(messages, image_bytes, payload.image_mime_type or "image/png"):

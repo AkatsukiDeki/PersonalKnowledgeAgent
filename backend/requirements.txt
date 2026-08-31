@@ -26,3 +26,5 @@ sentence-transformers>=3.0
 watchdog
 
 flashrank>=0.2.0
+faster-whisper>=1.0.0
+demucs>=4.0.0

@@ -7,8 +7,8 @@ from typing import List, Dict, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, or_
 
-from app.db.models import Insight, Decision, ConversationMemory, Claim, Source
-from app.core.llm import generate_with_retry
+from ..db.models import Insight, Decision, ConversationMemory, Claim, Source
+from ..core.llm import generate_with_retry
 
 PROACTIVE_SYSTEM_PROMPT = """Ты — ведущий системный архитектор и аналитик. 
 Тебе предоставлены фрагменты опыта из базы знаний проекта (Decisions, Memories, Claims). 

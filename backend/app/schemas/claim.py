@@ -20,7 +20,7 @@ from .entity import EntityResponse
 class ClaimResponse(ClaimBase):
     id: uuid.UUID
     source_id: uuid.UUID
-    chunk_id: uuid.UUID
+    chunk_id: Optional[uuid.UUID] = None
     entities: List[EntityResponse] = []
     created_at: datetime
     updated_at: datetime

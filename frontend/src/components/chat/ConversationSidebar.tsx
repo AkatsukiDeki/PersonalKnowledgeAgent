@@ -435,7 +435,7 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
   const grouped = groupConversations();
 
   return (
-    <div className="w-64 bg-surface-low flex flex-col h-full text-zinc-100 shrink-0">
+    <div className="w-72 sm:w-64 bg-[#0a0a0c]/95 sm:bg-surface-low backdrop-blur-3xl sm:bg-transparent sm:backdrop-blur-none border-r border-white/5 flex flex-col h-full text-zinc-100 shrink-0 fixed inset-y-0 left-0 sm:relative z-[100] sm:z-40 select-none shadow-2xl sm:shadow-none transition-transform duration-300">
       <div className="p-3 flex gap-2">
         <button
           onClick={onNewConversation}

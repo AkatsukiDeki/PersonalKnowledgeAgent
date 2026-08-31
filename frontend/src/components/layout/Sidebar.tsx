@@ -9,12 +9,13 @@ import {
   Globe,
   PanelLeftClose,
   PanelLeftOpen,
-  GraduationCap
+  GraduationCap,
+  Headphones
 } from 'lucide-react';
 import { conflictsApi } from '../../api/conflicts';
 import { useLanguage } from '../../context/LanguageContext';
 
-export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning';
+export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts';
 
 interface Props {
   onOpenUploader: () => void;
@@ -65,6 +66,7 @@ export function Sidebar({
   const navItems: NavItem[] = [
     { id: 'chat', icon: <MessageSquare size={16} strokeWidth={1.5} />, label: t('nav.dialogs'), activeColor: 'text-indigo-400' },
     { id: 'insights', icon: <Sparkles size={16} strokeWidth={1.5} />, label: t('nav.insights'), activeColor: 'text-fuchsia-400' },
+    { id: 'transcripts', icon: <Headphones size={16} strokeWidth={1.5} />, label: 'Расшифровки', activeColor: 'text-indigo-400' },
     { id: 'universe', icon: <Globe size={16} strokeWidth={1.5} />, label: t('nav.universe'), activeColor: 'text-indigo-400' },
     { id: 'conflicts', icon: <ShieldAlert size={16} strokeWidth={1.5} />, label: t('nav.contradictions'), activeColor: 'text-amber-400', badge: unresolvedCount },
     { id: 'timeline', icon: <Clock size={16} strokeWidth={1.5} />, label: t('nav.timeline'), activeColor: 'text-emerald-400' },

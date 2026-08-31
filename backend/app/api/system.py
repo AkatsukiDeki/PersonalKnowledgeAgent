@@ -4,9 +4,9 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
-from app.db.session import get_db
-from app.db.models import SystemError
-from app.core.error_tracker import resolve_granular_error
+from ..db.session import get_db
+from ..db.models import SystemError
+from ..core.error_tracker import resolve_granular_error
 
 router = APIRouter()
 
