@@ -3,6 +3,7 @@ import ReactMarkdown from 'react-markdown';
 import { Message } from '../../types/chat';
 import { Bot, User, X, Copy, Check } from 'lucide-react';
 import { ProvenanceTree } from './ProvenanceTree';
+import { MessageLatencyBadge } from './MessageLatencyBadge';
 
 interface Props {
   message: Message;
@@ -96,6 +97,12 @@ export function MessageView({ message }: Props) {
         {/* Provenance Tree — replaces old flat citation list */}
         {!isUser && !message.isStreaming && message.citations && message.citations.length > 0 && (
           <ProvenanceTree citations={message.citations} />
+        )}
+
+        {!isUser && message.meta_info?.telemetry && (
+          <div className="mt-2">
+            <MessageLatencyBadge telemetry={message.meta_info.telemetry} />
+          </div>
         )}
       </div>
 

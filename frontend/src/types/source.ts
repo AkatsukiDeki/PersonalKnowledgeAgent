@@ -1,9 +1,47 @@
+export interface VoiceActionItem {
+  text: string;
+  context?: string;
+}
+
+export interface VoiceStructuredNote {
+  summary: string;
+  key_points: string[];
+  action_items: VoiceActionItem[];
+  ideas: string[];
+  open_questions: string[];
+}
+
 export interface Source {
   id: string;
   title: string;
   content: string;
   source_type: string;
-  meta_info: Record<string, any>;
+  meta_info: {
+    media?: {
+      storage_path?: string;
+      mime_type?: string;
+      media_type?: string;
+      original_filename?: string;
+      structured_note?: VoiceStructuredNote;
+      smart_chapters?: any[];
+      transcript_segments?: Array<{
+        start: number;
+        end: number;
+        text: string;
+      }>;
+    };
+    transcription?: {
+      status?: string;
+      latency_sec?: number;
+    };
+    transcript_segments?: Array<{
+      start: number;
+      end: number;
+      text: string;
+    }>;
+    insights?: Record<string, any>;
+    [key: string]: any;
+  };
 
   // Source Manager 2.0 fields
   file_type?: string;

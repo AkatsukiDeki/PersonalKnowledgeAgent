@@ -16,6 +16,9 @@ from ..media.extractor import TranscriptInsightExtractor
 from ..knowledge.embeddings.factory import get_embedding_provider
 from ..core.config import settings
 from ..core.ollama_client import OllamaClient
+from ..core.llm import model_manager, TaskType
+from ..media.types import MediaType
+from ..media.schemas import VoiceStructuredNote
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +93,8 @@ async def run_media_ingestion_job(
     logger.info(f"[Media Ingestion] Starting job {job_id} for {original_filename}")
     
     input_path = Path(file_path)
-    wav_path = input_path.with_suffix(".wav")
+    import tempfile
+    wav_path = Path(tempfile.gettempdir()) / f"processing_{job_id}.wav"
     
     try:
         # 1. Extract audio
@@ -141,31 +145,19 @@ async def run_media_ingestion_job(
         
         # 3.5 LLM Post-Processing per chunk
         ollama = OllamaClient()
-        MEDIA_STRUCTURING_PROMPT = """Ты — редактор транскрипций аудио. Твоя задача — очистить распознанный текст от фонетических опечаток STT и оформить его.
+        MEDIA_STRUCTURING_PROMPT = """Ты — аккуратный редактор транскрипций аудио. Твоя задача — очистить распознанный текст от фонетических опечаток STT, исправить пунктуацию и разбить на смысловые абзацы.
 
 Сырой распознанный текст:
 \"\"\"{raw_text}\"\"\"
 
 ПРАВИЛА ОБРАБОТКИ:
-1. Восстанови исходные слова по контексту и созвучию:
-   - "Пусть так мозговых летах" -> "Память — сгусток мозговых клеток"
-   - "Сисьма миная" -> "Вспоминаю"
-   - "деталька милега" -> "детальками LEGO"
-   - "сперденок деда" -> "спрятано где-то"
-   - "куляда / куплеты" -> "куплета"
-   - "понимаешь букеты" -> "принимаешь букеты"
-   - "щекупать злой что ты полурай" -> "чьи губы целуешь ты полураздетая"
-   - "кибет жеты" -> "никакие бюджеты"
-   - "чербесни" -> "чёрт бы с ней"
-   - "одно описательство" -> "одно обязательство"
-   - "учупнулся" -> "вычеркнуть бы"
-
+1. Сохрани оригинальный смысл и стиль речи, но исправь явные фонетические ошибки (например, когда STT неправильно расслышал слова из-за невнятной речи).
 2. ОФОРМЛЕНИЕ:
-   - Оформи строго структурой: [Куплет 1], [Припев], [Куплет 2].
-   - Переноси каждую поэтическую строку на новую строчку.
-   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО сочинять свои строки, склеивать слова в бессмысленный поток ("тяни в сердце") или дублировать текст.
+   - Разбей текст на абзацы для удобства чтения.
+   - Не добавляй никаких музыкальных тегов (Куплет, Припев и т.д.), если это не песня.
+   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО сочинять свои строки или дублировать текст.
 
-Выведи только готовый Markdown."""
+Выведи только готовый отформатированный текст без лишних комментариев."""
 
         logger.info(f"[Media Ingestion] Running LLM restructuring for {len(chunks)} chunks...")
         
@@ -201,21 +193,53 @@ async def run_media_ingestion_job(
         # 4. Ingest to DB
         logger.info(f"[Media Ingestion] Saving to DB and embedding {len(chunks)} chunks...")
         async with async_session_factory() as db:
+            source_obj = await db.get(Source, source_id)
+            meta = source_obj.meta_info or {} if source_obj else {}
+            
+            transcript_segments = [
+                {"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"].strip()}
+                for s in segments if s.get("text")
+            ]
+            
+            transcription_meta = meta.get("transcription", {})
+            transcription_meta.update({
+                "latency_sec": round(latency, 2),
+                "status": "completed"
+            })
+            meta["transcription"] = transcription_meta
+            
+            meta.update({
+                "applied_separation": applied_separation,
+                "separation_fallback": separation_fallback,
+                "raw_transcript": raw_text_full,
+                "transcript_segments": transcript_segments,
+                "insights": insights_dict
+            })
+            
+            
+            media_type = meta.get("media", {}).get("media_type", "audio")
+            
+            if media_type == MediaType.VOICE_NOTE:
+                logger.info(f"[Media Ingestion] Structuring Voice Note...")
+                struct_prompt = f"Проанализируй эту голосовую заметку и выдели суть:\n\n{raw_text_full}"
+                try:
+                    structured_note = await model_manager.generate_structured(
+                        task_type=TaskType.EXTRACTION,
+                        schema=VoiceStructuredNote,
+                        prompt=struct_prompt,
+                        system_instruction="Ты помощник, который структурирует сырые аудиозаметки."
+                    )
+                    if structured_note:
+                        meta["media"]["structured_note"] = structured_note.model_dump()
+                except Exception as e:
+                    logger.warning(f"[Media Ingestion] Failed to structure Voice Note: {e}")
+
             await db.execute(
                 update(Source)
                 .where(Source.id == source_id)
                 .values(
                     content=full_text,
-                    meta_info={
-                        "original_filename": original_filename,
-                        "job_id": job_id,
-                        "processing_profile": profile,
-                        "applied_separation": applied_separation,
-                        "separation_fallback": separation_fallback,
-                        "transcription_latency_sec": round(latency, 2),
-                        "raw_transcript": raw_text_full,
-                        "insights": insights_dict
-                    },
+                    meta_info=meta,
                     status="completed",
                     completed_at=datetime.utcnow()
                 )
@@ -248,6 +272,7 @@ async def run_media_ingestion_job(
                     embedding=embedding_vector,
                     tsv=func.to_tsvector("russian", text_with_timecode),
                     meta_info=chunk_metadata,
+                    metadata_info=chunk_metadata,
                     is_active=True
                 )
                 db_chunks.append(db_chunk)
@@ -255,31 +280,32 @@ async def run_media_ingestion_job(
             db.add_all(db_chunks)
             await db.flush() # Ensure chunks have IDs
 
-            # Add Claims mapped from Insights
-            if insights.decisions or insights.key_topics:
-                first_chunk_id = db_chunks[0].id if db_chunks else None
-                if first_chunk_id:
-                    for decision in insights.decisions:
-                        claim = Claim(
-                            source_id=source_id,
-                            chunk_id=first_chunk_id,
-                            content=decision,
-                            claim_type="decision",
-                            confidence=0.9,
-                            meta_info={"extracted_by": "TranscriptInsightExtractor"}
-                        )
-                        db.add(claim)
-                    for topic in insights.key_topics:
-                        claim = Claim(
-                            source_id=source_id,
-                            chunk_id=first_chunk_id,
-                            content=topic,
-                            claim_type="fact",
-                            category="key_topic",
-                            confidence=0.9,
-                            meta_info={"extracted_by": "TranscriptInsightExtractor"}
-                        )
-                        db.add(claim)
+            # Add Claims mapped from Insights only for AUDIO/VIDEO
+            if media_type in (MediaType.AUDIO, MediaType.VIDEO):
+                if insights.decisions or insights.key_topics:
+                    first_chunk_id = db_chunks[0].id if db_chunks else None
+                    if first_chunk_id:
+                        for decision in insights.decisions:
+                            claim = Claim(
+                                source_id=source_id,
+                                chunk_id=first_chunk_id,
+                                content=decision,
+                                claim_type="decision",
+                                confidence=0.9,
+                                meta_info={"extracted_by": "TranscriptInsightExtractor"}
+                            )
+                            db.add(claim)
+                        for topic in insights.key_topics:
+                            claim = Claim(
+                                source_id=source_id,
+                                chunk_id=first_chunk_id,
+                                content=topic,
+                                claim_type="fact",
+                                category="key_topic",
+                                confidence=0.9,
+                                meta_info={"extracted_by": "TranscriptInsightExtractor"}
+                            )
+                            db.add(claim)
 
             await db.commit()
             
@@ -295,10 +321,8 @@ async def run_media_ingestion_job(
             )
             await db.commit()
     finally:
-        # 5. Cleanup temp files
-        if input_path.exists():
-            input_path.unlink()
-        if wav_path.exists() and input_path != wav_path:
+        # 5. Cleanup temporary wav file (keep original input_path)
+        if wav_path.exists():
             wav_path.unlink()
 
 from sqlalchemy import delete
@@ -315,7 +339,9 @@ async def run_retranscribe_job(
         logger.error(f"[Media Re-Ingestion] File not found: {file_path}")
         return
         
-    wav_path = input_path.with_suffix(".wav")
+    import tempfile
+    import uuid
+    wav_path = Path(tempfile.gettempdir()) / f"retranscribe_{uuid.uuid4()}.wav"
     try:
         if not wav_path.exists():
             await asyncio.to_thread(extract_audio_to_wav, input_path, wav_path)
@@ -378,10 +404,23 @@ async def run_retranscribe_job(
         async with async_session_factory() as db:
             # We already deleted old chunks, so we just update the source and add new ones
             meta = source.meta_info or {}
+            
+            transcript_segments = [
+                {"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"].strip()}
+                for s in segments if s.get("text")
+            ]
+            
+            transcription_meta = meta.get("transcription", {})
+            transcription_meta.update({
+                "status": "completed",
+                "retranscribed_at": datetime.utcnow().isoformat()
+            })
+            meta["transcription"] = transcription_meta
+            
             meta.update({
                 "raw_transcript": raw_text_full,
+                "transcript_segments": transcript_segments,
                 "insights": insights_dict,
-                "retranscribed_at": datetime.utcnow().isoformat()
             })
             
             await db.execute(
@@ -439,3 +478,6 @@ async def run_retranscribe_job(
         async with async_session_factory() as db:
             await db.execute(update(Source).where(Source.id == source_id).values(status="error", error_message=str(e)))
             await db.commit()
+    finally:
+        if wav_path.exists():
+            wav_path.unlink()

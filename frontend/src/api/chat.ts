@@ -13,6 +13,7 @@ export async function streamChat(
   onToken: (token: string) => void,
   onError: (error: string) => void,
   onDone: () => void,
+  onTelemetry: (telemetry: any) => void,
   chat_mode: ChatMode = 'vault',
   learning_context?: LearningContext,
   mode: string = 'assistant',
@@ -97,6 +98,9 @@ export async function streamChat(
           onStatus(''); // Очищаем статус
           const payload = JSON.parse(dataStr);
           onToken(payload.text || '');
+        } else if (eventType === 'telemetry') {
+          const telemetryData = JSON.parse(dataStr);
+          onTelemetry(telemetryData);
         } else if (eventType === 'error') {
           const payload = JSON.parse(dataStr);
           onError(payload.error || 'Unknown error');

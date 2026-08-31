@@ -48,9 +48,10 @@ export const ConversationSidebar: React.FC<SidebarProps> = ({ activeConversation
         setCustomFolders(JSON.parse(savedFolders));
       } catch (e) {}
     }
-    const interval = setInterval(fetchConversations, 5000);
-    return () => clearInterval(interval);
-  }, [activeConversationId]);
+    }
+    // const interval = setInterval(fetchConversations, 5000);
+    // return () => clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (editingId && inputRef.current) {

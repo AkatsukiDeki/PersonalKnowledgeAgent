@@ -5,6 +5,8 @@ import { LearningModal } from '../learning/LearningModal';
 import { SelectionToolbar, ContextActionType } from './SelectionToolbar';
 import { TaskPayload } from '../../api/sources';
 import { DomainInput } from './DomainInput';
+import { MediaViewer } from './MediaViewer';
+import { RetranscribeModal } from './RetranscribeModal';
 
 interface Props {
   sourceId: string;
@@ -23,12 +25,10 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
   const [isAIFixing, setIsAIFixing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isLearningModalOpen, setIsLearningModalOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'content' | 'summary' | 'tasks'>('content');
+  const [activeTab, setActiveTab] = useState<'content' | 'summary' | 'tasks' | 'media'>('content');
 
   // Retranscribe states
   const [showRetranscribeModal, setShowRetranscribeModal] = useState(false);
-  const [retranscribeLang, setRetranscribeLang] = useState('ru');
-  const [retranscribePrompt, setRetranscribePrompt] = useState('');
   const [retranscribeLoading, setRetranscribeLoading] = useState(false);
 
   // Selection states
@@ -62,6 +62,12 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
           )
         ).sort((a, b) => a.localeCompare(b));
       setExistingDomains(uniqueDomains);
+      
+      if (data.meta_info?.media) {
+        setActiveTab('media');
+      } else {
+        setActiveTab('content');
+      }
       
     } catch (err: any) {
       setError(err.message);
@@ -180,12 +186,12 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
     }
   };
 
-  const handleRetranscribe = async () => {
+  const handleRetranscribe = async (lang: string, prompt: string) => {
     try {
       setRetranscribeLoading(true);
       await sourcesApi.retranscribe(sourceId, { 
-        language: retranscribeLang, 
-        initial_prompt: retranscribePrompt 
+        language: lang, 
+        initial_prompt: prompt 
       });
       setShowRetranscribeModal(false);
       onSaved();
@@ -325,6 +331,14 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
             <div className="flex-1 flex flex-col border-r border-zinc-800">
               <div className="px-4 py-2 border-b border-zinc-800 flex items-center justify-between shrink-0">
                 <div className="flex items-center gap-4">
+                  {detail.meta_info?.media && (
+                    <button 
+                      onClick={() => setActiveTab('media')}
+                      className={`text-xs font-semibold uppercase tracking-wider transition-colors flex items-center gap-1.5 ${activeTab === 'media' ? 'text-indigo-400' : 'text-zinc-500 hover:text-zinc-300'}`}
+                    >
+                      Media Player
+                    </button>
+                  )}
                   <button 
                     onClick={() => setActiveTab('content')}
                     className={`text-xs font-semibold uppercase tracking-wider transition-colors ${activeTab === 'content' ? 'text-indigo-400' : 'text-zinc-500 hover:text-zinc-300'}`}
@@ -429,6 +443,12 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
                       </div>
                     </div>
                   )}
+                </div>
+              )}
+
+              {activeTab === 'media' && (
+                <div className="flex-1 relative flex flex-col min-h-0 bg-zinc-950">
+                  <MediaViewer sourceId={sourceId} source={detail} metaInfo={detail.meta_info} />
                 </div>
               )}
 
@@ -553,53 +573,12 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
         ) : null}
       </div>
       
-      {showRetranscribeModal && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
-          <div className="bg-zinc-900 border border-zinc-700 rounded-xl w-full max-w-md shadow-2xl p-5">
-            <h3 className="font-medium text-zinc-100 mb-4 text-lg">Настройки транскрибации</h3>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">Язык</label>
-                <input
-                  type="text"
-                  value={retranscribeLang}
-                  onChange={e => setRetranscribeLang(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500"
-                  placeholder="ru, en, etc."
-                />
-              </div>
-              
-              <div>
-                <label className="block text-xs text-zinc-400 mb-1">Специальный промпт (Сленг / Термины)</label>
-                <textarea
-                  value={retranscribePrompt}
-                  onChange={e => setRetranscribePrompt(e.target.value)}
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500 h-24 resize-none"
-                  placeholder="Мат, программирование, специфичные названия..."
-                />
-              </div>
-            </div>
-            
-            <div className="flex justify-end gap-3 mt-6">
-              <button
-                onClick={() => setShowRetranscribeModal(false)}
-                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-sm font-medium rounded-lg transition-colors"
-              >
-                Отмена
-              </button>
-              <button
-                onClick={handleRetranscribe}
-                disabled={retranscribeLoading}
-                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
-              >
-                {retranscribeLoading && <Loader2 size={16} className="animate-spin" />}
-                Запустить процесс
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <RetranscribeModal
+        isOpen={showRetranscribeModal}
+        onClose={() => setShowRetranscribeModal(false)}
+        onConfirm={handleRetranscribe}
+        isLoading={retranscribeLoading}
+      />
 
       <LearningModal  
         isOpen={isLearningModalOpen} 

@@ -128,11 +128,12 @@ export const sourcesApi = {
     return sourcesApi.uploadFile(file, undefined, folder, domain, 'normal');
   },
 
-  uploadMedia: async (file: File, profile: string = 'speech', subject_id?: string): Promise<SourceItem> => {
+  uploadMedia: async (file: File, profile: string = 'speech', subject_id?: string, media_type?: string): Promise<SourceItem> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('profile', profile);
     if (subject_id) formData.append('subject_id', subject_id);
+    if (media_type) formData.append('media_type', media_type);
 
     return fetchApi<SourceItem>('/media/upload', {
       method: 'POST',

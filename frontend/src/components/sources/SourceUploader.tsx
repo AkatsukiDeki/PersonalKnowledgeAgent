@@ -21,6 +21,7 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
   const [isBatchUploading, setIsBatchUploading] = useState(false);
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
+  const [mediaType, setMediaType] = useState<string>('');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Manual State
@@ -111,8 +112,8 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
       let count = 0;
       for (const f of batchFiles) {
         setBatchProgress(`Uploading ${count + 1} of ${batchFiles.length}: ${f.name}`);
-        if (f.type.startsWith('audio/') || f.type.startsWith('video/')) {
-          await sourcesApi.uploadMedia(f);
+        if (f.type.startsWith('audio/') || f.type.startsWith('video/') || f.name.endsWith('.m4a') || f.name.endsWith('.mp3')) {
+          await sourcesApi.uploadMedia(f, 'speech', undefined, mediaType || undefined);
         } else {
           await sourcesApi.upload(f, finalDomain || undefined, '');
         }
@@ -299,14 +300,30 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
                 </div>
               )}
 
-              <div className="mt-2">
-                <label className="block text-xs font-medium text-zinc-400 mb-1">Общий домен для всей пачки (опционально)</label>
-                <DomainInput
-                  value={domain}
-                  onChange={setDomain}
-                  suggestions={existingDomains}
-                  disabled={isBatchUploading}
-                />
+              <div className="mt-2 grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Тип медиа (опционально)</label>
+                  <select
+                    value={mediaType}
+                    onChange={(e) => setMediaType(e.target.value)}
+                    disabled={isBatchUploading}
+                    className="w-full bg-zinc-900 border border-zinc-700 text-zinc-300 text-sm rounded-lg px-3 py-2 outline-none focus:border-indigo-500 transition-colors"
+                  >
+                    <option value="">Авто (по расширению)</option>
+                    <option value="voice_note">🎙️ Голосовая заметка</option>
+                    <option value="audio">🎧 Аудио / Подкаст</option>
+                    <option value="video">🎬 Видео</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-zinc-400 mb-1">Домен (опционально)</label>
+                  <DomainInput
+                    value={domain}
+                    onChange={setDomain}
+                    suggestions={existingDomains}
+                    disabled={isBatchUploading}
+                  />
+                </div>
               </div>
 
               <div className="flex items-center justify-end gap-2 mt-4 pt-4 border-t border-zinc-800">

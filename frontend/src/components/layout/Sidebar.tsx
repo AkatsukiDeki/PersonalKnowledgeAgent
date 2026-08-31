@@ -55,10 +55,8 @@ export function Sidebar({
       }
     };
     fetchCount();
-    const interval = setInterval(fetchCount, 15000);
     window.addEventListener('conflictsUpdated', fetchCount);
     return () => {
-      clearInterval(interval);
       window.removeEventListener('conflictsUpdated', fetchCount);
     };
   }, []);

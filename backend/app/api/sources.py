@@ -5,6 +5,7 @@ import uuid
 import logging
 import re
 import asyncio
+import json
 import urllib.request
 from typing import List, Optional, Any, Literal
 from html.parser import HTMLParser
@@ -108,7 +109,6 @@ def sanitize_folder_path(path: Optional[str]) -> Optional[str]:
     """Normalize slash-path: trim spaces, collapse slashes, strip leading/trailing slashes. Returns None for root."""
     if not path or path.strip() in ("", "root", "none"):
         return None
-    # Trim, split on slashes, strip each segment
     segments = [s.strip() for s in re.split(r'/+', path.strip()) if s.strip()]
     if not segments:
         return None
@@ -135,12 +135,13 @@ async def _count(db: AsyncSession, model: Any, *filters) -> int:
 
 
 def _enrich_source_response(source: Source, chunks_count: int, claims_count: int) -> SourceResponse:
+    meta = getattr(source, "meta_info", None) or {}
     return SourceResponse(
         id=source.id,
         title=source.title,
         content=source.content,
         source_type=source.source_type,
-        meta_info=source.meta_info or {},
+        meta_info=meta,
         file_type=source.file_type,
         original_file_path=source.original_file_path,
         raw_content=source.raw_content,
@@ -148,7 +149,7 @@ def _enrich_source_response(source: Source, chunks_count: int, claims_count: int
         folder=getattr(source, "folder", None),
         version=source.version,
         is_deleted=source.is_deleted,
-        metadata_info=source.metadata_info or {},
+        metadata_info=meta,
         status=source.status,
         error_message=source.error_message,
         started_at=source.started_at,
@@ -247,10 +248,10 @@ async def upload_source(
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
-        
+
     if len(file_bytes) > MAX_UPLOAD_SIZE:
         raise HTTPException(status_code=413, detail="File too large. Maximum size is 25MB.")
-        
+
     mime_type = magic.from_buffer(file_bytes[:2048], mime=True)
     if mime_type in ("application/x-executable", "application/x-dosexec"):
         raise HTTPException(status_code=400, detail="Executable files are not allowed")
@@ -345,10 +346,6 @@ class FolderTreeResponse(BaseModel):
 
 @router.get("/folders/tree", response_model=FolderTreeResponse)
 async def get_folder_tree(db: AsyncSession = Depends(get_db)):
-    """
-    Returns a nested folder tree built from unique folder paths in the sources table.
-    Each node has a `count` (direct sources) and `children` (sub-folders).
-    """
     stmt = (
         select(Source.folder, func.count(Source.id).label("cnt"))
         .where(Source.is_deleted == False, Source.folder.is_not(None))
@@ -356,7 +353,6 @@ async def get_folder_tree(db: AsyncSession = Depends(get_db)):
     )
     rows = (await db.execute(stmt)).all()
 
-    # Build tree in memory
     tree: dict = {}
     for folder_path, cnt in rows:
         segments = folder_path.split("/")
@@ -383,7 +379,6 @@ async def move_source(
     payload: MoveSourcePayload,
     db: AsyncSession = Depends(get_db),
 ):
-    """Move a source to a different folder (or root if folder=null)."""
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
@@ -413,33 +408,30 @@ async def rename_folder(
 ):
     old_prefix = sanitize_folder_path(payload.old_path)
     new_prefix = sanitize_folder_path(payload.new_path)
-    
+
     if not old_prefix or not new_prefix:
         raise HTTPException(status_code=400, detail="Invalid folder path")
-        
+
     if old_prefix == new_prefix:
         return {"status": "noop"}
 
-    # 1. Точное совпадение
     await db.execute(
         update(Source)
         .where(Source.folder == old_prefix, Source.is_deleted.is_(False))
         .values(folder=new_prefix)
     )
-    
-    # 2. Вложенные подпапки (замена префикса)
+
     stmt = select(Source).where(
         Source.folder.like(f"{old_prefix}/%"),
         Source.is_deleted.is_(False)
     )
     res = await db.execute(stmt)
     sources_to_update = res.scalars().all()
-    
+
     for s in sources_to_update:
-        # Заменяем только префиксную часть
         relative_part = s.folder[len(old_prefix):]
         s.folder = f"{new_prefix}{relative_part}"
-        
+
     await db.commit()
     return {"status": "ok", "renamed_count": len(sources_to_update)}
 
@@ -451,10 +443,6 @@ async def delete_folder(
     folder_path: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """
-    Deletes a virtual folder. Blocks with 409 if any non-deleted sources exist
-    in the folder or its subfolders.
-    """
     try:
         normalized = sanitize_folder_path(folder_path)
     except ValueError as e:
@@ -462,7 +450,6 @@ async def delete_folder(
     if not normalized:
         raise HTTPException(status_code=400, detail="Cannot delete root folder")
 
-    # Check for sources in this folder or any sub-folder
     stmt = select(func.count(Source.id)).where(
         Source.is_deleted == False,
         or_(
@@ -476,7 +463,6 @@ async def delete_folder(
             status_code=409,
             detail=f"Folder is not empty. Move or delete {count} source(s) first."
         )
-    # Virtual folders have no DB row — nothing to delete
     return
 
 
@@ -509,7 +495,6 @@ async def list_sources(
             else:
                 stmt = stmt.where(Source.folder == normalized)
         else:
-            # root: sources with no folder
             stmt = stmt.where(Source.folder.is_(None))
     if file_type:
         stmt = stmt.where(Source.file_type == file_type)
@@ -541,12 +526,14 @@ async def get_source_detail(source_id: uuid.UUID, db: AsyncSession = Depends(get
     claims_stmt = select(Claim).where(Claim.source_id == source_id).order_by(Claim.created_at.desc())
     claims = (await db.execute(claims_stmt)).scalars().all()
 
+    meta = getattr(source, "meta_info", None) or {}
+
     return SourceDetailResponse(
         id=source.id,
         title=source.title,
         content=source.content,
         source_type=source.source_type,
-        meta_info=source.meta_info or {},
+        meta_info=meta,
         file_type=source.file_type,
         original_file_path=source.original_file_path,
         raw_content=source.raw_content,
@@ -554,7 +541,7 @@ async def get_source_detail(source_id: uuid.UUID, db: AsyncSession = Depends(get
         folder=getattr(source, "folder", None),
         version=source.version,
         is_deleted=source.is_deleted,
-        metadata_info=source.metadata_info or {},
+        metadata_info=meta,
         status=source.status,
         error_message=source.error_message,
         started_at=source.started_at,
@@ -593,7 +580,7 @@ async def update_source_content(
         raise HTTPException(status_code=400, detail="Cannot edit a deleted source")
 
     source.version += 1
-    
+
     update_data = payload.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         if field == "raw_content":
@@ -659,21 +646,6 @@ async def _safe_reindex(source_id: uuid.UUID):
     await process_source_chunks_bg(source_id)
     logger.info(f"[ReIndex] Safe re-index completed for source {source_id}")
 
-@router.delete('/{source_id}', status_code=status.HTTP_204_NO_CONTENT)
-async def delete_source(source_id: str, db: AsyncSession = Depends(get_db)):
-    import uuid
-    try:
-        sid = uuid.UUID(source_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail='Invalid UUID format')
-    stmt = select(Source).where(Source.id == sid)
-    res = await db.execute(stmt)
-    source = res.scalar_one_or_none()
-    if not source:
-        raise HTTPException(status_code=404, detail='Source not found')
-    await db.delete(source)
-    await db.commit()
-    return
 
 AI_FIX_SYSTEM_PROMPT = """Ты — редактор транскриптов и текстов. 
 
@@ -692,16 +664,15 @@ async def ai_fix_text(
     payload: AIFixRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    import uuid
     try:
         sid = uuid.UUID(source_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
-        
+
     source = await db.get(Source, sid)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
-        
+
     ollama = OllamaClient()
     try:
         fixed_text = await ollama.generate(
@@ -748,25 +719,23 @@ async def run_context_action(
     payload: ContextActionRequest,
     db: AsyncSession = Depends(get_db)
 ):
-    import uuid
-    import json
     try:
         sid = uuid.UUID(source_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid UUID format")
-        
+
     source = await db.get(Source, sid)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
-        
+
     system_prompt = CONTEXT_ACTION_SYSTEM_PROMPTS.get(payload.action)
     if not system_prompt:
         raise HTTPException(status_code=400, detail="Invalid action")
-        
+
     user_prompt = f"<selected_text>\n{payload.selected_text}\n</selected_text>"
     if payload.surrounding_context:
         user_prompt += f"\n\n<surrounding_context>\n{payload.surrounding_context}\n</surrounding_context>"
-        
+
     ollama = OllamaClient()
     try:
         response_text = await ollama.generate(
@@ -775,7 +744,7 @@ async def run_context_action(
             system=system_prompt,
             format="json" if payload.action == "create_task" else None
         )
-        
+
         if payload.action == "create_task":
             try:
                 task_data = json.loads(response_text)
@@ -785,7 +754,7 @@ async def run_context_action(
                 return ContextActionResponse(task_payload=None)
         else:
             return ContextActionResponse(result_text=response_text.strip() if response_text else None)
-            
+
     except Exception as e:
         logger.error(f"[ContextAction] Failed to execute {payload.action} for source {source_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to process text with LLM")

@@ -49,6 +49,12 @@ async def warmup_models():
     except Exception as e:
         logging.getLogger(__name__).warning(f"Failed to warmup models: {e}")
 
+async def warmup_loop():
+    """Periodically ping models to keep them warm."""
+    while True:
+        await asyncio.sleep(300)  # Every 5 minutes
+        await warmup_models()
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Run DB initialisation and background tasks on startup."""
@@ -57,9 +63,13 @@ async def lifespan(app: FastAPI):
     # Execute warmup asynchronously without blocking DB startup
     asyncio.create_task(warmup_models())
     
+    # Start periodic warmup ping
+    warmup_task = asyncio.create_task(warmup_loop())
+    
     await scheduler.start()
     await task_queue.start(num_workers=2)
     yield
+    warmup_task.cancel()
     await task_queue.stop()
     await scheduler.stop()
 

@@ -34,7 +34,6 @@ class Source(Base, TimestampedUUIDMixin):
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False, index=True)
     meta_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
-    
     subject_id: Mapped[Optional[uuid.UUID]] = mapped_column(
         PG_UUID(as_uuid=True),
         ForeignKey("subjects.id", ondelete="SET NULL"),
@@ -110,6 +109,7 @@ class Chunk(Base, TimestampedUUIDMixin):
     embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
     tsv: Mapped[Optional[Any]] = mapped_column(TSVECTOR, nullable=True)
     meta_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    metadata_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
 
     # Chunk versioning (mirrors Claim pattern)
     is_active: Mapped[bool] = mapped_column(default=True, index=True)
@@ -119,7 +119,6 @@ class Chunk(Base, TimestampedUUIDMixin):
         ForeignKey("chunks.id", ondelete="SET NULL"),
         nullable=True
     )
-    metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     source: Mapped["Source"] = relationship("Source", back_populates="chunks")
     revision: Mapped[Optional["FileRevision"]] = relationship("FileRevision", back_populates="chunks")

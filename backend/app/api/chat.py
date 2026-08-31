@@ -220,7 +220,8 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         original_query=payload.query,
         search_query=search_query,
         limit=candidate_limit,
-        include_history=False
+        include_history=False,
+        profiler=profiler
     )
     
     if getattr(profile, "reranking_enabled", False) and l1_chunks:
@@ -428,7 +429,22 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "is_pattern": True
                 })
 
-    retrieved = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
+    MAX_CONTEXT_CHARS = 12000
+    retrieved_raw = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
+    
+    retrieved = []
+    current_chars = 0
+    for item in retrieved_raw:
+        item_len = len(item.get("text_content", ""))
+        if current_chars + item_len > MAX_CONTEXT_CHARS:
+            # Try to add at least a truncated version if it's the very first item, 
+            # otherwise just skip it to stay within budget
+            if not retrieved and item_len > 500:
+                item["text_content"] = item["text_content"][:MAX_CONTEXT_CHARS - 100] + "...(truncated)"
+                retrieved.append(item)
+            break
+        retrieved.append(item)
+        current_chars += item_len
 
     RELEVANCE_THRESHOLD = 0.45
     has_high_sim = any(
@@ -621,12 +637,14 @@ async def chat_stream_endpoint(
             if intent == "META" and not payload.image_base64:
                 profiler.start_stage("06_llm_generation")
                 answer = await generate_meta_answer(payload.query)
-                profiler.end()
+                telemetry_data = profiler.end()
 
                 yield f"event: message\ndata: {json.dumps({'text': answer}, ensure_ascii=False)}\n\n"
+                yield f"event: telemetry\ndata: {json.dumps(telemetry_data, ensure_ascii=False)}\n\n"
 
                 if conv:
                     metrics["intent"] = "META"
+                    metrics["telemetry"] = telemetry_data
                     full_answer = answer
 
                 yield "event: done\ndata: [DONE]\n\n"
@@ -717,11 +735,13 @@ async def chat_stream_endpoint(
                 first_token = True
                 async for token in model_manager.stream_vision(messages, image_bytes, payload.image_mime_type or "image/png"):
                     if first_token:
+                        profiler.mark_first_token()
                         profiler.start_stage("07_llm_streaming")
                         first_token = False
                     full_answer += token
                     yield f"event: message\ndata: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
-                profiler.end()
+                telemetry_data = profiler.end()
+                yield f"event: telemetry\ndata: {json.dumps(telemetry_data, ensure_ascii=False)}\n\n"
             else:
                 capability_val = profile.preferred_capability.value
                 target_model = settings.CAPABILITY_TO_MODEL.get(capability_val, settings.OLLAMA_QA_MODEL)
@@ -730,11 +750,13 @@ async def chat_stream_endpoint(
                 first_token = True
                 async for token in stream_rag_response(payload.query, retrieved, user_profile=profile_text, mode=active_mode, history=payload.history, target_model=target_model):
                     if first_token:
+                        profiler.mark_first_token()
                         profiler.start_stage("07_llm_streaming")
                         first_token = False
                     full_answer += token
                     yield f"event: message\ndata: {json.dumps({'text': token}, ensure_ascii=False)}\n\n"
-                profiler.end()
+                telemetry_data = profiler.end()
+                yield f"event: telemetry\ndata: {json.dumps(telemetry_data, ensure_ascii=False)}\n\n"
 
             if conv:
                 msg_count = await db.scalar(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
@@ -747,7 +769,8 @@ async def chat_stream_endpoint(
                     "l3_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L3")])),
                     "l4_count": int(len([r for r in retrieved if r["text_content"].startswith("=== [L4")])),
                     "graph_hops": int(len([r for r in retrieved if r["text_content"].startswith("=== [GRAPH")])),
-                    "intent": str(intent)
+                    "intent": str(intent),
+                    "telemetry": telemetry_data
                 })
 
             yield "event: done\ndata: [DONE]\n\n"

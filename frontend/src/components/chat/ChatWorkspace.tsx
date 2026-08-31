@@ -3,6 +3,7 @@ import { Message, Citation, OrbitContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
+import { MessageLatencyBadge } from './MessageLatencyBadge';
 import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose, Zap, Database, HelpCircle, Rocket, Satellite, AudioLines } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
@@ -292,6 +293,21 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         setLoadingStatus('');
         setIsCooldown(true);
         setTimeout(() => setIsCooldown(false), 2500);
+      },
+      (telemetry) => {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === assistantId
+              ? {
+                  ...msg,
+                  meta_info: {
+                    ...msg.meta_info,
+                    telemetry,
+                  },
+                }
+              : msg
+          )
+        );
       },
       chatMode,
       learningContext,

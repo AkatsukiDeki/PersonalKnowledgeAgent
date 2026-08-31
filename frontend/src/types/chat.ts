@@ -13,6 +13,13 @@ export interface Citation {
   score: number;
 }
 
+export interface MessageTelemetry {
+  t_emb_ms?: number;
+  t_sql_ms?: number;
+  ttft_ms?: number;
+  total_ms?: number;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
@@ -22,6 +29,10 @@ export interface Message {
   isStreaming?: boolean;
   image_base64?: string;
   image_mime_type?: string;
+  meta_info?: {
+    telemetry?: MessageTelemetry;
+    [key: string]: any;
+  };
 }
 
 export interface Decision {

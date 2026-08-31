@@ -19,6 +19,7 @@ async def hybrid_search(
     source_ids: Optional[List[str]] = None,
     limit: int = 5,
     include_history: bool = False,
+    profiler = None,
 ) -> List[Dict[str, Any]]:
     """Run hybrid vector + full-text search with micro-benchmarking."""
 
@@ -28,26 +29,39 @@ async def hybrid_search(
     query_embedding = await provider.embed_query(search_query)
     emb_str = str(list(query_embedding))
     t_emb_duration = time.perf_counter() - t_emb_start
+    if profiler:
+        profiler.timings["t_emb_ms"] = int(t_emb_duration * 1000)
 
-    # 2. Замер времени выполнения SQL в Postgres
-    t_sql_start = time.perf_counter()
-    sql = text("""
-    WITH vector_search AS (
+    # 2. Vector Search
+    t_vec_start = time.perf_counter()
+    sql_vector = text("""
         SELECT c.id, c.source_id, c.text_content, 
                (c.embedding <=> CAST(:embedding AS vector)) as distance
         FROM chunks c
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
           AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
           AND c.embedding IS NOT NULL
-        ORDER BY c.embedding <=> CAST(:embedding AS vector)
+        ORDER BY distance
         LIMIT 10
-    ),
-    ranked_vector AS (
-        SELECT id, source_id, text_content, distance,
-               ROW_NUMBER() OVER (ORDER BY distance) as rank
-        FROM vector_search
-    ),
-    text_search AS (
+    """)
+    res_vec = await db.execute(sql_vector, {
+        "embedding": emb_str,
+        "include_history": include_history,
+        "has_source_filter": source_ids is not None and len(source_ids) > 0,
+        "source_ids": source_ids if source_ids else [],
+    })
+    vector_rows = [dict(row) for row in res_vec.mappings().all()]
+    t_vec_duration = time.perf_counter() - t_vec_start
+
+    # 3. Full-Text Search (BM25)
+    t_bm25_start = time.perf_counter()
+    import re
+    # Очистка и усечение запроса для GIN-индекса
+    raw_combined = f"{original_query} {search_query}"
+    safe_text_query = re.sub(r'[^\w\s]', ' ', raw_combined)
+    safe_text_query = " ".join(safe_text_query.split()[:30])
+
+    sql_text = text("""
         SELECT c.id, c.source_id, c.text_content,
                ts_rank_cd(c.tsv, plainto_tsquery('russian', :combined_query)) as score
         FROM chunks c
@@ -56,50 +70,48 @@ async def hybrid_search(
           AND c.tsv @@ plainto_tsquery('russian', :combined_query)
         ORDER BY score DESC
         LIMIT 10
-    ),
-    ranked_text AS (
-        SELECT id, source_id, text_content,
-               ROW_NUMBER() OVER (ORDER BY score DESC) as rank
-        FROM text_search
-    ),
-    combined AS (
-        SELECT COALESCE(v.id, t.id) as id,
-               COALESCE(v.source_id, t.source_id) as source_id,
-               COALESCE(v.text_content, t.text_content) as text_content,
-               v.rank as v_rank,
-               t.rank as t_rank,
-               v.distance
-        FROM ranked_vector v
-        FULL OUTER JOIN ranked_text t ON v.id = t.id
-    )
-    SELECT
-        id as chunk_id,
-        source_id,
-        text_content,
-        COALESCE(1.0 / (60 + v_rank), 0.0) + COALESCE(1.0 / (60 + t_rank), 0.0) as rrf_score,
-        COALESCE(1.0 - distance, 0.0) as similarity
-    FROM combined
-    ORDER BY rrf_score DESC
-    LIMIT :limit
     """)
-
-    import re
-    # Очистка и усечение запроса для GIN-индекса (предотвращает зависания на кусках кода)
-    raw_combined = f"{original_query} {search_query}"
-    safe_text_query = re.sub(r'[^\w\s]', ' ', raw_combined)
-    safe_text_query = " ".join(safe_text_query.split()[:30])
-
-    result = await db.execute(sql, {
-        "embedding": emb_str,
+    res_text = await db.execute(sql_text, {
         "combined_query": safe_text_query,
-        "limit": limit,
         "include_history": include_history,
         "has_source_filter": source_ids is not None and len(source_ids) > 0,
         "source_ids": source_ids if source_ids else [],
     })
-    rows = [dict(row) for row in result.mappings().all()]
-    t_sql_duration = time.perf_counter() - t_sql_start
+    text_rows = [dict(row) for row in res_text.mappings().all()]
+    t_bm25_duration = time.perf_counter() - t_bm25_start
 
-    print(f"  └── [HYBRID SEARCH BREAKDOWN] Embedding calc: {t_emb_duration:.3f}s | Postgres SQL: {t_sql_duration:.3f}s")
+    # 4. RRF Merge
+    t_rrf_start = time.perf_counter()
+    v_rank = {row['id']: i+1 for i, row in enumerate(vector_rows)}
+    t_rank = {row['id']: i+1 for i, row in enumerate(text_rows)}
+
+    all_ids = set(v_rank.keys()) | set(t_rank.keys())
+    rows_by_id = {row['id']: row for row in vector_rows + text_rows}
+
+    merged = []
+    for cid in all_ids:
+        vr = v_rank.get(cid)
+        tr = t_rank.get(cid)
+        rrf_score = (1.0 / (60 + vr) if vr else 0.0) + (1.0 / (60 + tr) if tr else 0.0)
+        row = rows_by_id[cid]
+        merged.append({
+            "chunk_id": cid,
+            "source_id": row["source_id"],
+            "text_content": row["text_content"],
+            "rrf_score": rrf_score,
+            "similarity": 1.0 - row["distance"] if "distance" in row else 0.0
+        })
+
+    merged.sort(key=lambda x: x["rrf_score"], reverse=True)
+    rows = merged[:limit]
+    t_rrf_duration = time.perf_counter() - t_rrf_start
+    t_sql_duration = t_vec_duration + t_bm25_duration + t_rrf_duration
+    if profiler:
+        profiler.timings["t_sql_ms"] = int(t_sql_duration * 1000)
+        profiler.timings["t_vector_ms"] = int(t_vec_duration * 1000)
+        profiler.timings["t_bm25_ms"] = int(t_bm25_duration * 1000)
+        profiler.timings["t_rrf_ms"] = int(t_rrf_duration * 1000)
+
+    print(f"  └── [HYBRID SEARCH BREAKDOWN] Embedding calc: {t_emb_duration:.3f}s | Vector: {t_vec_duration:.3f}s | Text: {t_bm25_duration:.3f}s | Merge: {t_rrf_duration:.3f}s")
 
     return rows

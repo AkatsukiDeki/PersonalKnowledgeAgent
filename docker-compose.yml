@@ -39,6 +39,8 @@ services:
       - pka-network
     ports:
       - "8000:8000"
+    volumes:
+      - pka_backend_uploads:/app/uploads
 
   frontend:
     build:
@@ -59,3 +61,4 @@ networks:
 
 volumes:
   pgdata:
+  pka_backend_uploads:
