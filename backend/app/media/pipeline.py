@@ -455,6 +455,7 @@ async def run_retranscribe_job(
                     embedding=embedding_vector,
                     tsv=func.to_tsvector("russian", text_with_timecode),
                     meta_info=chunk_metadata,
+                    metadata_info=chunk_metadata,
                     is_active=True
                 )
                 db_chunks.append(db_chunk)

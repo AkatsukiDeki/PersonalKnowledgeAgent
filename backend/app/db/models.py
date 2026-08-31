@@ -109,7 +109,7 @@ class Chunk(Base, TimestampedUUIDMixin):
     embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
     tsv: Mapped[Optional[Any]] = mapped_column(TSVECTOR, nullable=True)
     meta_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
-    metadata_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
+    metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
     # Chunk versioning (mirrors Claim pattern)
     is_active: Mapped[bool] = mapped_column(default=True, index=True)
