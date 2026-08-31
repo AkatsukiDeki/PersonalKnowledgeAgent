@@ -81,6 +81,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+
+uploads_dir = Path("/app/uploads")
+uploads_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

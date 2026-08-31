@@ -102,6 +102,31 @@ async def run_media_ingestion_job(
         logger.info(f"[Media Ingestion] Extracting audio...")
         await asyncio.to_thread(extract_audio_to_wav, input_path, wav_path)
         
+        # 1.5 Video Vision (M3.4)
+        is_video = original_filename.lower().endswith((".mp4", ".mkv", ".avi", ".mov", ".webm"))
+        processed_slides = []
+        slides_storage_dir = Path(f"/app/uploads/slides/{source_id}")
+        
+        if is_video:
+            logger.info(f"[Media Ingestion] Video detected. Extracting keyframes and running OCR...")
+            from .video_extractor import VideoSlideExtractor
+            from .ocr_service import SlideOCRService
+            slide_extractor = VideoSlideExtractor()
+            unique_slides = await asyncio.to_thread(
+                slide_extractor.extract_unique_slides,
+                video_path=file_path,
+                output_dir=slides_storage_dir,
+                source_id_str=str(source_id)
+            )
+
+            if unique_slides:
+                ocr_service = SlideOCRService(lang="ru")
+                processed_slides = await asyncio.to_thread(
+                    ocr_service.process_slides_batch,
+                    slides=unique_slides
+                )
+
+        
         applied_separation = False
         separation_fallback = False
         target_wav_path = wav_path
@@ -144,6 +169,29 @@ async def run_media_ingestion_job(
         logger.info(f"[Media Ingestion] Chunking {len(segments)} segments...")
         chunks = chunk_segments(segments)
         
+        # 3.2 Temporal Alignment with Slides
+        for ch in chunks:
+            ch_start = ch["start_time"]
+            ch_end = ch["end_time"]
+            matched_slides = []
+            for s in processed_slides:
+                ts = s.get("timestamp_seconds", 0.0)
+                if (ch_start - 3.0) <= ts <= (ch_end + 3.0) and s.get("extracted_text"):
+                    matched_slides.append(s)
+            
+            slide_blocks = []
+            for s in matched_slides:
+                slide_blocks.append(
+                    f"--- [Слайд на экране ({s['formatted_time']})] ---\n"
+                    f"{s['extracted_text']}\n"
+                )
+            
+            ch["has_slides"] = len(matched_slides) > 0
+            if slide_blocks:
+                ch["slide_text"] = "\n".join(slide_blocks)
+            else:
+                ch["slide_text"] = ""
+        
         # 3.5 LLM Post-Processing per chunk
         ollama = OllamaClient()
         MEDIA_STRUCTURING_PROMPT = """Ты — аккуратный редактор транскрипций аудио. Твоя задача — очистить распознанный текст от фонетических опечаток STT, исправить пунктуацию и разбить на смысловые абзацы.
@@ -182,7 +230,14 @@ async def run_media_ingestion_job(
         await asyncio.gather(*(process_chunk_safe(i, c) for i, c in enumerate(chunks)))
         
         # Full text for the source
-        full_text = "\n\n".join([f"[{c['formatted_time']}]\n{c['text']}" for c in chunks])
+        full_text_parts = []
+        for c in chunks:
+            part = f"[{c['formatted_time']}]\n"
+            if c.get("has_slides"):
+                part += c["slide_text"] + "\n[Речь спикера]:\n"
+            part += c["text"]
+            full_text_parts.append(part)
+        full_text = "\n\n".join(full_text_parts)
         raw_text_full = "\n".join([seg['text'] for seg in segments])
         
         # 3.8 Extract Insights
@@ -205,9 +260,24 @@ async def run_media_ingestion_job(
             transcription_meta = meta.get("transcription", {})
             transcription_meta.update({
                 "latency_sec": round(latency, 2),
-                "status": "completed"
+                "status": "completed",
+                "slides_count": len(processed_slides)
             })
             meta["transcription"] = transcription_meta
+            
+            if processed_slides:
+                if "media" not in meta:
+                    meta["media"] = {}
+                meta["media"]["slides"] = [
+                    {
+                        "slide_index": s["slide_index"],
+                        "timestamp_seconds": s["timestamp_seconds"],
+                        "formatted_time": s["formatted_time"],
+                        "image_url": s["image_url"],
+                        "extracted_text": s["extracted_text"]
+                    }
+                    for s in processed_slides
+                ]
             
             meta.update({
                 "applied_separation": applied_separation,
@@ -249,21 +319,26 @@ async def run_media_ingestion_job(
             
             # Embed chunks
             provider = get_embedding_provider()
-            texts_to_embed = [f"Источник (Медиа): {original_filename}\n\nТранскрипция:\n[{c['formatted_time']}] {c['text']}" for c in chunks]
+            texts_to_embed = []
+            for c in chunks:
+                base = f"Источник (Медиа): {original_filename}\n\nТранскрипция:\n[{c['formatted_time']}]\n"
+                if c.get("has_slides"):
+                    base += f"{c['slide_text']}\n[Речь спикера]:\n"
+                base += c['text']
+                texts_to_embed.append(base)
+
             embeddings = await provider.embed_documents(texts_to_embed)
             
             db_chunks = []
-            for idx, (chunk_data, embedding_vector) in enumerate(zip(chunks, embeddings)):
-                
-                # Include timecode and context in the text content so LLM sees it directly
-                text_with_timecode = f"Источник (Медиа): {original_filename}\n\nТранскрипция:\n[{chunk_data['formatted_time']}]\n{chunk_data['text']}"
+            for idx, (chunk_data, embedding_vector, text_with_timecode) in enumerate(zip(chunks, embeddings, texts_to_embed)):
                 
                 chunk_metadata = {
                     "source_type": "audio",
                     "original_filename": original_filename,
                     "start_time": chunk_data["start_time"],
                     "end_time": chunk_data["end_time"],
-                    "formatted_time": chunk_data["formatted_time"]
+                    "formatted_time": chunk_data["formatted_time"],
+                    "has_slides": chunk_data.get("has_slides", False)
                 }
                 
                 db_chunk = Chunk(
