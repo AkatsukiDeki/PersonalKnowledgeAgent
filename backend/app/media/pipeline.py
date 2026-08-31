@@ -8,6 +8,7 @@ from typing import List, Dict, Any
 
 from ..db.session import async_session_factory
 from ..db.models import Source, Chunk, Claim
+from .vocabulary import build_user_vocabulary
 from sqlalchemy import update, func
 from ..media.ffmpeg_service import extract_audio_to_wav
 from ..media.transcriber import WhisperSTTService
@@ -347,8 +348,14 @@ async def run_retranscribe_job(
         if not wav_path.exists():
             await asyncio.to_thread(extract_audio_to_wav, input_path, wav_path)
             
+        async with async_session_factory() as db:
+            if initial_prompt and initial_prompt.strip():
+                effective_prompt = initial_prompt.strip()
+            else:
+                effective_prompt = await build_user_vocabulary(db)
+
         stt = await asyncio.to_thread(get_stt_service)
-        segments = await asyncio.to_thread(stt.transcribe, wav_path, language, initial_prompt)
+        segments = await asyncio.to_thread(stt.transcribe, wav_path, language, effective_prompt)
         
         if not segments:
             raise ValueError("No speech detected during re-transcription")

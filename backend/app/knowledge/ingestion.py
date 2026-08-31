@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional, Sequence
 from sqlalchemy import func
 from sqlalchemy.ext.asyncio import AsyncSession
-from datetime import datetime
+from datetime import datetime, date
 import logging
 
 logger = logging.getLogger(__name__)
@@ -12,18 +12,16 @@ from ..db.models import Source, Chunk
 from .chunking import create_chunks
 from .embeddings.factory import get_embedding_provider
 from .claims_extractor import extract_claims_from_chunks
-import datetime
-
-def parse_partial_date(date_str: str) -> Optional[datetime.date]:
+def parse_partial_date(date_str: str) -> Optional[date]:
     if not date_str: return None
     date_str = date_str.strip()
     try:
         if len(date_str) == 4:
-            return datetime.date(int(date_str), 1, 1)
+            return date(int(date_str), 1, 1)
         elif len(date_str) == 7:
-            return datetime.date(int(date_str[:4]), int(date_str[5:7]), 1)
+            return date(int(date_str[:4]), int(date_str[5:7]), 1)
         else:
-            return datetime.date.fromisoformat(date_str[:10])
+            return date.fromisoformat(date_str[:10])
     except ValueError:
         return None
 from .graph_extractor import extract_and_save_entities_batch, extract_and_save_relations_batch
