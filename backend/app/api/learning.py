@@ -10,6 +10,11 @@ from ..core.llm import model_manager, TaskType
 from ..db.models import Source
 import logging
 
+from app.learning.schemas import GenerateRoadmapRequest, AdaptiveRoadmapPayload, GenerateStudyNoteRequest, StudyNoteResponse, GenerateSummaryNoteRequest, SaveAsSubjectRequest, SaveAsSubjectResponse
+from app.learning.context_resolver import LearningContextResolver
+from app.learning.roadmap_generator import RoadmapGenerator
+from app.learning.note_generator import StudyNoteGenerator
+
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/learning", tags=["Learning"])
 
@@ -105,3 +110,106 @@ async def generate_quiz(payload: LearningRequest, db: AsyncSession = Depends(get
     except Exception as e:
         logger.exception("Error generating quiz")
         raise HTTPException(status_code=502, detail=f"Не удалось сгенерировать тест (ошибка модели или парсинга): {str(e)}")
+
+@router.post("/roadmap", response_model=AdaptiveRoadmapPayload)
+async def generate_roadmap(
+    request: GenerateRoadmapRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        resolver = LearningContextResolver(db)
+        sources, claims, chunks = await resolver.resolve(request.scope)
+        
+        generator = RoadmapGenerator()
+        payload = await generator.generate(request, sources, claims, chunks)
+        return payload
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error generating roadmap")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/generate-note", response_model=StudyNoteResponse)
+async def generate_study_note(
+    request: GenerateStudyNoteRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        generator = StudyNoteGenerator(db)
+        note = await generator.generate(request)
+        return note
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error generating study note")
+        raise HTTPException(status_code=500, detail=str(e))
+@router.post("/generate-summary-note", response_model=StudyNoteResponse)
+async def generate_summary_note(
+    request: GenerateSummaryNoteRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        generator = StudyNoteGenerator(db)
+        note = await generator.generate_summary(request)
+        return note
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error generating summary study note")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/save-as-subject", response_model=SaveAsSubjectResponse)
+async def save_as_subject(
+    request: SaveAsSubjectRequest,
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        from app.db.models import Subject, SubjectRoadmap, Source
+        
+        resolver = LearningContextResolver(db)
+        sources, _, _ = await resolver.resolve(request.scope)
+        source_ids = [s.id for s in sources]
+        
+        # Determine title and description
+        title = request.roadmap_payload.title
+        description = request.roadmap_payload.overview
+        
+        # Create Subject
+        subject = Subject(
+            title=title,
+            description=description,
+            icon="book",
+            color_theme="indigo"
+        )
+        db.add(subject)
+        await db.flush() # get subject.id
+        
+        # Link sources
+        if source_ids:
+            from app.db.models import subject_sources
+            from sqlalchemy import insert
+            for sid in source_ids:
+                await db.execute(insert(subject_sources).values(subject_id=subject.id, source_id=sid))
+            
+        # Compile content with notes
+        roadmap_content = request.roadmap_payload.model_dump()
+        roadmap_content["notes_by_topic"] = {
+            k: v.model_dump() for k, v in request.notes_by_topic.items()
+        }
+            
+        roadmap = SubjectRoadmap(
+            subject_id=subject.id,
+            content=roadmap_content
+        )
+        db.add(roadmap)
+        
+        await db.commit()
+        return SaveAsSubjectResponse(subject_id=str(subject.id))
+    except HTTPException:
+        await db.rollback()
+        raise
+    except Exception as e:
+        await db.rollback()
+        logger.exception("Error saving as subject")
+        raise HTTPException(status_code=500, detail=str(e))

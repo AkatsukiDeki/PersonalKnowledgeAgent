@@ -86,9 +86,9 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
   ] as const;
 
   return (
-    <div className="flex flex-col h-[100dvh] w-full bg-[#0a0a0c] overflow-hidden text-zinc-100">
+    <div className="flex flex-col h-full max-h-screen overflow-hidden bg-[#0a0a0c] text-zinc-100">
       {/* Header */}
-      <header className="shrink-0 border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-md px-6 py-4">
+      <header className="flex-none border-b border-zinc-800/80 bg-zinc-950/60 backdrop-blur-md px-6 py-4 z-10">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-4">
           <button 
@@ -181,8 +181,8 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
       </header>
 
       {/* Content Area */}
-      <main className="flex-1 overflow-y-auto overflow-x-hidden p-6 md:p-8">
-        <div className="max-w-7xl mx-auto">
+      <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden p-6 md:p-8 pb-32">
+        <div className="max-w-7xl mx-auto h-full">
         {activeTab === 'roadmap' && (
           <SubjectRoadmap 
             subjectId={subject.id} 

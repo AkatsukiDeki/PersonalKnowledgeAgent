@@ -118,7 +118,7 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
       </div>
 
       {/* Список модулей */}
-      <div className="space-y-5">
+      <div className="space-y-5 pb-24">
         {roadmap.modules.map((module: any, mIdx: number) => (
           <div 
             key={module.id || `mod_${mIdx}`} 
