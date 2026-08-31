@@ -1,4 +1,4 @@
-# Personal Knowledge Agent (PKA) — v1.6.0 (Graph-Augmented Multimodal RAG)
+# Personal Knowledge Agent (PKA) — v1.7.0 (Graph-Augmented Multimodal RAG)
 
 **Personal Knowledge Agent (PKA)** — это локально-ориентированная мультимодальная система управления личным опытом и базой знаний с графовым RAG. Архитектура отделяет веса нейросетей от структуры памяти: система векторизует документы, код, изображения и аудио, извлекает атомарные факты (*Claims*), отслеживает эволюцию решений (*Superseded Decisions*) и обеспечивает контекстный диалог через локальные (Qwen 2.5, Ollama) или облачные (Gemini) модели.
 
