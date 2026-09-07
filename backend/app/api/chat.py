@@ -26,7 +26,8 @@ from ..db.models import (
     ConversationMemory,
     Decision,
     TimelineEvent,
-    Source
+    Source,
+    Chunk
 )
 from sqlalchemy.orm import selectinload
 from ..knowledge.conversation_memory import maybe_trigger_memory_update
@@ -268,16 +269,24 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         if not r["text_content"].startswith("[L1 CHUNK]"):
             r["text_content"] = f"[L1 CHUNK] {r['text_content']}"
 
+    attached_chunks_list = []
     if payload.attached_source_ids:
         src_stmt = select(Source).where(Source.id.in_(payload.attached_source_ids))
         src_res = await db.execute(src_stmt)
         sources = src_res.scalars().all()
         for src in sources:
-            content = src.content or src.raw_content or ""
-            if len(content) > 20000:
-                content = content[:20000] + "... (truncated)"
+            content = src.content or src.raw_content
+            if not content:
+                chunk_stmt = select(Chunk.text_content).where(Chunk.source_id == src.id).order_by(Chunk.start_time.asc().nulls_last()).limit(50)
+                chunk_res = await db.execute(chunk_stmt)
+                chunk_texts = chunk_res.scalars().all()
+                content = "\n".join(chunk_texts)
+            
+            content = content or ""
+            if len(content) > 10000:
+                content = content[:10000] + "... (truncated)"
 
-            l1_chunks.insert(0, {
+            attached_chunks_list.append({
                 "chunk_id": str(uuid.uuid4()),
                 "source_id": str(src.id),
                 "text_content": f"=== [ATTACHED FILE: {src.title}] ===\n{content}",
@@ -376,18 +385,21 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     # 4. Graph & Deep Retrieval (L2, L3, L4, Graph)
     profiler.start_stage("05_graph_and_deep_retrieval")
     chunk_ids = [r["chunk_id"] for r in l1_chunks]
+    parent_scores = {chunk["chunk_id"]: float(chunk.get("rrf_score") or chunk.get("score") or 0.0) for chunk in l1_chunks}
 
     if chunk_ids and profile.graph_expansion:
         claims = (await db.execute(
             select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))).scalars().all()
         claim_ids = [c.id for c in claims]
         for c in claims:
+            parent_score = parent_scores.get(c.chunk_id, 0.01)
+            l2_score = parent_score * 0.85
             l2_claims.append({
                 "chunk_id": str(c.id),
                 "source_id": str(c.source_id),
                 "text_content": f"=== [L2 УТВЕРЖДЕНИЕ] ===\n{c.content}",
-                "score": 1.0,
-                "rrf_score": 1.0,
+                "score": l2_score,
+                "rrf_score": l2_score,
                 "is_pattern": True
             })
 
@@ -396,12 +408,17 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 (ClaimRelation.source_claim_id.in_(claim_ids)) | (ClaimRelation.target_claim_id.in_(claim_ids))
             ).limit(5))).scalars().all()
             for r in relations:
+                # We can approximate relation parent score by finding the max score among its claim ids
+                source_claim_score = next((float(c["rrf_score"]) for c in l2_claims if c["chunk_id"] == str(r.source_claim_id)), 0.01)
+                target_claim_score = next((float(c["rrf_score"]) for c in l2_claims if c["chunk_id"] == str(r.target_claim_id)), 0.01)
+                relation_score = max(source_claim_score, target_claim_score) * 0.7
+
                 l4_timeline.append({
                     "chunk_id": str(r.id),
                     "source_id": str(r.source_claim_id),
                     "text_content": f"=== [L4 СВЯЗЬ: {r.relation_type}] ===\n{r.evidence_summary}",
-                    "score": 1.0,
-                    "rrf_score": 1.0,
+                    "score": relation_score,
+                    "rrf_score": relation_score,
                     "is_pattern": True
                 })
 
@@ -413,8 +430,8 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "chunk_id": str(uuid.uuid4()),
                     "source_id": str(uuid.uuid4()),
                     "text_content": f"=== [GRAPH CONTEXT] ===\n{graph_context_text}",
-                    "score": 1.0,
-                    "rrf_score": 1.0,
+                    "score": 0.015, # Hardcoded baseline for deep graph context
+                    "rrf_score": 0.015,
                     "is_pattern": True
                 })
 
@@ -444,8 +461,8 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "chunk_id": str(uuid.uuid4()),
                     "source_id": str(uuid.uuid4()),
                     "text_content": timeline_context,
-                    "score": 1.0,
-                    "rrf_score": 1.0,
+                    "score": 0.015,
+                    "rrf_score": 0.015,
                     "is_pattern": True
                 })
 
@@ -459,13 +476,14 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                     "chunk_id": str(p.id),
                     "source_id": str(p.id),
                     "text_content": f"=== [L3 ПАТТЕРНЫ] ===\n{p.title}: {p.description}\nОбоснование: {p.evidence_summary}",
-                    "score": 1.0,
-                    "rrf_score": 1.0,
+                    "score": 0.015,
+                    "rrf_score": 0.015,
                     "is_pattern": True
                 })
 
     MAX_CONTEXT_CHARS = 12000
-    retrieved_raw = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
+    retrieved_raw = attached_chunks_list + l1_chunks + l2_claims + l3_patterns + l4_timeline + graph_context
+    retrieved_raw.sort(key=lambda x: float(x.get("rrf_score") or x.get("score") or 0.0), reverse=True)
 
     retrieved = []
     current_chars = 0
