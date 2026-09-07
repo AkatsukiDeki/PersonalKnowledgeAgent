@@ -11,15 +11,15 @@ from ..core.llm import model_manager, TaskType
 from ..db.models import Source
 import logging
 
-from app.learning.schemas import GenerateRoadmapRequest, AdaptiveRoadmapPayload, GenerateStudyNoteRequest, StudyNoteResponse, GenerateSummaryNoteRequest, SaveAsSubjectRequest, SaveAsSubjectResponse, GenerateQuizRequest, QuizPayload, GradeQuizRequest, QuizGradeResult, CopilotChatRequest
-from app.learning.context_resolver import LearningContextResolver
-from app.learning.roadmap_generator import RoadmapGenerator
-from app.learning.note_generator import StudyNoteGenerator
+from ..learning.schemas import GenerateRoadmapRequest, AdaptiveRoadmapPayload, GenerateStudyNoteRequest, StudyNoteResponse, GenerateSummaryNoteRequest, SaveAsSubjectRequest, SaveAsSubjectResponse, GenerateQuizRequest, QuizPayload, GradeQuizRequest, QuizGradeResult, CopilotChatRequest
+from ..learning.context_resolver import LearningContextResolver
+from ..learning.roadmap_generator import RoadmapGenerator
+from ..learning.note_generator import StudyNoteGenerator
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/learning", tags=["Learning"])
 
-from app.learning.practice_generator import PracticeGenerator
+from ..learning.practice_generator import PracticeGenerator
 
 async def _get_context(payload: LearningRequest, db: AsyncSession) -> str:
     context = ""
@@ -56,8 +56,8 @@ async def generate_flashcards(payload: LearningRequest, db: AsyncSession = Depen
 
 @router.post("/quiz", response_model=QuizPayload)
 async def generate_quiz(request: GenerateQuizRequest, db: AsyncSession = Depends(get_db)):
-    from app.learning.context_resolver import LearningContextResolver
-    from app.learning.quiz_generator import QuizGenerator
+    from ..learning.context_resolver import LearningContextResolver
+    from ..learning.quiz_generator import QuizGenerator
     
     resolver = LearningContextResolver(db)
     sources, chunks, claims = await resolver.resolve(request.scope)
@@ -108,7 +108,7 @@ async def grade_quiz(request: GradeQuizRequest):
 
 @router.post("/copilot/chat")
 async def copilot_chat(request: CopilotChatRequest, db: AsyncSession = Depends(get_db)):
-    from app.learning.copilot import NoteCopilot
+    from ..learning.copilot import NoteCopilot
     copilot = NoteCopilot(db)
     
     return StreamingResponse(
@@ -174,7 +174,7 @@ async def save_as_subject(
     db: AsyncSession = Depends(get_db)
 ):
     try:
-        from app.db.models import Subject, SubjectRoadmap, Source
+        from ..db.models import Subject, SubjectRoadmap, Source
         
         resolver = LearningContextResolver(db)
         sources, _, _ = await resolver.resolve(request.scope)
@@ -196,7 +196,7 @@ async def save_as_subject(
         
         # Link sources
         if source_ids:
-            from app.db.models import subject_sources
+            from ..db.models import subject_sources
             from sqlalchemy import insert
             for sid in source_ids:
                 await db.execute(insert(subject_sources).values(subject_id=subject.id, source_id=sid))

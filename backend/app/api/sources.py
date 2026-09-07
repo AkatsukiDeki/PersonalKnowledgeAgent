@@ -23,9 +23,18 @@ from fastapi import (
     Query,
     Request,
 )
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, func, or_, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 import magic
+
+try:
+    from google import genai
+    HAS_GENAI = True
+except ImportError:
+    genai = None
+    HAS_GENAI = False
 
 from ..db.models import Source, Chunk, Claim
 from ..db.session import get_db, async_session_factory
@@ -41,7 +50,8 @@ from ..schemas.source import (
     SourceUpdateContent,
 )
 from ..parsers.factory import is_supported
-from ..core.queue import task_queue
+from ..core.redis import get_redis_pool
+from arq import ArqRedis
 
 class TaskPayload(BaseModel):
     title: Optional[str] = None
@@ -135,7 +145,7 @@ async def _count(db: AsyncSession, model: Any, *filters) -> int:
 
 
 def _enrich_source_response(source: Source, chunks_count: int, claims_count: int) -> SourceResponse:
-    meta = getattr(source, "meta_info", None) or {}
+    meta = getattr(source, "meta_info", None) or getattr(source, "metadata_info", None) or {}
     return SourceResponse(
         id=source.id,
         title=source.title,
@@ -166,6 +176,7 @@ async def upload_url(
     payload: URLUpload,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    redis: ArqRedis = Depends(get_redis_pool)
 ):
     req = urllib.request.Request(
         payload.url,
@@ -217,7 +228,7 @@ async def upload_url(
         await db.refresh(source)
 
         if ingest_status != "unchanged" or source.status == "pending":
-            task_queue.enqueue(process_source_chunks_bg, source.id)
+            await redis.enqueue_job("process_source_chunks_bg", source.id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
 
         chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
         claims_count = await _count(db, Claim, Claim.source_id == source.id)
@@ -238,6 +249,7 @@ async def upload_source(
     importance: str = Form("normal"),
     folder: Optional[str] = Form(None),
     db: AsyncSession = Depends(get_db),
+    redis: ArqRedis = Depends(get_redis_pool),
 ):
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
@@ -289,7 +301,7 @@ async def upload_source(
     await db.refresh(source)
 
     if ingest_status != "unchanged" or source.status == "pending":
-        task_queue.enqueue(process_source_chunks_bg, source.id)
+        await redis.enqueue_job("process_source_chunks_bg", source.id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
 
     chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
     claims_count = await _count(db, Claim, Claim.source_id == source.id)
@@ -302,6 +314,7 @@ async def create_source(
     payload: SourceCreate,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    redis: ArqRedis = Depends(get_redis_pool),
 ):
     try:
         source, ingest_status = await ingest_file_revision(
@@ -325,7 +338,7 @@ async def create_source(
         await db.refresh(source)
 
         if ingest_status != "unchanged" or source.status == "pending":
-            task_queue.enqueue(process_source_chunks_bg, source.id)
+            await redis.enqueue_job("process_source_chunks_bg", source.id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
 
         chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
         claims_count = await _count(db, Claim, Claim.source_id == source.id)
@@ -395,7 +408,7 @@ async def move_source(
     return _enrich_source_response(source, chunks_count, claims_count)
 
 
-# ─── Rename folder ────────────────────────────────────────────────────────────
+# ─── Rename folder ────────────────────────────────────────────────────
 
 class RenameFolderRequest(BaseModel):
     old_path: str
@@ -526,7 +539,7 @@ async def get_source_detail(source_id: uuid.UUID, db: AsyncSession = Depends(get
     claims_stmt = select(Claim).where(Claim.source_id == source_id).order_by(Claim.created_at.desc())
     claims = (await db.execute(claims_stmt)).scalars().all()
 
-    meta = getattr(source, "meta_info", None) or {}
+    meta = getattr(source, "meta_info", None) or getattr(source, "metadata_info", None) or {}
 
     return SourceDetailResponse(
         id=source.id,
@@ -572,29 +585,35 @@ async def update_source_content(
     payload: SourceUpdateContent,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
+    redis: ArqRedis = Depends(get_redis_pool),
 ):
     source = await db.get(Source, source_id)
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
     if source.is_deleted:
         raise HTTPException(status_code=400, detail="Cannot edit a deleted source")
-
     source.version += 1
 
     update_data = payload.model_dump(exclude_unset=True)
+    needs_reindex = False
+    
     for field, value in update_data.items():
         if field == "raw_content":
-            source.raw_content = value
-            source.content = value
+            if source.raw_content != value:
+                source.raw_content = value
+                source.content = value
+                needs_reindex = True
         else:
             setattr(source, field, value)
 
-    source.status = "pending"
+    if needs_reindex:
+        source.status = "pending"
 
     await db.commit()
     await db.refresh(source)
-
-    task_queue.enqueue(_safe_reindex, source.id)
+    
+    if needs_reindex:
+        await redis.enqueue_job("_safe_reindex", source.id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
 
     chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
     claims_count = await _count(db, Claim, Claim.source_id == source.id)
@@ -618,33 +637,20 @@ async def delete_source(source_id: uuid.UUID, db: AsyncSession = Depends(get_db)
     logger.info(f"[Sources] Soft-deleted source {source_id}, deactivated {len(claims)} claims")
 
 
-async def _safe_reindex(source_id: uuid.UUID):
-    async with async_session_factory() as db:
-        try:
-            source = await db.get(Source, source_id)
-            if not source:
-                return
+@router.get("/{source_id}/status")
+async def get_source_status(source_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+    source = await db.get(Source, source_id)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
 
-            old_claims_stmt = select(Claim).where(Claim.source_id == source_id, Claim.is_active == True)
-            old_claims = (await db.execute(old_claims_stmt)).scalars().all()
-            for claim in old_claims:
-                claim.is_active = False
-            await db.flush()
+    return {
+        "source_id": str(source.id),
+        "processing_status": source.processing_status,
+        "processing_stage": getattr(source, "processing_stage", None),
+        "processing_error": source.processing_error
+    }
 
-            old_chunks_stmt = select(Chunk).where(Chunk.source_id == source_id, Chunk.is_active == True)
-            old_chunks = (await db.execute(old_chunks_stmt)).scalars().all()
-            for chunk in old_chunks:
-                chunk.is_active = False
-            await db.flush()
 
-            await db.commit()
-        except Exception as e:
-            await db.rollback()
-            logger.error(f"[ReIndex] Error during pre-cleanup for {source_id}: {e}")
-            return
-
-    await process_source_chunks_bg(source_id)
-    logger.info(f"[ReIndex] Safe re-index completed for source {source_id}")
 
 
 AI_FIX_SYSTEM_PROMPT = """Ты — редактор транскриптов и текстов. 
@@ -758,3 +764,184 @@ async def run_context_action(
     except Exception as e:
         logger.error(f"[ContextAction] Failed to execute {payload.action} for source {source_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to process text with LLM")
+
+
+def _format_time(seconds: float) -> str:
+    m = int(seconds // 60)
+    s = int(seconds % 60)
+    return f"[{m:02d}:{s:02d}]"
+
+
+# ─── Динамический пул моделей для трансляции ────────────────────────────────
+
+def _get_cloud_models_pool() -> List[str]:
+    """Формирует список моделей Google GenAI с безусловным приоритетом актуальной версии."""
+    return [
+        "gemini-3.6-flash",
+        getattr(settings, "FAST_LLM_MODEL", "gemini-3.6-flash"),
+        "gemini-2.5-flash",
+    ]
+
+
+async def _translate_with_cloud(text: str, title: str) -> Optional[str]:
+    """Перевод через Google GenAI SDK с сохранением покадровых таймкодов."""
+    api_key = getattr(settings, "GEMINI_API_KEY", None)
+    if not (HAS_GENAI and api_key and api_key != "dummy"):
+        return None
+
+    client = genai.Client(api_key=api_key)
+    prompt = f"""Ты — профессиональный переводчик и эксперт по текстам песен.
+Источник: трек "{title}".
+
+Ниже представлен построчный транскрипт Whisper STT, где КАЖДАЯ строка начинается с таймкода [MM:SS].
+
+ТВОЯ ЗАДАЧА:
+1. Восстанови исходный смысл каждой строки оригинальной песни "{title}".
+2. Сделай живой, точный и эмоциональный перевод на русский язык (сохраняй рэп-стиль, рифмы, сленг и имена артистов).
+3. СТРОГО сохрани оригинальный таймкод [MM:SS] в начале КАЖДОЙ переведенной строки.
+4. КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО объединять несколько строк под один общий таймкод или пропускать таймкоды. Количество строк и таймкоды на выходе должны СТРОГО соответствовать входному списку.
+5. Выведи ТОЛЬКО готовые строки субтитров. Без вступительных слов, без примечаний и без markdown-блоков (```).
+
+Транскрипт:
+{text}"""
+
+    for model_name in _get_cloud_models_pool():
+        try:
+            def _sync_call():
+                return client.models.generate_content(
+                    model=model_name,
+                    contents=prompt
+                )
+            res = await asyncio.to_thread(_sync_call)
+            if res and res.text and res.text.strip():
+                clean = re.sub(r"```[\w]*\n?", "", res.text).strip()
+                logger.info(f"[Translate] Success via cloud model '{model_name}'")
+                return clean
+        except Exception as e:
+            logger.warning(f"[Translate] Cloud model '{model_name}' failed: {repr(e)}")
+            continue
+
+    return None
+
+
+@router.post("/{source_id}/translate")
+async def translate_source(
+    source_id: str,
+    target_lang: str = Query("ru"),
+    force: bool = Query(False, description="Принудительный пересчет в обход кэша БД"),
+    db: AsyncSession = Depends(get_db)
+):
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    source = await db.get(Source, sid)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    meta = source.metadata_info or source.meta_info or {}
+    translations = meta.get("translations", {})
+
+    # Проверка кэша только если не передан force=True
+    if not force:
+        cached_text = translations.get(target_lang, "")
+        is_corrupted = any(
+            pattern in cached_text
+            for pattern in ["тик-тик-тик", "бит-бит-бит", "站起来", "It seems like", "tic-", "хоккей", "Шиммер", "мутации", "Вьюжда", "ползучим камнем"]
+        )
+        if cached_text and not is_corrupted and len(cached_text.strip()) > 0:
+            async def cached_stream():
+                yield cached_text
+            return StreamingResponse(cached_stream(), media_type="text/plain; charset=utf-8")
+
+    # Сбор сегментов
+    segments = meta.get("transcript_segments") or meta.get("media", {}).get("transcript_segments", [])
+    formatted_lines = []
+    if segments and isinstance(segments, list):
+        for seg in segments:
+            start = seg.get("start", 0)
+            text = (seg.get("text") or "").strip()
+            if text:
+                formatted_lines.append(f"{_format_time(start)} {text}")
+
+    if not formatted_lines:
+        raw = source.raw_content or source.content or ""
+        formatted_lines = [line.strip() for line in raw.split("\n") if line.strip()]
+
+    if not formatted_lines:
+        raise HTTPException(status_code=400, detail="Source has no content or transcript to translate")
+
+    full_transcript_text = "\n".join(formatted_lines)
+    source_title = source.title or "Unknown Track"
+
+    async def translate_stream():
+        # ─── 1. Динамический облачный пул ───────────────────────────────────
+        final_text = await _translate_with_cloud(full_transcript_text, source_title)
+        used_provider = "cloud_gemini"
+
+        if final_text:
+            yield final_text
+        else:
+            # ─── 2. Локальный фоллбэк на Ollama ──────────────────────────────
+            used_provider = "local_ollama"
+            local_model = getattr(settings, "OLLAMA_QA_MODEL", "qwen2.5:7b")
+            logger.info(f"[Translate] Falling back to local Ollama engine with model '{local_model}'...")
+
+            client = OllamaClient()
+            BATCH_SIZE = 15
+            batches = [formatted_lines[i:i + BATCH_SIZE] for i in range(0, len(formatted_lines), BATCH_SIZE)]
+            ollama_results = []
+
+            for batch in batches:
+                batch_text = "\n".join(batch)
+                system_prompt = (
+                    f"You are a subtitle translator for '{source_title}'. "
+                    "Translate each line into fluent Russian, keeping timestamps [MM:SS] intact. "
+                    "Output ONLY the translated lines."
+                )
+                user_prompt = f"Translate subtitles to Russian:\n{batch_text}"
+                full_prompt = (
+                    f"<|start_header_id|>system<|end_header_id|>\n\n{system_prompt}<|eot_id|>"
+                    f"<|start_header_id|>user<|end_header_id|>\n\n{user_prompt}<|eot_id|>"
+                    f"<|start_header_id|>assistant<|end_header_id|>\n\n"
+                )
+
+                batch_accum = ""
+                async for chunk in client.stream_generate(
+                    prompt=full_prompt,
+                    model=local_model
+                ):
+                    if chunk:
+                        clean_chunk = re.sub(r'[\u4e00-\u9fa5\u3000-\u303f\uff00-\uffef]', '', chunk)
+                        batch_accum += clean_chunk
+                        yield clean_chunk
+
+                ollama_results.append(batch_accum)
+                yield "\n"
+
+            final_text = "\n".join(ollama_results).strip()
+            final_text = re.sub(r"```[\w]*\n?", "", final_text)
+
+        # ─── Безопасное сохранение в базу данных без затирания media/summary ───
+        if final_text and not any(p in final_text for p in ["хоккей", "мутации", "Вьюжда"]):
+            async with async_session_factory() as session:
+                src = await session.get(Source, sid)
+                if src:
+                    base_meta = dict(src.meta_info or {})
+                    if src.metadata_info:
+                        base_meta.update(src.metadata_info)
+
+                    translations = dict(base_meta.get("translations") or {})
+                    translations[target_lang] = final_text
+                    base_meta["translations"] = translations
+
+                    src.metadata_info = base_meta
+                    src.meta_info = base_meta
+                    flag_modified(src, "metadata_info")
+                    flag_modified(src, "meta_info")
+
+                    await session.commit()
+                    logger.info(f"[Translate] Translation cached successfully using {used_provider} for {source_id}")
+
+    return StreamingResponse(translate_stream(), media_type="text/plain; charset=utf-8")

@@ -28,7 +28,7 @@ from .graph_extractor import extract_and_save_entities_batch, extract_and_save_r
 from ..core.config import settings
 from ..db.models import Claim
 from ..core.error_tracker import record_error, resolve_granular_error
-from ..core.queue import task_queue
+import asyncio
 import uuid
 
 async def create_source_db(
@@ -55,7 +55,7 @@ async def create_source_db(
         raise
 
 
-async def process_source_chunks_bg(source_id: uuid.UUID):
+async def process_source_chunks_bg(ctx, source_id: uuid.UUID):
     """Background task to split content into chunks, embed, and persist."""
     from ..db.session import async_session_factory
     async with async_session_factory() as db:
@@ -64,11 +64,17 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             if not source:
                 return
 
+            source_content = source.content
+            source_title = source.title
+            source_type = source.source_type
+            source_version = getattr(source, 'version', 1)
+
             source.status = "processing"
             source.started_at = datetime.utcnow()
             await db.commit()
 
-            raw_chunks: Sequence[str] = await task_queue.run_cpu_bound(create_chunks, source.content, 2500, 250)
+            loop = asyncio.get_running_loop()
+            raw_chunks: Sequence[str] = await loop.run_in_executor(None, create_chunks, source_content, 2500, 250)
 
             provider = get_embedding_provider()
             embeddings = await provider.embed_documents(list(raw_chunks)) if raw_chunks else []
@@ -84,8 +90,7 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
                     chunk_index=idx,
                     text_content=text_chunk,
                     embedding=embedding_vector,
-                    tsv=func.to_tsvector("russian", text_chunk),
-                    version=source.version,
+                    version=source_version,
                     is_active=True
                 )
                 db_chunks.append(db_chunk)
@@ -103,8 +108,8 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             from .extraction.router import select_extraction_strategy
             from sqlalchemy.dialects.postgresql import insert as pg_insert
             
-            strategy = select_extraction_strategy(source.source_type, len(source.content))
-            concepts = await strategy.extract(source.content, source.title)
+            strategy = select_extraction_strategy(source_type, len(source_content))
+            concepts = await strategy.extract(source_content, source_title)
             
             if concepts:
                 concept_texts = [f"{c.title}: {c.statement}" for c in concepts]
@@ -141,6 +146,45 @@ async def process_source_chunks_bg(source_id: uuid.UUID):
             logger.info(f"[Ingestion] Running conflict resolver for {len(all_new_claims)} new concepts...")
             from .conflict_resolver import resolve_conflicts_for_new_claims
             await resolve_conflicts_for_new_claims(db, all_new_claims)
+
+            # --- Phase 3E: Entity Graph Extraction ---
+            logger.info(f"[Ingestion] Running EntityExtractor for Knowledge Graph...")
+            from .entity_extractor import EntityExtractor
+            from .graph_service import GraphService
+            
+            extractor = EntityExtractor()
+            graph_service = GraphService(db)
+            
+            try:
+                async with db.begin_nested():
+                    triplets = await extractor.extract_triplets(source_content)
+                    entity_id_map = {}
+                    
+                    # 1. Upsert Entities
+                    for ent in triplets.get("entities", []):
+                        if "name" in ent and "type" in ent:
+                            eid = await graph_service.upsert_entity(
+                                name=ent["name"],
+                                entity_type=ent["type"],
+                                description=ent.get("description", "")
+                            )
+                            entity_id_map[ent["name"]] = eid
+                    
+                    # 2. Add Relations
+                    for rel in triplets.get("relations", []):
+                        src_name = rel.get("source")
+                        tgt_name = rel.get("target")
+                        if src_name in entity_id_map and tgt_name in entity_id_map:
+                            await graph_service.add_relation(
+                                source_id=entity_id_map[src_name],
+                                target_id=entity_id_map[tgt_name],
+                                relation_type=rel.get("type", "relates_to"),
+                                weight=rel.get("weight", 1.0)
+                            )
+                await db.commit()
+                logger.info(f"[Ingestion] Extracted and saved graph triplets for {source_id}.")
+            except Exception as e:
+                logger.warning(f"[Ingestion] Graph extraction skipped due to error, base ingestion preserved for {source_id}: {e}")
 
             # --- Phase 4 & 5: Graph Linking & Timeline Evolution ---
             logger.info(f"[Ingestion] Running Graph Linker & Timeline Engine...")

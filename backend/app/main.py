@@ -1,18 +1,23 @@
 """FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
+from pathlib import Path
+import logging
+import asyncio
+import httpx
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import _rate_limit_exceeded_handler, SlowAPIMiddleware
 
 from .api.router import api_router
 from .core.config import settings
 from .core.security import limiter
-from slowapi.errors import RateLimitExceeded
-from slowapi.middleware import _rate_limit_exceeded_handler
-from slowapi.middleware import SlowAPIMiddleware
 from .db.init_db import init_database
-import logging
+from .core.scheduler import scheduler
+from .core.redis import init_redis_pool, close_redis_pool
 
 logging.basicConfig(
     level=logging.INFO,
@@ -20,58 +25,73 @@ logging.basicConfig(
     handlers=[logging.StreamHandler()]
 )
 
-
-from .core.scheduler import scheduler
-from .core.queue import task_queue
-import httpx
-import asyncio
+logger = logging.getLogger(__name__)
 
 async def warmup_models():
-    """Warmup models in Ollama."""
-    try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            logging.getLogger(__name__).info("Warming up Ollama embedding model...")
-            await client.post(
-                f"{settings.OLLAMA_BASE_URL}/api/embeddings", 
+    """Прогрев моделей в Ollama и фиксация в RAM."""
+    async with httpx.AsyncClient(timeout=120.0) as client:
+        # 1. Прогрев эмбеддингов (bge-m3)
+        try:
+            logger.info("Warming up Ollama embedding model...")
+            resp_emb = await client.post(
+                f"{settings.OLLAMA_BASE_URL}/api/embeddings",
                 json={
-                    "model": settings.OLLAMA_EMBEDDING_MODEL, 
-                    "prompt": "warmup", 
-                    "keep_alive": -1,
-                    "options": {"num_gpu": 0}
+                    "model": settings.OLLAMA_EMBEDDING_MODEL,
+                    "prompt": "warmup test",
+                    "keep_alive": "24h"
                 }
             )
-            logging.getLogger(__name__).info("Warming up Ollama QA model...")
-            await client.post(
-                f"{settings.OLLAMA_BASE_URL}/api/generate", 
-                json={"model": settings.OLLAMA_QA_MODEL, "prompt": "", "keep_alive": -1}
+            resp_emb.raise_for_status()
+            logger.info("Ollama embedding model ready.")
+        except Exception as e:
+            logger.warning(f"Failed to warmup embedding model: {e}")
+
+        # 2. Прогрев генеративной QA-модели (qwen2.5:3b)
+        try:
+            logger.info(f"Warming up Ollama QA model ({settings.OLLAMA_QA_MODEL})...")
+            resp_qa = await client.post(
+                f"{settings.OLLAMA_BASE_URL}/api/generate",
+                json={
+                    "model": settings.OLLAMA_QA_MODEL,
+                    "prompt": "ping",
+                    "stream": False,
+                    "keep_alive": "24h",
+                    "options": {
+                        "num_predict": 1,
+                        "num_ctx": 2048
+                    }
+                }
             )
-            logging.getLogger(__name__).info("Ollama warmup completed successfully.")
-    except Exception as e:
-        logging.getLogger(__name__).warning(f"Failed to warmup models: {e}")
+            resp_qa.raise_for_status()
+            logger.info("Ollama QA model successfully pinned in RAM.")
+        except Exception as e:
+            logger.warning(f"Failed to warmup QA model: {e}")
+
 
 async def warmup_loop():
-    """Periodically ping models to keep them warm."""
+    """Периодический пинг раз в 15 минут для предотвращения выгрузки ОС."""
     while True:
-        await asyncio.sleep(300)  # Every 5 minutes
+        await asyncio.sleep(900)
         await warmup_models()
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Run DB initialisation and background tasks on startup."""
+    """Жизненный цикл сервиса."""
     await init_database()
-    
-    # Execute warmup asynchronously without blocking DB startup
+
+    # Асинхронный прогрев без блокировки старта HTTP-сервера
     asyncio.create_task(warmup_models())
-    
-    # Start periodic warmup ping
     warmup_task = asyncio.create_task(warmup_loop())
-    
+
     await scheduler.start()
-    await task_queue.start(num_workers=2)
+    app.state.redis = await init_redis_pool()
+
     yield
+
     warmup_task.cancel()
-    await task_queue.stop()
     await scheduler.stop()
+    await close_redis_pool()
 
 
 app = FastAPI(
@@ -81,9 +101,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-from fastapi.staticfiles import StaticFiles
-from pathlib import Path
-
 uploads_dir = Path("/app/uploads")
 uploads_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
@@ -91,7 +108,7 @@ app.mount("/uploads", StaticFiles(directory="/app/uploads"), name="uploads")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:5173", 
+        "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:8080",
         "http://localhost:8090",

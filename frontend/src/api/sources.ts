@@ -62,7 +62,6 @@ export interface ContextActionResponse {
   task_payload?: TaskPayload | null;
 }
 
-// Folder tree types
 export interface FolderTreeNode {
   count: number;
   children: Record<string, FolderTreeNode>;
@@ -101,6 +100,7 @@ export const sourcesApi = {
   getSourceDetail: async (id: string): Promise<SourceDetail> => {
     return fetchApi<SourceDetail>(`/sources/${id}`);
   },
+
   getDetail: async (id: string): Promise<SourceDetail> => {
     return sourcesApi.getSourceDetail(id);
   },
@@ -124,6 +124,7 @@ export const sourcesApi = {
       body: formData,
     });
   },
+
   upload: async (file: File, domain?: string, folder?: string): Promise<SourceItem> => {
     return sourcesApi.uploadFile(file, undefined, folder, domain, 'normal');
   },
@@ -181,6 +182,7 @@ export const sourcesApi = {
       body: JSON.stringify(data),
     });
   },
+
   create: async (payload: { title: string; content: string; domain?: string; folder?: string; source_type?: string; meta_info?: Record<string, any> }): Promise<SourceItem> => {
     return sourcesApi.createNote({
       title: payload.title,
@@ -212,6 +214,7 @@ export const sourcesApi = {
       method: 'DELETE',
     });
   },
+
   delete: async (id: string): Promise<void> => {
     return sourcesApi.deleteSource(id);
   },
@@ -226,6 +229,51 @@ export const sourcesApi = {
     });
   },
 
+  translateSource: async (
+    sourceId: string,
+    targetLang: string,
+    onChunk: (chunk: string) => void
+  ): Promise<string> => {
+    const BASE_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api/v1';
+    const url = `${BASE_URL}/sources/${sourceId}/translate?target_lang=${targetLang}`;
+
+    const headers = new Headers();
+    const apiKey = import.meta.env.VITE_PKA_API_KEY;
+    if (apiKey) {
+      headers.set('X-API-Key', apiKey);
+    }
+
+    const res = await fetch(url, { method: 'POST', headers });
+    if (!res.ok) {
+      throw new Error(`Failed to translate: ${res.status}`);
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+
+    if (contentType.includes('application/json')) {
+      const data = await res.json();
+      const text = data.translated_text || data.translation || data.text || '';
+      onChunk(text);
+      return text;
+    }
+
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("No response stream");
+
+    let accumulated = '';
+    const decoder = new TextDecoder("utf-8");
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        const decoded = decoder.decode(value, { stream: true });
+        accumulated += decoded;
+        onChunk(decoded);
+      }
+    }
+    return accumulated;
+  },
+
   runContextAction: async (
     sourceId: string,
     payload: ContextActionRequest
@@ -238,8 +286,6 @@ export const sourcesApi = {
       body: JSON.stringify(payload),
     });
   },
-
-  // ── Folder management ──────────────────────────────────────────────────────
 
   getFolderTree: async (): Promise<FolderTreeResponse> => {
     return fetchApi<FolderTreeResponse>('/sources/folders/tree');

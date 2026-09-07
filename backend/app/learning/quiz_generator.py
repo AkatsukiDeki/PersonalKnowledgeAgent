@@ -1,8 +1,8 @@
 import logging
 from typing import Dict, Any
-from app.learning.schemas import GenerateQuizRequest, QuizPayload
-from app.core.llm import model_manager, TaskType
-from app.db.models import Claim, Chunk
+from ..learning.schemas import GenerateQuizRequest, QuizPayload
+from ..core.llm import model_manager, TaskType
+from ..db.models import Claim, Chunk
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)

@@ -42,6 +42,56 @@ export interface BridgeContextResponse {
   evidence_sufficient: boolean;
 }
 
+export interface GalaxyGraphNode {
+  id: string;
+  name: string;
+  type: 'technology' | 'concept' | 'pattern' | 'tool' | 'person' | string;
+  description: string;
+  size: number;
+  connection_count: number;
+  created_at: string | null;
+}
+
+export interface GalaxyGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  relation: 'depends_on' | 'implements' | 'uses' | 'relates_to' | 'conflicts_with' | string;
+  weight: number;
+  source_chunk_id: string | null;
+  created_at: string | null;
+}
+
+export interface GalaxyGraphResponse {
+  nodes: GalaxyGraphNode[];
+  edges: GalaxyGraphEdge[];
+}
+
+export interface GraphEntityRelation {
+  id: string;
+  relation_type: string;
+  weight: number;
+  direction: 'incoming' | 'outgoing';
+  related_id: string;
+  related_name: string;
+  related_type: string;
+}
+
+export interface GraphEntitySource {
+  id: string;
+  title: string;
+}
+
+export interface GraphEntityDetails {
+  id: string;
+  name: string;
+  type: string;
+  description: string;
+  created_at: string | null;
+  relations: GraphEntityRelation[];
+  sources: GraphEntitySource[];
+}
+
 export const graphApi = {
   getGraphData: (limit: number = 200, category?: string, includeSuperseded = true): Promise<GraphData> => {
     const params = new URLSearchParams({
@@ -70,12 +120,19 @@ export const graphApi = {
       body: JSON.stringify(payload),
     });
   },
+  getEntityDetails: async (entityId: string): Promise<GraphEntityDetails> => {
+    return fetchApi<GraphEntityDetails>(`/graph/entities/${entityId}`);
+  },
   getBridgeContext: async (domainA: string, domainB: string, limit: number = 5): Promise<BridgeContextResponse> => {
     const params = new URLSearchParams({
       domain_a: domainA,
       domain_b: domainB,
       limit: String(limit),
     });
-    return fetchApi<BridgeContextResponse>(`/graph/bridges/context?${params.toString()}`);
+    return fetchApi(`/graph/bridge-context?domain_a=${encodeURIComponent(domainA)}&domain_b=${encodeURIComponent(domainB)}`);
   },
+
+  getGalaxyUniverse: (): Promise<GalaxyGraphResponse> => {
+    return fetchApi('/graph/galaxy-universe');
+  }
 };

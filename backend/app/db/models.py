@@ -3,9 +3,10 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pgvector.sqlalchemy import Vector
 from ..core.config import settings
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime, text
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID, ARRAY
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy import Computed
 from sqlalchemy.sql.sqltypes import Boolean
 
 from .base import Base, TimestampedUUIDMixin
@@ -50,10 +51,16 @@ class Source(Base, TimestampedUUIDMixin):
     version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
     is_deleted: Mapped[bool] = mapped_column(default=False, nullable=False, index=True)
 
-    status: Mapped[str] = mapped_column(String, default="pending", nullable=False)
-    error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    started_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
-    completed_at: Mapped[Optional[datetime]] = mapped_column(nullable=True)
+    processing_status: Mapped[str] = mapped_column(String(32), default="completed", nullable=False)
+    processing_stage: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    processing_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    processing_started_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+    processing_completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    status = synonym("processing_status")
+    error_message = synonym("processing_error")
+    started_at = synonym("processing_started_at")
+    completed_at = synonym("processing_completed_at")
 
     chunks: Mapped[List["Chunk"]] = relationship(
         "Chunk",
@@ -107,7 +114,7 @@ class Chunk(Base, TimestampedUUIDMixin):
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     text_content: Mapped[str] = mapped_column(Text, nullable=False)
     embedding: Mapped[Optional[List[float]]] = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
-    tsv: Mapped[Optional[Any]] = mapped_column(TSVECTOR, nullable=True)
+
     meta_info: Mapped[Optional[Dict[str, Any]]] = mapped_column(JSONB, nullable=True)
     metadata_info: Mapped[Dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
 
@@ -131,7 +138,7 @@ class Chunk(Base, TimestampedUUIDMixin):
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"},
         ),
-        Index("ix_chunks_tsv", "tsv", postgresql_using="gin"),
+        Index("ix_chunks_tsv", text("tsv"), postgresql_using="gin"),
     )
 
 

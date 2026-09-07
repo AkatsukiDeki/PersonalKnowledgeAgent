@@ -60,7 +60,11 @@ export const DomainInput: React.FC<DomainInputProps> = ({
               <button
                 key={domain}
                 type="button"
-                onClick={() => onChange(domain)}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onChange(domain);
+                  setIsFocused(false);
+                }}
                 disabled={disabled}
                 className={clsx(
                   'px-2 py-0.5 rounded-lg text-xs transition-all border font-medium',

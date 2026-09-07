@@ -16,7 +16,7 @@ class ChatGPTParser(BaseChatParser):
 
     async def parse(self, file_path: str) -> AsyncIterator[UnifiedConversation]:
         try:
-            from app.knowledge.parsers.chat_parser import safe_decode
+            from ...knowledge.parsers.chat_parser import safe_decode
             with open(file_path, "rb") as f:
                 raw_bytes = f.read()
             text = safe_decode(raw_bytes)

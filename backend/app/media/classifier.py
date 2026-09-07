@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Optional
-from app.media.types import MediaType
+from ..media.types import MediaType
 
 VOICE_NOTE_EXTENSIONS = {".m4a", ".m4b", ".aac"}
 AUDIO_EXTENSIONS = {".mp3", ".wav", ".ogg", ".oga", ".flac", ".opus"}

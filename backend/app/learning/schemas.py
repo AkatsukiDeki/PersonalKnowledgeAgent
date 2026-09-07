@@ -13,6 +13,37 @@ class RoadmapEvidence(BaseModel):
     claim_ids: List[str] = Field(default_factory=list)
     chunk_ids: List[str] = Field(default_factory=list)
 
+class InteractionContextChunk(BaseModel):
+    chunk_id: str
+    relevance_score: float
+    text_content: str
+    source_name: Optional[str] = None
+
+class ContextResolutionResponse(BaseModel):
+    sources: List[str] = Field(default_factory=list)
+    top_chunks: List[InteractionContextChunk] = Field(default_factory=list)
+
+class StudyNoteLLMOut(BaseModel):
+    title: str = Field(
+        description="Краткий и точный заголовок темы конспекта"
+    )
+    summary_intro: str = Field(
+        description="Вводный контекст и суть темы с расстановкой маркеров цитат [1], [2]"
+    )
+    mermaid_diagram: str = Field(
+        description="Строгий синтаксис Mermaid (начиная со строчки 'flowchart TD' или 'sequenceDiagram'). Без обратных кавычек. Узлы без сложных скобок."
+    )
+    core_content: str = Field(
+        description="Основная техническая часть: подробные объяснения, конфигурации, примеры кода, разбор механизмов и ссылки на источники [1], [2]"
+    )
+    best_practices_and_pitfalls: str = Field(
+        description="Практические советы и подводные камни с использованием Markdown callouts: > [!TIP], > [!WARNING], > [!NOTE]"
+    )
+    key_insights: List[str] = Field(
+        default_factory=list,
+        description="3-5 ключевых выводов в виде коротких тезисов"
+    )
+
 class RoadmapSubtopic(BaseModel):
     id: str
     title: str
@@ -25,13 +56,13 @@ class RoadmapModule(BaseModel):
     title: str
     level: str = "core"
     description: str
-    topics: List[RoadmapSubtopic] = Field(default_factory=list)
+    topics: List[RoadmapSubtopic] = Field(default_factory=list, min_length=1)
 
 class AdaptiveRoadmapPayload(BaseModel):
     title: str
     target_role: Optional[str] = None
     overview: str
-    modules: List[RoadmapModule]
+    modules: List[RoadmapModule] = Field(min_length=1)
 
 class GenerateRoadmapRequest(BaseModel):
     scope: LearningScope
@@ -114,4 +145,23 @@ class CopilotChatRequest(BaseModel):
     message: str
     history: List[dict] = Field(default_factory=list) # [{"role": "user", "content": "..."}, ...]
 
-
+class StudyNoteLLMOut(BaseModel):
+    title: str = Field(
+        description="Краткий и точный заголовок темы конспекта"
+    )
+    summary_intro: str = Field(
+        description="Вводный контекст и суть темы с расстановкой маркеров цитат [1], [2]"
+    )
+    mermaid_diagram: str = Field(
+        description="Строгий синтаксис Mermaid (начиная со строчки 'flowchart TD' или 'sequenceDiagram'). Без обратных кавычек. Узлы без сложных скобок."
+    )
+    core_content: str = Field(
+        description="Основная техническая часть: подробные объяснения, конфигурации, примеры кода, разбор механизмов и ссылки на источники [1], [2]"
+    )
+    best_practices_and_pitfalls: str = Field(
+        description="Практические советы и подводные камни с использованием Markdown callouts: > [!TIP], > [!WARNING], > [!NOTE]"
+    )
+    key_insights: List[str] = Field(
+        default_factory=list,
+        description="3-5 ключевых выводов в виде коротких тезисов"
+    )

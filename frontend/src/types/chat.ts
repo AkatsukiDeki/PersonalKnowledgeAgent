@@ -11,6 +11,10 @@ export interface Citation {
   source_id: string;
   text_snippet: string;
   score: number;
+  media_type?: 'audio' | 'video';
+  start_time?: number;
+  end_time?: number;
+  source_title?: string;
 }
 
 export interface MessageTelemetry {

@@ -1,6 +1,6 @@
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi import Query
 from sqlalchemy import and_, func
 from sqlalchemy import select, or_
@@ -12,6 +12,8 @@ from .deps import get_db
 from ..db.models import Claim, ClaimRelation, Decision, Source
 from ..schemas.graph import GraphClaimResponse, GraphTopologyResponse, GraphNode, GraphLink, BridgeContextResponse, \
     CrossDomainBridgeItem, BridgeClaimItem
+from ..knowledge.graph_service import GraphService
+from ..core.config import settings
 
 router = APIRouter(prefix="/graph", tags=["Graph"])
 
@@ -57,6 +59,41 @@ async def get_claim_graph(
         claim=claim,
         relations=formatted
     )
+
+@router.post("/relink")
+async def trigger_graph_relink(request: Request):
+    """Принудительно запускает достройку связей графа в очереди (Arq)"""
+    import time
+    redis = request.app.state.redis
+    # Используем job_id с точностью до минуты, чтобы предотвратить спам-клики, 
+    # но разрешить повторный запуск через минуту (избегая лока Arq на keep_result_s)
+    job = await redis.enqueue_job(
+        "relink_durable_claims_task",
+        _queue_name=settings.ARQ_QUEUE_KNOWLEDGE,
+        _job_id=f"relink_manual_{int(time.time() // 60)}"
+    )
+    if job:
+        return {"status": "accepted", "job_id": job.job_id, "message": "Background graph relinking started"}
+    return {"status": "skipped", "message": "Job already queued for this minute"}
+
+@router.get("/galaxy-universe")
+async def get_galaxy_universe(
+    limit: int = 500,
+    db: AsyncSession = Depends(get_db),
+):
+    service = GraphService(db)
+    return await service.get_galaxy_graph_data(limit=limit)
+
+@router.get("/entities/{entity_id}")
+async def get_entity_details(
+    entity_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    service = GraphService(db)
+    result = await service.get_entity_details(entity_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Entity not found")
+    return result
 
 @router.get("/topology", response_model=GraphTopologyResponse)
 @router.get("", response_model=GraphTopologyResponse)

@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { subjectsApi } from '../../api/subjects';
 import { conversationsApi } from '../../api/conversations';
 import { claimsApi, ClaimItem } from '../../api/claims';
+import { sourcesApi } from '../../api/sources';
+import { graphApi } from '../../api/graph';
 import { useInspector } from '../../context/InspectorContext';
 import { UniverseSpotlight, SearchableEntity } from './UniverseSpotlight';
 import { UniverseDomainFilter } from './UniverseDomainFilter';
@@ -59,7 +61,7 @@ interface Planet {
 interface StarSystem {
   id: string;
   title: string;
-  type: 'subject' | 'chat_folder' | 'root_core';
+  type: 'subject' | 'chat_folder' | 'root_core' | 'graph_node';
   localRadius: number;
   angle: number;
   driftSpeed: number;
@@ -93,6 +95,19 @@ interface UniverseCanvasProps {
   onOpenSource?: (sourceId: string) => void;
 }
 
+const formatLabel = (raw: string | undefined | null, maxLen: number = 24): string => {
+  if (!raw) return 'Unknown';
+  try {
+    const decoded = decodeURIComponent(raw);
+    const cleaned = decoded.split('/').pop()?.split('\\').pop() || decoded;
+    const noExt = cleaned.replace(/\.(md|txt|mp3|wav|pdf|docx)$/i, '').trim();
+    return noExt.length > maxLen ? `${noExt.slice(0, maxLen)}...` : noExt;
+  } catch {
+    const cleaned = raw.split('/').pop()?.split('\\').pop() || raw;
+    return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen)}...` : cleaned;
+  }
+};
+
 export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   onOpenSubject,
   onOpenChat,
@@ -105,14 +120,14 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   const [rootStars, setRootStars] = useState<StarSystem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [viewMode, setViewMode] = useState<'galaxy' | 'timeline'>('galaxy');
+  const [viewMode, setViewMode] = useState<'galaxy' | 'timeline' | 'galaxy4d'>('galaxy4d');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<{ min: number; max: number }>({ min: 0, max: 1 });
   const [cutoffTimestamp, setCutoffTimestamp] = useState<number>(Date.now());
   const [isPlaying, setIsPlaying] = useState(false);
   const activeStarIdRef = useRef<string | null>(null);
 
-  const nodePositionsRef = useRef<Record<string, {x: number, y: number, color: string, alpha: number}>>({});
+  const nodePositionsRef = useRef<Record<string, { x: number; y: number; color: string; alpha: number }>>({});
   const edgesRef = useRef<CausalEdge[]>([]);
   const particlesRef = useRef<Particle[]>([]);
   const [tracedNodeId, setTracedNodeId] = useState<string | null>(null);
@@ -131,24 +146,31 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     const bridgeTargets = new Set<string>();
     if (selectedDomain && showBridges) {
       const domainNodeIds = new Set<string>();
-      
-      constellations.forEach(c => c.stars.forEach(s => s.planets.forEach(p => {
-        if (p.domain === selectedDomain) {
-          domainNodeIds.add(p.id);
-          p.moons.forEach(m => domainNodeIds.add(m.id));
-        }
-      })));
-      rootStars.forEach(s => s.planets.forEach(p => {
-        if (p.domain === selectedDomain) {
-          domainNodeIds.add(p.id);
-          p.moons.forEach(m => domainNodeIds.add(m.id));
-        }
-      }));
 
-      edgesRef.current.forEach(edge => {
+      constellations.forEach((c) =>
+        c.stars.forEach((s) =>
+          s.planets.forEach((p) => {
+            if (p.domain === selectedDomain) {
+              domainNodeIds.add(p.id);
+              p.moons.forEach((m) => domainNodeIds.add(m.id));
+            }
+          })
+        )
+      );
+      rootStars.forEach((s) =>
+        s.planets.forEach((p) => {
+          if (p.domain === selectedDomain) {
+            domainNodeIds.add(p.id);
+            p.moons.forEach((m) => domainNodeIds.add(m.id));
+          }
+        })
+      );
+
+      (edgesRef.current || []).forEach((edge) => {
+        if (!edge || !edge.fromId || !edge.toId) return;
         const fromInDomain = domainNodeIds.has(edge.fromId);
         const toInDomain = domainNodeIds.has(edge.toId);
-        
+
         if (fromInDomain && !toInDomain) {
           bridgeTargets.add(edge.toId);
         } else if (!fromInDomain && toInDomain) {
@@ -166,11 +188,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       return;
     }
     const nodes = new Set<string>([tracedNodeId]);
-    const edges = edgesRef.current;
+    const edges = edgesRef.current || [];
     const queue = [tracedNodeId];
     while (queue.length > 0) {
       const cur = queue.shift()!;
       for (const e of edges) {
+        if (!e || !e.fromId || !e.toId) continue;
         if (e.fromId === cur && !nodes.has(e.toId)) {
           nodes.add(e.toId);
           queue.push(e.toId);
@@ -216,16 +239,120 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       try {
         setLoading(true);
 
-        const [subjectsRes, conversationsRes, claimsRes] = await Promise.allSettled([
+        if (viewMode === 'galaxy4d') {
+          const graphRes = await graphApi.getGalaxyUniverse();
+
+          const timestamps: number[] = [];
+          (graphRes.nodes || []).forEach((n) => {
+            if (n.created_at) timestamps.push(new Date(n.created_at).getTime());
+          });
+          (graphRes.edges || []).forEach((e: any) => {
+            if (e?.created_at) timestamps.push(new Date(e.created_at).getTime());
+          });
+
+          const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 30 * 24 * 60 * 60 * 1000;
+          const maxTime = timestamps.length > 0 ? Math.max(...timestamps, Date.now()) : Date.now();
+          const calcTimelineX = (ts: number) => {
+            const normalized = (ts - minTime) / Math.max(maxTime - minTime, 1);
+            return (normalized - 0.5) * 1400;
+          };
+
+          const typeGroups: Record<string, any[]> = {};
+          (graphRes.nodes || []).forEach((node) => {
+            const t = node.type || 'concept';
+            if (!typeGroups[t]) typeGroups[t] = [];
+            typeGroups[t].push(node);
+          });
+
+          const types = Object.keys(typeGroups);
+          const baseRadius = 250;
+          const newConstellations: Constellation[] = types.map((type, idx) => {
+            const clusterNodes = typeGroups[type];
+            const orbitRadius = baseRadius + idx * 180;
+            const angleStep = (2 * Math.PI) / Math.max(clusterNodes.length, 1);
+            const laneY = -220 + idx * 140;
+
+            const stars: StarSystem[] = clusterNodes.map((node, nIdx) => {
+              const angle = nIdx * angleStep;
+              const ts = node.created_at ? new Date(node.created_at).getTime() : minTime;
+
+              return {
+                id: String(node.id),
+                title: formatLabel(node.name),
+                type: 'graph_node',
+                localRadius: 0,
+                angle: angle,
+                driftSpeed: 0.001 + (idx % 3) * 0.0005,
+                size: node.size || 12,
+                color: '#38bdf8',
+                planets: [],
+                timestamp: ts,
+                timelineX: calcTimelineX(ts),
+                timelineY: laneY,
+                meta: {
+                  raw_title: node.name,
+                  description: node.description,
+                  connection_count: node.connection_count,
+                  type: node.type,
+                },
+              };
+            });
+
+            return {
+              id: `cluster-${type}`,
+              title: type.toUpperCase(),
+              color: '#38bdf8',
+              orbitRadius,
+              angle: (idx * (Math.PI * 2)) / Math.max(types.length, 1),
+              driftSpeed: 0.0002,
+              stars,
+              laneY,
+            };
+          });
+
+          const extractedEdges: CausalEdge[] = (graphRes.edges || [])
+            .map((e: any) => {
+              const from = e?.fromId || e?.from || e?.source;
+              const to = e?.toId || e?.to || e?.target;
+              if (!from || !to) return null;
+              return {
+                fromId: String(from),
+                toId: String(to),
+                type: e?.relation || 'relates_to',
+              };
+            })
+            .filter((e): e is CausalEdge => e !== null);
+
+          if (isMounted) {
+            setConstellations(newConstellations);
+            setRootStars([]);
+            particlesRef.current = [];
+            edgesRef.current = extractedEdges;
+            setAvailableDomains(types.sort());
+
+            if (timestamps.length > 0) {
+              setTimeRange({ min: minTime, max: maxTime });
+              setCutoffTimestamp(maxTime);
+            }
+            setLoading(false);
+          }
+          return;
+        }
+
+        const [subjectsRes, conversationsRes, claimsRes, sourcesRes] = await Promise.allSettled([
           subjectsApi.getSubjects(),
           conversationsApi.getConversations(),
           claimsApi.getClaims(),
+          sourcesApi.getSources(),
         ]);
 
         const rawSubjects: any[] = subjectsRes.status === 'fulfilled' && Array.isArray(subjectsRes.value) ? subjectsRes.value : [];
         const conversations: any[] = conversationsRes.status === 'fulfilled' && Array.isArray(conversationsRes.value) ? conversationsRes.value : [];
         const rawClaims = claimsRes.status === 'fulfilled' ? claimsRes.value : [];
+        const rawSources = sourcesRes.status === 'fulfilled' ? sourcesRes.value : [];
+        
         const claims: ClaimItem[] = Array.isArray(rawClaims) ? rawClaims : (rawClaims as any)?.items || [];
+        const allSources: any[] = Array.isArray(rawSources) ? rawSources : (rawSources as any)?.items || [];
 
         const subjects = await Promise.all(
           rawSubjects.map(async (sub) => {
@@ -238,11 +365,16 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           })
         );
 
-        // Расчет границ реального времени
         const timestamps: number[] = [];
-        subjects.forEach((s) => { if (s.created_at) timestamps.push(new Date(s.created_at).getTime()); });
-        conversations.forEach((c) => { if (c.created_at) timestamps.push(new Date(c.created_at).getTime()); });
-        claims.forEach((cl) => { if (cl.created_at) timestamps.push(new Date(cl.created_at).getTime()); });
+        subjects.forEach((s) => {
+          if (s.created_at) timestamps.push(new Date(s.created_at).getTime());
+        });
+        conversations.forEach((c) => {
+          if (c.created_at) timestamps.push(new Date(c.created_at).getTime());
+        });
+        claims.forEach((cl) => {
+          if (cl.created_at) timestamps.push(new Date(cl.created_at).getTime());
+        });
 
         const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 30 * 24 * 60 * 60 * 1000;
         const maxTime = timestamps.length > 0 ? Math.max(...timestamps, Date.now()) : Date.now();
@@ -252,7 +384,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           return (normalized - 0.5) * 1400;
         };
 
-        // 1. Группировка диалогов
         const folderMap: Record<string, any[]> = {};
         const rootChats: any[] = [];
         conversations.forEach((conv: any) => {
@@ -264,7 +395,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           }
         });
 
-        // 2. Доменные кластеры предметов
         const clusterMap: Record<string, { title: string; color: string; subjects: any[] }> = {
           indigo: { title: 'ENGINEERING & ARCHITECTURE', color: '#6366f1', subjects: [] },
           emerald: { title: 'SECURITY & SYSTEMS', color: '#10b981', subjects: [] },
@@ -284,6 +414,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         const newConstellations: Constellation[] = [];
         const extractedEdges: CausalEdge[] = [];
         const domainSet = new Set<string>();
+        const assignedSourceIds = new Set<string>();
         let cIdx = 0;
         const activeClusters = Object.entries(clusterMap).filter(([_, val]) => val.subjects.length > 0);
 
@@ -300,21 +431,22 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             const planets: Planet[] = currentSources.map((src: any, pIdx: number) => {
               const srcTs = src.created_at ? new Date(src.created_at).getTime() : subTs;
               extractedEdges.push({ fromId: String(src.id), toId: String(sub.id), type: 'source_to_subject' });
-              
+              assignedSourceIds.add(String(src.id));
+
               if (src.domain) {
-                 domainSet.add(src.domain);
+                domainSet.add(src.domain);
               }
 
               return {
                 id: String(src.id),
-                title: src.title || 'Документ',
+                title: formatLabel(src.title || 'Документ'),
                 type: 'source' as const,
                 orbitRadius: 45 + pIdx * 25,
                 angle: (pIdx * (Math.PI * 2)) / Math.max(currentSources.length, 1),
                 speed: 0.003 + (pIdx % 3) * 0.001,
                 size: 6,
                 color: '#38bdf8',
-                meta: { type: src.source_type || 'document', created_at: src.created_at, domain: src.domain },
+                meta: { type: src.source_type || 'document', created_at: src.created_at, domain: src.domain, raw_title: src.title },
                 moons: [],
                 timestamp: srcTs,
                 timelineX: starTimelineX,
@@ -325,7 +457,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
             return {
               id: String(sub.id),
-              title: sub.title,
+              title: formatLabel(sub.title),
               type: 'subject' as const,
               localRadius: 90 + sIdx * 50,
               angle: (sIdx * (Math.PI * 2)) / Math.max(cluster.subjects.length, 1),
@@ -341,6 +473,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 sourcesCount: currentSources.length,
                 description: sub.description,
                 created_at: sub.created_at,
+                raw_title: sub.title,
               },
             };
           });
@@ -358,7 +491,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           cIdx++;
         }
 
-        // 3. Созвездие диалогов с реальными лунами-инсайтами
         if (Object.keys(folderMap).length > 0) {
           const laneY = 220;
           const folderStars: StarSystem[] = Object.entries(folderMap).map(([folderName, folderChats], fIdx) => {
@@ -368,21 +500,20 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             const planets: Planet[] = folderChats.map((chat: any, pIdx: number) => {
               const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : firstChatTs;
 
-              // Связываем реальные claims к чату (или берем глобальные)
               const chatMoons: Moon[] = claims.slice(pIdx * 2, pIdx * 2 + 2).map((claimItem: ClaimItem, mIdx: number) => {
                 const claimTs = claimItem.created_at ? new Date(claimItem.created_at).getTime() : chatTs;
                 const isSuperseded = Boolean(claimItem.superseded_by);
                 const supersededAt = isSuperseded && claimItem.updated_at ? new Date(claimItem.updated_at).getTime() : undefined;
-                
+
                 const moonId = String(claimItem.id || `claim-${mIdx}-${chat.id}`);
                 extractedEdges.push({ fromId: moonId, toId: String(chat.id), type: 'claim_to_chat' });
                 if (claimItem.superseded_by) {
-                   extractedEdges.push({ fromId: moonId, toId: claimItem.superseded_by, type: 'superseded' });
+                  extractedEdges.push({ fromId: moonId, toId: claimItem.superseded_by, type: 'superseded' });
                 }
 
                 return {
                   id: moonId,
-                  title: claimItem.content || 'Инсайт',
+                  title: formatLabel(claimItem.content || 'Инсайт'),
                   type: claimItem.claim_type || 'insight',
                   angle: mIdx * Math.PI,
                   dist: 11,
@@ -397,14 +528,14 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
               return {
                 id: String(chat.id),
-                title: chat.title || 'Диалог',
+                title: formatLabel(chat.title || 'Диалог'),
                 type: 'conversation' as const,
                 orbitRadius: 40 + pIdx * 22,
                 angle: (pIdx * (Math.PI * 2)) / Math.max(folderChats.length, 1),
                 speed: 0.0025 + (pIdx % 3) * 0.0008,
                 size: 6,
                 color: '#818cf8',
-                meta: { messageCount: chat.message_count || 0, created_at: chat.created_at },
+                meta: { messageCount: chat.message_count || 0, created_at: chat.created_at, raw_title: chat.title },
                 moons: chatMoons,
                 timestamp: chatTs,
                 timelineX: folderTimelineX,
@@ -414,7 +545,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
             return {
               id: `folder-${folderName}`,
-              title: `📁 ${folderName}`,
+              title: `📁 ${formatLabel(folderName)}`,
               type: 'chat_folder' as const,
               localRadius: 80 + fIdx * 45,
               angle: (fIdx * (Math.PI * 2)) / Math.max(Object.keys(folderMap).length, 1),
@@ -425,7 +556,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               timestamp: firstChatTs,
               timelineX: folderTimelineX,
               timelineY: laneY,
-              meta: { chatCount: folderChats.length },
+              meta: { chatCount: folderChats.length, raw_title: folderName },
             };
           });
 
@@ -441,25 +572,46 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           });
         }
 
-        // 4. Галактическое ядро
-        const corePlanets: Planet[] = rootChats.map((chat: any, rIdx: number) => {
+        const coreChats: Planet[] = rootChats.map((chat: any, rIdx: number) => {
           const chatTs = chat.created_at ? new Date(chat.created_at).getTime() : minTime;
           return {
             id: String(chat.id),
-            title: chat.title || 'Диалог',
+            title: formatLabel(chat.title || 'Диалог'),
             type: 'conversation' as const,
             orbitRadius: 75 + rIdx * 22,
             angle: (rIdx * (Math.PI * 2)) / Math.max(rootChats.length, 1),
             speed: 0.002 + (rIdx % 4) * 0.0005,
             size: 5,
             color: '#a78bfa',
-            meta: { messageCount: chat.message_count || 0, created_at: chat.created_at },
+            meta: { messageCount: chat.message_count || 0, created_at: chat.created_at, raw_title: chat.title },
             moons: [],
             timestamp: chatTs,
             timelineX: calcTimelineX(chatTs),
             timelineY: 0,
           };
         });
+
+        const unassignedSources = allSources.filter((s: any) => !assignedSourceIds.has(String(s.id)));
+        const coreSources: Planet[] = unassignedSources.map((src: any, rIdx: number) => {
+          const srcTs = src.created_at ? new Date(src.created_at).getTime() : minTime;
+          return {
+            id: String(src.id),
+            title: formatLabel(src.title || 'Документ'),
+            type: 'source' as const,
+            orbitRadius: 95 + coreChats.length * 22 + rIdx * 18,
+            angle: (rIdx * (Math.PI * 2)) / Math.max(unassignedSources.length, 1) + Math.PI/4,
+            speed: 0.0015 + (rIdx % 3) * 0.0005,
+            size: 5,
+            color: '#38bdf8',
+            meta: { type: src.source_type || 'document', created_at: src.created_at, domain: src.domain, raw_title: src.title },
+            moons: [],
+            timestamp: srcTs,
+            timelineX: calcTimelineX(srcTs),
+            timelineY: -20 - rIdx * 10,
+          };
+        });
+
+        const corePlanets: Planet[] = [...coreChats, ...coreSources];
 
         const coreSystem: StarSystem = {
           id: 'root-galactic-core',
@@ -482,6 +634,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           setCutoffTimestamp(maxTime);
           setConstellations(newConstellations);
           setRootStars([coreSystem]);
+          particlesRef.current = [];
           edgesRef.current = extractedEdges;
           setAvailableDomains(Array.from(domainSet).sort());
         }
@@ -496,7 +649,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [viewMode]);
 
   useEffect(() => {
     if (!isPlaying || viewMode !== 'timeline') return;
@@ -568,7 +721,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       const isMicro = currentZoom >= 0.85 || morph > 0.5;
 
       nodePositionsRef.current = {};
-      
+
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       ctx.save();
@@ -576,7 +729,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       ctx.scale(dpr, dpr);
       const logicalWidth = window.innerWidth;
       const logicalHeight = window.innerHeight;
-      
+
       ctx.translate(Math.round(logicalWidth / 2 + cam.x), Math.round(logicalHeight / 2 + cam.y));
       ctx.scale(currentZoom, currentZoom);
 
@@ -696,14 +849,22 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         allStarsToRender.push({ star, worldX: sx, worldY: sy });
       });
 
-      // Рендеринг с реальным учетом времени
       allStarsToRender.forEach(({ star, worldX, worldY }) => {
         const isStarBorn = star.timestamp <= cutoffTimestamp;
-        
-        // FOCUS MODE INJECTION
+
         const isActive = !activeStarIdRef.current || activeStarIdRef.current === star.id;
         const focusAlpha = isActive ? 1.0 : 0.15;
-        const starAlpha = (isStarBorn ? 1.0 : morph > 0 ? 0.0 : 0.08) * focusAlpha;
+
+        let starDomainAlpha = 1.0;
+        if (selectedDomain && star.type === 'graph_node') {
+          if (star.meta?.type === selectedDomain) {
+            starDomainAlpha = 1.0;
+          } else {
+            starDomainAlpha = 0.05;
+          }
+        }
+
+        const starAlpha = (isStarBorn ? 1.0 : morph > 0 ? 0.0 : 0.08) * focusAlpha * starDomainAlpha;
 
         if (starAlpha <= 0) return;
 
@@ -766,7 +927,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             planet.renderY = py;
 
             nodePositionsRef.current[planet.id] = { x: px, y: py, color: planet.color, alpha: starAlpha * planetAlpha };
-            
+
             ctx.save();
             ctx.globalAlpha = starAlpha * planetAlpha;
 
@@ -797,7 +958,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               ctx.fillText(planet.title, px, py + planet.size + 10);
             }
 
-            // Луны (Инсайты и проверка Superseded)
             if (isMicro && morph < 0.6) {
               planet.moons.forEach((moon) => {
                 const isMoonBorn = moon.timestamp <= cutoffTimestamp;
@@ -812,7 +972,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                 ctx.save();
                 ctx.fillStyle = isSupersededAtCurrentCutoff ? '#71717a' : moon.color;
                 ctx.globalAlpha = isSupersededAtCurrentCutoff ? 0.35 : 1.0;
-                
+
                 nodePositionsRef.current[moon.id] = { x: mx, y: my, color: moon.color, alpha: ctx.globalAlpha * starAlpha * planetAlpha };
 
                 ctx.beginPath();
@@ -833,13 +993,15 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         ctx.restore();
       });
 
-      // --- DRAW KNOWLEDGE FLOW ---
       const positions = nodePositionsRef.current;
       const isTracing = tracedNodeId !== null;
 
       if (traceZoomRef.current) {
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        tracedNodesMap.forEach(id => {
+        let minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity;
+        tracedNodesMap.forEach((id) => {
           const pos = positions[id];
           if (pos) {
             minX = Math.min(minX, pos.x);
@@ -848,13 +1010,13 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
             maxY = Math.max(maxY, pos.y);
           }
         });
-        
+
         if (minX !== Infinity) {
           const w = Math.max(maxX - minX, 100);
           const h = Math.max(maxY - minY, 100);
           const centerX = minX + w / 2;
           const centerY = minY + h / 2;
-          
+
           const maxDim = Math.max(w, h);
           let optimalZoom = Math.min(window.innerWidth, window.innerHeight) / (maxDim * 1.6);
           optimalZoom = Math.max(0.12, Math.min(optimalZoom, 1.8));
@@ -867,32 +1029,46 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       }
 
       if (domainZoomRef.current && selectedDomain) {
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        
-        // Find all planets belonging to selectedDomain
-        rootStars.forEach(s => s.planets.forEach(p => {
-          if (p.domain === selectedDomain && positions[p.id]) {
-             minX = Math.min(minX, positions[p.id].x);
-             maxX = Math.max(maxX, positions[p.id].x);
-             minY = Math.min(minY, positions[p.id].y);
-             maxY = Math.max(maxY, positions[p.id].y);
-          }
-        }));
-        constellations.forEach(c => c.stars.forEach(s => s.planets.forEach(p => {
-          if (p.domain === selectedDomain && positions[p.id]) {
-             minX = Math.min(minX, positions[p.id].x);
-             maxX = Math.max(maxX, positions[p.id].x);
-             minY = Math.min(minY, positions[p.id].y);
-             maxY = Math.max(maxY, positions[p.id].y);
-          }
-        })));
+        let minX = Infinity,
+          maxX = -Infinity,
+          minY = Infinity,
+          maxY = -Infinity;
+
+        rootStars.forEach((s) =>
+          s.planets.forEach((p) => {
+            if (p.domain === selectedDomain && positions[p.id]) {
+              minX = Math.min(minX, positions[p.id].x);
+              maxX = Math.max(maxX, positions[p.id].x);
+              minY = Math.min(minY, positions[p.id].y);
+              maxY = Math.max(maxY, positions[p.id].y);
+            }
+          })
+        );
+        constellations.forEach((c) =>
+          c.stars.forEach((s) => {
+            if (s.meta?.type === selectedDomain && positions[s.id]) {
+              minX = Math.min(minX, positions[s.id].x);
+              maxX = Math.max(maxX, positions[s.id].x);
+              minY = Math.min(minY, positions[s.id].y);
+              maxY = Math.max(maxY, positions[s.id].y);
+            }
+            s.planets.forEach((p) => {
+              if (p.domain === selectedDomain && positions[p.id]) {
+                minX = Math.min(minX, positions[p.id].x);
+                maxX = Math.max(maxX, positions[p.id].x);
+                minY = Math.min(minY, positions[p.id].y);
+                maxY = Math.max(maxY, positions[p.id].y);
+              }
+            });
+          })
+        );
 
         if (minX !== Infinity) {
           const w = Math.max(maxX - minX, 100);
           const h = Math.max(maxY - minY, 100);
           const centerX = minX + w / 2;
           const centerY = minY + h / 2;
-          
+
           const maxDim = Math.max(w, h);
           let optimalZoom = Math.min(window.innerWidth, window.innerHeight) / (maxDim * 1.6);
           optimalZoom = Math.max(0.12, Math.min(optimalZoom, 1.8));
@@ -904,63 +1080,72 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         domainZoomRef.current = false;
       }
 
-      edgesRef.current.forEach((edge, i) => {
+      (edgesRef.current || []).forEach((edge) => {
+        if (!edge || !edge.fromId || !edge.toId) return;
         const fromPos = positions[edge.fromId];
         const toPos = positions[edge.toId];
         if (!fromPos || !toPos) return;
 
-        const isEdgeTraced = isTracing ? (tracedNodesMap.has(edge.fromId) && tracedNodesMap.has(edge.toId)) : false;
-        
-        // Hide untraced edges when tracing
+        const isEdgeTraced = isTracing ? tracedNodesMap.has(edge.fromId) && tracedNodesMap.has(edge.toId) : false;
+
         if (isTracing && !isEdgeTraced) return;
 
-        // Base alpha depends on connected nodes
         let baseAlpha = Math.min(fromPos.alpha, toPos.alpha) * (isTracing ? 0.8 : 0.15);
         let isBridge = false;
 
         if (selectedDomain && !isTracing) {
-           const fromInDomain = fromPos.alpha >= 0.9;
-           const toInDomain = toPos.alpha >= 0.9;
-           
-           if (fromInDomain && toInDomain) {
-              baseAlpha = 0.8;
-           } else if (showBridges && ((fromInDomain && toPos.alpha > 0.1) || (toInDomain && fromPos.alpha > 0.1))) {
-              baseAlpha = 0.75;
-              isBridge = true;
-           } else {
-              baseAlpha = 0.02;
-           }
+          const fromInDomain = fromPos.alpha >= 0.9;
+          const toInDomain = toPos.alpha >= 0.9;
+
+          if (fromInDomain && toInDomain) {
+            baseAlpha = 0.8;
+          } else if (showBridges && ((fromInDomain && toPos.alpha > 0.1) || (toInDomain && fromPos.alpha > 0.1))) {
+            baseAlpha = 0.75;
+            isBridge = true;
+          } else {
+            baseAlpha = 0.02;
+          }
         }
 
         if (baseAlpha <= 0.01) return;
 
         ctx.save();
         ctx.globalAlpha = baseAlpha;
-        
-        // Draw organic Bezier Curve
+
         const dx = toPos.x - fromPos.x;
         const dy = toPos.y - fromPos.y;
-        
+
         const cx = fromPos.x + dx * 0.5 + dy * 0.2;
         const cy = fromPos.y + dy * 0.5 - dx * 0.2;
 
-        ctx.lineWidth = isTracing ? 1.5 : (isBridge ? 1.2 : 0.8);
-        
+        ctx.lineWidth = isTracing ? 1.5 : isBridge ? 1.2 : 0.8;
+
         if (isBridge) {
-           const grad = ctx.createLinearGradient(fromPos.x, fromPos.y, toPos.x, toPos.y);
-           grad.addColorStop(0, fromPos.color);
-           grad.addColorStop(1, toPos.color);
-           ctx.strokeStyle = grad;
-           ctx.setLineDash([4, 4]);
-           ctx.lineDashOffset = -performance.now() * 0.03;
+          const grad = ctx.createLinearGradient(fromPos.x, fromPos.y, toPos.x, toPos.y);
+          grad.addColorStop(0, fromPos.color);
+          grad.addColorStop(1, toPos.color);
+          ctx.strokeStyle = grad;
+          ctx.setLineDash([4, 4]);
+          ctx.lineDashOffset = -performance.now() * 0.03;
         } else {
-           ctx.strokeStyle = fromPos.color;
-           if (edge.type === 'superseded') {
-              ctx.setLineDash([4, 4]);
-              ctx.strokeStyle = '#f59e0b';
-           }
+          ctx.strokeStyle = fromPos.color;
+          if (edge.type === 'superseded') {
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = '#f59e0b';
+          } else if (edge.type === 'depends_on') {
+            ctx.strokeStyle = '#ef4444';
+          } else if (edge.type === 'implements') {
+            ctx.strokeStyle = '#10b981';
+          } else if (edge.type === 'uses') {
+            ctx.strokeStyle = '#3b82f6';
+          } else if (edge.type === 'conflicts_with') {
+            ctx.setLineDash([4, 4]);
+            ctx.strokeStyle = '#f59e0b';
+          } else if (edge.type === 'relates_to') {
+            ctx.strokeStyle = '#8b5cf6';
+          }
         }
-        
+
         ctx.beginPath();
         ctx.moveTo(fromPos.x, fromPos.y);
         ctx.quadraticCurveTo(cx, cy, toPos.x, toPos.y);
@@ -969,69 +1154,84 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         ctx.restore();
       });
 
-      // Spawn particles
-      if (Math.random() < (isTracing ? 0.8 : (selectedDomain ? 0.4 : 0.2))) {
-        const activeEdges = edgesRef.current.map((e, idx) => ({ e, idx })).filter(({ e }) => {
-           if (isTracing) return tracedNodesMap.has(e.fromId) && tracedNodesMap.has(e.toId);
-           const pFrom = positions[e.fromId];
-           const pTo = positions[e.toId];
-           if (!pFrom || !pTo) return false;
-           
-           if (selectedDomain && showBridges) {
-             const fromIn = pFrom.alpha >= 0.9;
-             const toIn = pTo.alpha >= 0.9;
-             return (fromIn && pTo.alpha > 0.1) || (toIn && pFrom.alpha > 0.1);
-           }
-           
-           return pFrom.alpha > 0.1 && pTo.alpha > 0.1;
-        });
+      if (Math.random() < (isTracing ? 0.8 : selectedDomain ? 0.4 : 0.2)) {
+        const activeEdges = (edgesRef.current || [])
+          .map((e, idx) => ({ e, idx }))
+          .filter(({ e }) => {
+            if (!e || !e.fromId || !e.toId) return false;
+            if (isTracing) return tracedNodesMap.has(e.fromId) && tracedNodesMap.has(e.toId);
+            const pFrom = positions[e.fromId];
+            const pTo = positions[e.toId];
+            if (!pFrom || !pTo) return false;
+
+            if (selectedDomain && showBridges) {
+              const fromIn = pFrom.alpha >= 0.9;
+              const toIn = pTo.alpha >= 0.9;
+              return (fromIn && pTo.alpha > 0.1) || (toIn && pFrom.alpha > 0.1);
+            }
+
+            return pFrom.alpha > 0.1 && pTo.alpha > 0.1;
+          });
 
         if (activeEdges.length > 0) {
-           let rand = activeEdges[Math.floor(Math.random() * activeEdges.length)];
-           
-           if (selectedDomain && showBridges) {
-              const bridgesOnly = activeEdges.filter(ae => {
-                 const pFrom = positions[ae.e.fromId];
-                 const pTo = positions[ae.e.toId];
-                 return (pFrom.alpha >= 0.9 && pTo.alpha < 0.9) || (pFrom.alpha < 0.9 && pTo.alpha >= 0.9);
-              });
-              if (bridgesOnly.length > 0 && Math.random() < 0.7) {
-                 rand = bridgesOnly[Math.floor(Math.random() * bridgesOnly.length)];
-              }
-           }
+          let rand = activeEdges[Math.floor(Math.random() * activeEdges.length)];
 
-           let flowReverse = false;
-           if (selectedDomain && showBridges) {
-               const pFrom = positions[rand.e.fromId];
-               if (pFrom && pFrom.alpha < 0.9) flowReverse = true;
-           }
+          if (selectedDomain && showBridges) {
+            const bridgesOnly = activeEdges.filter((ae) => {
+              if (!ae.e?.fromId || !ae.e?.toId) return false;
+              const pFrom = positions[ae.e.fromId];
+              const pTo = positions[ae.e.toId];
+              if (!pFrom || !pTo) return false;
+              return (pFrom.alpha >= 0.9 && pTo.alpha < 0.9) || (pFrom.alpha < 0.9 && pTo.alpha >= 0.9);
+            });
+            if (bridgesOnly.length > 0 && Math.random() < 0.7) {
+              rand = bridgesOnly[Math.floor(Math.random() * bridgesOnly.length)];
+            }
+          }
 
-           particlesRef.current.push({
-             edgeIndex: rand.idx,
-             progress: flowReverse ? 1 : 0,
-             speed: (0.005 + Math.random() * 0.01) * (flowReverse ? -1 : 1),
-             spawnDelay: 0
-           });
+          let flowReverse = false;
+          if (selectedDomain && showBridges && rand?.e?.fromId) {
+            const pFrom = positions[rand.e.fromId];
+            if (pFrom && pFrom.alpha < 0.9) flowReverse = true;
+          }
+
+          if (rand && rand.idx !== undefined) {
+            particlesRef.current.push({
+              edgeIndex: rand.idx,
+              progress: flowReverse ? 1 : 0,
+              speed: (0.005 + Math.random() * 0.01) * (flowReverse ? -1 : 1),
+              spawnDelay: 0,
+            });
+          }
         }
       }
 
-      // Draw and update particles
       ctx.save();
       for (let i = particlesRef.current.length - 1; i >= 0; i--) {
         const p = particlesRef.current[i];
-        const edge = edgesRef.current[p.edgeIndex];
+        if (!p || p.edgeIndex === undefined) {
+          particlesRef.current.splice(i, 1);
+          continue;
+        }
+
+        const edge = (edgesRef.current || [])[p.edgeIndex];
+        if (!edge || !edge.fromId || !edge.toId) {
+          particlesRef.current.splice(i, 1);
+          continue;
+        }
+
         const fromPos = positions[edge.fromId];
         const toPos = positions[edge.toId];
 
         if (!fromPos || !toPos) {
-           particlesRef.current.splice(i, 1);
-           continue;
+          particlesRef.current.splice(i, 1);
+          continue;
         }
 
         p.progress += p.speed * (1 - morph * 0.5);
         if (p.progress >= 1 || p.progress <= 0) {
-           particlesRef.current.splice(i, 1);
-           continue;
+          particlesRef.current.splice(i, 1);
+          continue;
         }
 
         const dx = toPos.x - fromPos.x;
@@ -1041,12 +1241,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
         const t = p.progress;
         const mt = 1 - t;
-        
+
         const px = mt * mt * fromPos.x + 2 * mt * t * cx + t * t * toPos.x;
         const py = mt * mt * fromPos.y + 2 * mt * t * cy + t * t * toPos.y;
-        
+
         ctx.globalAlpha = Math.min(fromPos.alpha, toPos.alpha);
-        
+
         ctx.fillStyle = '#ffffff';
         ctx.beginPath();
         ctx.arc(px, py, 1.5, 0, Math.PI * 2);
@@ -1071,7 +1271,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       cancelAnimationFrame(animationFrameId);
       window.removeEventListener('resize', resizeCanvas);
     };
-  }, [constellations, rootStars, viewMode, cutoffTimestamp, timeRange]);
+  }, [constellations, rootStars, viewMode, cutoffTimestamp, timeRange, selectedDomain, showBridges, tracedNodeId, tracedNodesMap]);
 
   const handleMouseDown = (e: React.MouseEvent) => {
     cameraRef.current.isDragging = true;
@@ -1109,9 +1309,19 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         list.push({
           id: star.id,
           title: star.title,
-          subtitle: star.type === 'subject' ? `Предмет • Освоение: ${Math.round(star.meta?.mastery || 0)}%` : `Папка чатов`,
+          subtitle:
+            star.type === 'graph_node'
+              ? `Узел графа: ${star.meta?.type}`
+              : star.type === 'subject'
+              ? `Предмет • Освоение: ${Math.round(star.meta?.mastery || 0)}%`
+              : `Папка чатов`,
           type: star.type as any,
-          category: star.type === 'subject' ? 'Звезда' : 'Папка',
+          category:
+            star.type === 'graph_node'
+              ? star.meta?.type || 'Узел'
+              : star.type === 'subject'
+              ? 'Звезда'
+              : 'Папка',
           color: star.color,
           worldX: star.renderX || 0,
           worldY: star.renderY || 0,
@@ -1141,7 +1351,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               type: 'insight',
               category: 'Инсайт',
               color: moon.color,
-              worldX: planet.renderX || 0, // approximation
+              worldX: planet.renderX || 0,
               worldY: planet.renderY || 0,
               targetZoom: 2.2,
               originalEntity: { ...moon, parentPlanetId: planet.id },
@@ -1154,7 +1364,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   }, [constellations]);
 
   const handleJumpToTargetNode = (targetId: string) => {
-    const item = searchableEntities.find(e => e.id === targetId);
+    const item = searchableEntities.find((e) => e.id === targetId);
     if (item) {
       handleSelectSearchEntity(item);
     }
@@ -1195,7 +1405,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         type: 'claim',
         title: item.title,
         subtitle: item.subtitle,
-        onOpenChat: () => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: item.id } })),
+        onOpenChat: () =>
+          window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: item.id } })),
         onTracePath: () => setTracedNodeId(item.id),
       });
     } else if (item.type === 'insight') {
@@ -1207,7 +1418,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         subtitle: item.subtitle,
         meta: {
           superseded_by: moon.supersededById,
-          // Extract conversation ID from planet? Wait, we didn't store planet in originalEntity.
         },
         onJumpToTargetNode: handleJumpToTargetNode,
         onTracePath: () => setTracedNodeId(item.id),
@@ -1224,8 +1434,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     const clickY = e.clientY - rect.top;
 
     const cam = cameraRef.current;
-    
-    // hit testing ...
+
     const logicalWidth = window.innerWidth;
     const logicalHeight = window.innerHeight;
     const worldX = (clickX - logicalWidth / 2 - cam.targetX) / cam.targetZoom;
@@ -1236,7 +1445,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     for (const star of allStars) {
       for (const planet of star.planets) {
         if (planet.renderX !== undefined && planet.renderY !== undefined) {
-          // Check Moons first
           for (const moon of planet.moons) {
             const mx = planet.renderX + Math.cos(moon.angle) * moon.dist;
             const my = planet.renderY + Math.sin(moon.angle) * moon.dist;
@@ -1245,7 +1453,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               cam.targetY = -my * 2.2;
               cam.targetZoom = 2.2;
               activeStarIdRef.current = star.id;
-              
+
               inspectEntity({
                 id: moon.id,
                 type: 'claim',
@@ -1256,7 +1464,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                   conversationId: planet.id,
                 },
                 onJumpToTargetNode: handleJumpToTargetNode,
-                onOpenChat: (convId) => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: convId } })),
+                onOpenChat: (convId) =>
+                  window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: convId } })),
                 onTracePath: () => setTracedNodeId(moon.id),
               });
               return;
@@ -1287,7 +1496,8 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
                   сообщений: planet.meta?.messageCount || 0,
                   создано: dateStr,
                 },
-                onOpenChat: () => window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: planet.id } })),
+                onOpenChat: () =>
+                  window.dispatchEvent(new CustomEvent('openConversation', { detail: { conversationId: planet.id } })),
                 onTracePath: () => setTracedNodeId(planet.id),
               });
             } else if (planet.type === 'source') {
@@ -1344,6 +1554,19 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               onAskTutor: (subId) => onOpenSubject && onOpenSubject(subId, 'tutor'),
               onTracePath: () => setTracedNodeId(star.id),
             });
+          } else if (star.type === 'graph_node') {
+            inspectEntity({
+              id: star.id,
+              type: 'graph_node' as any,
+              title: star.title,
+              subtitle: `Узел графа: ${star.meta?.type}`,
+              summary: star.meta?.description || `Входящих и исходящих связей: ${star.meta?.connection_count}`,
+              meta: {
+                тип: star.meta?.type,
+                связей: star.meta?.connection_count,
+              },
+              onTracePath: () => setTracedNodeId(star.id),
+            });
           } else if (star.type === 'chat_folder') {
             inspectEntity({
               id: star.id,
@@ -1375,7 +1598,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     const clickX = e.clientX - rect.left;
     const clickY = e.clientY - rect.top;
     const cam = cameraRef.current;
-    
+
     const logicalWidth = window.innerWidth;
     const logicalHeight = window.innerHeight;
     const worldX = (clickX - logicalWidth / 2 - cam.targetX) / cam.targetZoom;
@@ -1397,7 +1620,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
           const dist = Math.hypot(worldX - planet.renderX, worldY - planet.renderY);
           if (dist <= planet.size + 8) {
-            setCopilotTarget({ id: planet.id, label: planet.title, group: planet.type === 'conversation' ? 'claim' : 'source', type: 'node' });
+            setCopilotTarget({
+              id: planet.id,
+              label: planet.title,
+              group: planet.type === 'conversation' ? 'claim' : 'source',
+              type: 'node',
+            });
             return;
           }
         }
@@ -1408,7 +1636,12 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
       if (star.renderX !== undefined && star.renderY !== undefined) {
         const dist = Math.hypot(worldX - star.renderX, worldY - star.renderY);
         if (dist <= star.size + 10) {
-          setCopilotTarget({ id: star.id, label: star.title, group: star.type === 'subject' ? 'subject' : 'chat_folder', type: 'node' });
+          setCopilotTarget({
+            id: star.id,
+            label: star.title,
+            group: star.type === 'subject' ? 'subject' : star.type === 'graph_node' ? 'graph_node' : 'chat_folder',
+            type: 'node',
+          });
           return;
         }
       }
@@ -1458,7 +1691,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
               id: bridgeId,
               label: `Связь: ${relationType}`,
               group: 'edge',
-              type: 'edge'
+              type: 'edge',
             });
           }}
         />
@@ -1474,19 +1707,21 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
         <button
           onClick={() => {
-            const nextMode = viewMode === 'galaxy' ? 'timeline' : 'galaxy';
+            const nextMode = viewMode === 'galaxy' ? 'timeline' : viewMode === 'timeline' ? 'galaxy4d' : 'galaxy';
             setViewMode(nextMode);
             resetCamera();
           }}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 ${
             viewMode === 'timeline'
               ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : viewMode === 'galaxy4d'
+              ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30'
               : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
           }`}
           title="Сменить проекцию Вселенной"
         >
-          {viewMode === 'timeline' ? <Clock size={13} /> : <Orbit size={13} />}
-          <span>{viewMode === 'timeline' ? 'Timeline' : 'Galaxy'}</span>
+          {viewMode === 'timeline' ? <Clock size={13} /> : viewMode === 'galaxy4d' ? <Orbit size={13} className="text-purple-400" /> : <Orbit size={13} />}
+          <span>{viewMode === 'timeline' ? 'Timeline' : viewMode === 'galaxy4d' ? 'Galaxy 4D (Graph)' : 'Galaxy (Structure)'}</span>
         </button>
 
         <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />
@@ -1501,32 +1736,36 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
           <kbd className="hidden sm:inline-block text-[10px] text-zinc-500 font-mono bg-zinc-900 px-1 rounded">Ctrl+K</kbd>
         </button>
 
-          {tracedNodeId && (
-            <>
-              <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />
-              <button
-                onClick={() => setTracedNodeId(null)}
-                className="flex items-center gap-1 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-medium rounded-lg transition-all shrink-0"
-                title="Сбросить трассировку потока (Esc или клик в пустоту)"
-              >
-                <X size={14} />
-                Trace Active
-              </button>
-            </>
-          )}
+        {tracedNodeId && (
+          <>
+            <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />
+            <button
+              onClick={() => setTracedNodeId(null)}
+              className="flex items-center gap-1 px-3 py-1.5 bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-200 text-xs font-medium rounded-lg transition-all shrink-0"
+              title="Сбросить трассировку потока (Esc или клик в пустоту)"
+            >
+              <X size={14} />
+              Trace Active
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Элементы управления камерой (мобильные/десктопные) */}
+      {/* Элементы управления камерой */}
       <div className="absolute bottom-24 right-4 sm:bottom-6 sm:right-6 z-20 flex flex-col items-center gap-2 bg-[#111115]/80 backdrop-blur-md border border-zinc-800/80 p-1.5 rounded-xl shadow-lg">
         <button
-          onClick={() => { cameraRef.current.targetZoom = Math.min(3.5, cameraRef.current.targetZoom * 1.25); }}
+          onClick={() => {
+            cameraRef.current.targetZoom = Math.min(3.5, cameraRef.current.targetZoom * 1.25);
+          }}
           className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
           title="Приблизить"
         >
           <ZoomIn size={18} />
         </button>
         <button
-          onClick={() => { cameraRef.current.targetZoom = Math.max(0.12, cameraRef.current.targetZoom * 0.75); }}
+          onClick={() => {
+            cameraRef.current.targetZoom = Math.max(0.12, cameraRef.current.targetZoom * 0.75);
+          }}
           className="p-2 text-zinc-400 hover:text-white rounded-lg hover:bg-zinc-800/60 transition-all"
           title="Отдалить"
         >
@@ -1542,7 +1781,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
         </button>
       </div>
 
-      {/* Нижняя плавающая панель скраббера времени */}
+      {/* Скраббер времени */}
       <div
         className={`absolute bottom-6 left-1/2 -translate-x-1/2 z-20 w-full max-w-xl bg-[#111116]/90 backdrop-blur-md border border-zinc-800/90 rounded-2xl px-4 py-3 shadow-2xl transition-all duration-300 ${
           viewMode === 'timeline' ? 'opacity-100 translate-y-0 pointer-events-auto' : 'opacity-0 translate-y-4 pointer-events-none'

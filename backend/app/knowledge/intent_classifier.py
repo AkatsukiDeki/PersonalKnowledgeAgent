@@ -42,7 +42,7 @@ def classify_intent_sync(query: str) -> QueryIntent:
     return QueryIntent.DEFAULT
 
 
-async def classify_intent(query: str) -> str:
+async def classify_intent(query: str, history=None) -> str:
     """Async wrapper for backward compatibility"""
     intent = classify_intent_sync(query)
     # the existing logic expects strings like "META" or "FACTUAL"

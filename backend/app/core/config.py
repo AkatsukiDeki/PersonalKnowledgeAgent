@@ -11,10 +11,11 @@ ENV_FILE_PATH = PROJECT_ROOT / ".env" if (PROJECT_ROOT / ".env").exists() else B
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Personal Knowledge Agent"
     API_V1_STR: str = "/api/v1"
-    
+
     # Embedding settings
-    EMBEDDING_BACKEND: str = "ollama"  # "local" | "gemini" | "ollama"
-    EMBEDDING_MODEL: str = "BAAI/bge-m3"  # or "nomic-ai/nomic-embed-text-v1.5", "models/text-embedding-004"
+    EMBEDDING_PROVIDER: str = "ollama"  # "ollama" | "local" | "gemini"
+    EMBEDDING_BACKEND: str = "ollama"  # legacy alias
+    EMBEDDING_MODEL: str = "BAAI/bge-m3"
     OLLAMA_EMBEDDING_MODEL: str = "bge-m3"
     EMBEDDING_DIMENSION: int = 1024
     EMBEDDING_VERSION: str = "local-bge-m3-v1"
@@ -22,6 +23,10 @@ class Settings(BaseSettings):
     EMBEDDING_BATCH_SIZE: int = 16
 
     DATABASE_URL: str
+    REDIS_URL: str = "redis://redis:6379/0"
+    ARQ_QUEUE_NAME: str = "pka:media"  # legacy
+    ARQ_QUEUE_MEDIA: str = "pka:media"
+    ARQ_QUEUE_KNOWLEDGE: str = "pka:knowledge"
     GEMINI_API_KEY: Optional[str] = None
     PKA_API_KEY: Optional[str] = None
 
@@ -31,10 +36,11 @@ class Settings(BaseSettings):
     ANALYTICAL_MIN_TOP1_SIMILARITY: float = 0.40
     ANALYTICAL_MIN_TOP_K_RELEVANCE_RRF: float = 0.005
     MIN_RELEVANT_CHUNKS: int = 1
-    
-    # Model Routing
-    LLM_ROUTING_BACKEND: str = "hybrid"  # "local" | "cloud" | "hybrid"
-    
+
+    # Model Routing & Reasoning Provider
+    LLM_ROUTING_BACKEND: str = "local"  # "local" | "cloud" | "hybrid"
+    REASONING_PROVIDER: str = "ollama"  # "ollama" | "gemini"
+
     # Ollama Settings
     OLLAMA_BASE_URL: str = "http://127.0.0.1:11434"
     OLLAMA_EXTRACTION_MODEL: str = "qwen2.5:3b"
@@ -42,7 +48,7 @@ class Settings(BaseSettings):
     OLLAMA_VISION_MODEL: str = "qwen2.5vl:7b"
     OLLAMA_TIMEOUT_SECONDS: float = 3000.0
     EXTRACTION_BATCH_SIZE: int = 2
-    
+
     FAST_LLM_MODEL: str = "gemini-1.5-flash"
     REASONING_LLM_MODEL: str = "gemini-1.5-pro"
     OPENAI_API_KEY: str | None = None
@@ -52,9 +58,9 @@ class Settings(BaseSettings):
         return {
             "fast_local": self.OLLAMA_QA_MODEL,
             "balanced_local": self.OLLAMA_EXTRACTION_MODEL,
-            "deep_reasoning": self.REASONING_LLM_MODEL
+            "deep_reasoning": self.OLLAMA_QA_MODEL if self.REASONING_PROVIDER == "ollama" else self.REASONING_LLM_MODEL
         }
-    
+
     # Obsidian Connector Settings
     OBSIDIAN_VAULT_PATH: Optional[str] = None
     OBSIDIAN_MAX_ZIP_SIZE_MB: int = 100

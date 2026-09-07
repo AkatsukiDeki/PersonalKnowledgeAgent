@@ -11,6 +11,7 @@ from .patterns import router as patterns_router
 from .conflicts import router as conflicts_router
 from .chat_import import router as chat_import_router
 from ..connectors.obsidian.router import router as obsidian_router
+from .copilot import router as copilot_router
 
 from .endpoints.insights import router as insights_router
 from .system import router as system_router
@@ -39,6 +40,7 @@ api_router.include_router(insights_router, prefix="/insights", tags=["insights"]
 api_router.include_router(system_router, prefix="/system", tags=["system"])
 api_router.include_router(timeline.router)
 api_router.include_router(profile_router)
+api_router.include_router(copilot_router)
 api_router.include_router(learning_router)
 api_router.include_router(subjects.router)
 api_router.include_router(media_router)

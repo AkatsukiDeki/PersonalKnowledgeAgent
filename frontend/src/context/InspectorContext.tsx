@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, ReactNode } from 'react';
 
-export type InspectableType = 'subject' | 'source' | 'claim' | 'pattern' | 'timeline_event';
+export type InspectableType = 'subject' | 'source' | 'claim' | 'pattern' | 'timeline_event' | 'graph_node';
 
 export interface InspectableEntity {
   id: string;

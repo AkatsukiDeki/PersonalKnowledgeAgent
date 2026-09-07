@@ -35,14 +35,15 @@ async def hybrid_search(
     # 2. Vector Search
     t_vec_start = time.perf_counter()
     sql_vector = text("""
-        SELECT c.id, c.source_id, c.text_content, 
+        SELECT c.id, c.source_id, c.text_content, c.metadata_info, s.title as source_title,
                (c.embedding <=> CAST(:embedding AS vector)) as distance
         FROM chunks c
+        LEFT JOIN sources s ON c.source_id = s.id
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
           AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
           AND c.embedding IS NOT NULL
         ORDER BY distance
-        LIMIT 10
+        LIMIT 40
     """)
     res_vec = await db.execute(sql_vector, {
         "embedding": emb_str,
@@ -55,24 +56,21 @@ async def hybrid_search(
 
     # 3. Full-Text Search (BM25)
     t_bm25_start = time.perf_counter()
-    import re
-    # Очистка и усечение запроса для GIN-индекса
     raw_combined = f"{original_query} {search_query}"
-    safe_text_query = re.sub(r'[^\w\s]', ' ', raw_combined)
-    safe_text_query = " ".join(safe_text_query.split()[:30])
 
     sql_text = text("""
-        SELECT c.id, c.source_id, c.text_content,
-               ts_rank_cd(c.tsv, plainto_tsquery('russian', :combined_query)) as score
+        SELECT c.id, c.source_id, c.text_content, c.metadata_info, s.title as source_title,
+               ts_rank_cd(c.tsv, websearch_to_tsquery('russian', :combined_query) || websearch_to_tsquery('english', :combined_query)) as score
         FROM chunks c
+        LEFT JOIN sources s ON c.source_id = s.id
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
           AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
-          AND c.tsv @@ plainto_tsquery('russian', :combined_query)
+          AND c.tsv @@ (websearch_to_tsquery('russian', :combined_query) || websearch_to_tsquery('english', :combined_query))
         ORDER BY score DESC
-        LIMIT 10
+        LIMIT 40
     """)
     res_text = await db.execute(sql_text, {
-        "combined_query": safe_text_query,
+        "combined_query": raw_combined,
         "include_history": include_history,
         "has_source_filter": source_ids is not None and len(source_ids) > 0,
         "source_ids": source_ids if source_ids else [],
@@ -97,7 +95,9 @@ async def hybrid_search(
         merged.append({
             "chunk_id": cid,
             "source_id": row["source_id"],
+            "source_title": row["source_title"],
             "text_content": row["text_content"],
+            "metadata_info": row["metadata_info"],
             "rrf_score": rrf_score,
             "similarity": 1.0 - row["distance"] if "distance" in row else 0.0
         })

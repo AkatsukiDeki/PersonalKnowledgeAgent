@@ -1,9 +1,11 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional
 
+
 class VoiceActionItem(BaseModel):
     text: str = Field(description="Суть действия или задачи")
     context: Optional[str] = Field(default=None, description="Дополнительный контекст или условие выполнения")
+
 
 class VoiceStructuredNote(BaseModel):
     summary: str = Field(description="Краткое связное резюме заметки")

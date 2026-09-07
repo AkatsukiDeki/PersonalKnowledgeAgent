@@ -34,11 +34,42 @@ from datetime import datetime
 from uuid import UUID
 
 import httpx
-from app.core.profiler import LatencyProfiler
+from ..core.profiler import LatencyProfiler
+import re
+
+
+def build_citation_dict(item: dict) -> dict:
+    mi = item.get("metadata_info") or {}
+    text = item["text_content"]
+
+    media_type = mi.get("media_type")
+    start_time = mi.get("start_time")
+    end_time = mi.get("end_time")
+    source_title = item.get("source_title")
+
+    if start_time is None:
+        match = re.search(r"\[(\d{2}):(\d{2})(?:\.(\d{1,3}))?\]", text[:200])
+        if match:
+            m, s = int(match.group(1)), int(match.group(2))
+            start_time = float(m * 60 + s)
+            if not media_type:
+                media_type = "audio"  # fallback
+
+    return {
+        "chunk_id": str(item["chunk_id"]),
+        "source_id": str(item["source_id"]),
+        "text_snippet": text[:150] + "..." if len(text) > 150 else text,
+        "score": round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
+        "media_type": media_type,
+        "start_time": start_time,
+        "end_time": end_time,
+        "source_title": source_title
+    }
+
 
 async def generate_conversation_title_bg(conv_id: UUID, query: str):
-    from app.db.session import async_session_factory
-    from app.db.models import Conversation
+    from ..db.session import async_session_factory
+    from ..db.models import Conversation
     from ..core.llm import model_manager, TaskType
     from pydantic import BaseModel, Field
 
@@ -53,7 +84,7 @@ async def generate_conversation_title_bg(conv_id: UUID, query: str):
             system_instruction="You are a title generator. Be brief, use Russian if message is Russian."
         )
         new_title = title_res.title.strip()
-        
+
         async with async_session_factory() as session:
             conv = await session.get(Conversation, conv_id)
             if conv:
@@ -61,6 +92,7 @@ async def generate_conversation_title_bg(conv_id: UUID, query: str):
                 await session.commit()
     except Exception as e:
         logger.error(f"Failed to generate title in background: {e}")
+
 
 router = APIRouter(prefix="/chat", tags=["Chat"])
 
@@ -90,7 +122,7 @@ async def generate_meta_answer(query: str) -> str:
     greetings = ["привет", "здравствуй", "приветствую", "здравствуйте", "hi", "hello"]
     if query_lower in greetings:
         return "Привет! Я PKA (Personal Knowledge Agent) — твой персональный AI-ассистент с доступом к твоей базе знаний. Чем могу помочь?"
-        
+
     payload = {
         "model": settings.OLLAMA_QA_MODEL,
         "messages": [
@@ -169,6 +201,7 @@ async def append_user_message(
     db.add(user_msg)
     await db.commit()
 
+
 async def append_assistant_message(
         db: AsyncSession,
         conversation_id: UUID,
@@ -194,15 +227,17 @@ async def append_assistant_message(
     await db.commit()
 
 
-from app.schemas.profiles import PROFILES, ExecutionProfile, ChatMode
+from ..schemas.profiles import PROFILES, ExecutionProfile, ChatMode
 
-async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatRequest, intent: str, profiler: LatencyProfiler, profile: ExecutionProfile):
+
+async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatRequest, intent: str,
+                                            profiler: LatencyProfiler, profile: ExecutionProfile):
     # 1. Query Condensation
     profiler.start_stage("02_query_condense")
-    
+
     if not profile.retrieval_enabled:
         return True, [], payload.query, intent
-        
+
     is_success, search_query = await rewrite_query(payload.query, payload.history)
 
     if intent in ("ANALYTICAL", "TEMPORAL"):
@@ -223,7 +258,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
         include_history=False,
         profiler=profiler
     )
-    
+
     if getattr(profile, "reranking_enabled", False) and l1_chunks:
         from ..knowledge.reranker import rerank_service
         l1_chunks = rerank_service.rerank(payload.query, l1_chunks, top_n=profile.max_chunks)
@@ -232,7 +267,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     for r in l1_chunks:
         if not r["text_content"].startswith("[L1 CHUNK]"):
             r["text_content"] = f"[L1 CHUNK] {r['text_content']}"
-            
+
     if payload.attached_source_ids:
         src_stmt = select(Source).where(Source.id.in_(payload.attached_source_ids))
         src_res = await db.execute(src_stmt)
@@ -241,7 +276,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
             content = src.content or src.raw_content or ""
             if len(content) > 20000:
                 content = content[:20000] + "... (truncated)"
-            
+
             l1_chunks.insert(0, {
                 "chunk_id": str(uuid.uuid4()),
                 "source_id": str(src.id),
@@ -250,7 +285,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 "rrf_score": 1.0,
                 "is_pattern": False
             })
-            
+
     if payload.learning_context and payload.learning_context.get("subject_id"):
         try:
             subject_id = payload.learning_context["subject_id"]
@@ -264,10 +299,10 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 for chunk in l1_chunks:
                     if chunk.get("source_id") in subject_source_ids:
                         chunk["rrf_score"] = float(chunk.get("rrf_score", 0)) * 1.5
-                
+
                 # Sort again by rrf_score descending
                 l1_chunks.sort(key=lambda x: float(x.get("rrf_score", 0)), reverse=True)
-                
+
                 l1_chunks.insert(0, {
                     "chunk_id": str(uuid.uuid4()),
                     "source_id": str(uuid.uuid4()),
@@ -278,7 +313,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
                 })
         except Exception as e:
             logger.warning(f"Failed to apply learning_context boost: {e}")
-            
+
     l2_claims = []
     l3_patterns = []
     l4_timeline = []
@@ -341,7 +376,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
     # 4. Graph & Deep Retrieval (L2, L3, L4, Graph)
     profiler.start_stage("05_graph_and_deep_retrieval")
     chunk_ids = [r["chunk_id"] for r in l1_chunks]
-    
+
     if chunk_ids and profile.graph_expansion:
         claims = (await db.execute(
             select(Claim).where(Claim.chunk_id.in_(chunk_ids), Claim.is_active == True).limit(5))).scalars().all()
@@ -431,7 +466,7 @@ async def _build_context_and_check_evidence(db: AsyncSession, payload: ChatReque
 
     MAX_CONTEXT_CHARS = 12000
     retrieved_raw = l3_patterns + l4_timeline + l2_claims + graph_context + l1_chunks
-    
+
     retrieved = []
     current_chars = 0
     for item in retrieved_raw:
@@ -512,7 +547,9 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
             search_query = payload.query
             intent = "MULTIMODAL"
         else:
-            is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload, intent, profiler, profile)
+            is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload,
+                                                                                                     intent, profiler,
+                                                                                                     profile)
 
         if not is_sufficient and not payload.image_base64:
             retrieved.insert(0, {
@@ -535,7 +572,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
         t0 = time.perf_counter()
         # Fetch user profile
         profile_text = ""
-        profile_res = await db.execute(select(text("*")).select_from(text("user_profiles")).order_by(text("created_at DESC")).limit(1))
+        profile_res = await db.execute(
+            select(text("*")).select_from(text("user_profiles")).order_by(text("created_at DESC")).limit(1))
         row = profile_res.fetchone()
         if row:
             from .profile import generate_primary_seed
@@ -553,7 +591,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
                 logger.error(f"Error parsing profile: {e}")
 
         profiler.start_stage("06_llm_generation")
-        answer = await generate_rag_response(query=payload.query, retrieved_chunks=retrieved, user_profile=profile_text, mode=payload.mode)
+        answer = await generate_rag_response(query=payload.query, retrieved_chunks=retrieved, user_profile=profile_text,
+                                             mode=payload.mode)
         profiler.end()
 
         metrics = {
@@ -566,7 +605,8 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
         }
 
         if conv:
-            msg_count = await db.scalar(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
+            msg_count = await db.scalar(
+                select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
             if msg_count == 0:
                 background_tasks.add_task(generate_conversation_title_bg, conv.id, payload.query)
 
@@ -577,13 +617,7 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
             background_tasks.add_task(maybe_trigger_memory_update, conv.id)
 
         citations = [
-            Citation(
-                chunk_id=str(item["chunk_id"]),
-                source_id=str(item["source_id"]),
-                text_snippet=item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item[
-                    "text_content"],
-                score=round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
-            )
+            Citation(**build_citation_dict(item))
             for item in retrieved if not item["text_content"].startswith("[CONVERSATION LOCAL STATE]")
         ]
 
@@ -596,10 +630,10 @@ async def chat_endpoint(payload: ChatRequest, background_tasks: BackgroundTasks,
 @router.post("/stream")
 @limiter.limit("20/minute")
 async def chat_stream_endpoint(
-    request: Request,
-    payload: ChatRequest, 
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_db)
+        request: Request,
+        payload: ChatRequest,
+        background_tasks: BackgroundTasks,
+        db: AsyncSession = Depends(get_db)
 ):
     async def event_generator():
         profiler = LatencyProfiler(trace_id=str(payload.conversation_id) if payload.conversation_id else "adhoc")
@@ -621,7 +655,7 @@ async def chat_stream_endpoint(
                 payload.conversation_id = conv.id
             else:
                 conv = await db.get(Conversation, payload.conversation_id)
-                
+
             if conv:
                 thread_state, history = await get_thread_context(db, payload.conversation_id)
                 payload.history = history
@@ -658,7 +692,9 @@ async def chat_stream_endpoint(
             else:
                 # We do this asynchronously before streaming to ensure context is ready
                 is_sufficient, retrieved, search_query, intent = await _build_context_and_check_evidence(db, payload,
-                                                                                                         intent, profiler, profile)
+                                                                                                         intent,
+                                                                                                         profiler,
+                                                                                                         profile)
 
             yield f"event: retrieval\ndata: {json.dumps({'status': 'searching', 'query': search_query, 'intent': intent}, ensure_ascii=False)}\n\n"
 
@@ -683,20 +719,15 @@ async def chat_stream_endpoint(
                 })
 
             citations_data = [
-                {
-                    "chunk_id": str(item["chunk_id"]),
-                    "source_id": str(item["source_id"]),
-                    "text_snippet": item["text_content"][:150] + "..." if len(item["text_content"]) > 150 else item[
-                        "text_content"],
-                    "score": round(float(item.get("rrf_score", item.get("score", 0.0))), 4),
-                }
+                build_citation_dict(item)
                 for item in retrieved if not item["text_content"].startswith("[CONVERSATION LOCAL STATE]")
             ]
             yield f"event: citations\ndata: {json.dumps(citations_data, ensure_ascii=False)}\n\n"
 
             # Fetch user profile for streaming
             profile_text = ""
-            profile_res = await db.execute(select(text("*")).select_from(text("user_profiles")).order_by(text("created_at DESC")).limit(1))
+            profile_res = await db.execute(
+                select(text("*")).select_from(text("user_profiles")).order_by(text("created_at DESC")).limit(1))
             row = profile_res.fetchone()
             if row:
                 from .profile import generate_primary_seed
@@ -718,22 +749,24 @@ async def chat_stream_endpoint(
                 import base64
                 from ..core.llm import model_manager
                 from ..agent.gemini import build_chat_messages
-                
+
                 image_bytes = base64.b64decode(payload.image_base64)
-                
+
                 context_blocks = []
                 if profile_text:
                     context_blocks.append(f"ПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ:\n{profile_text}")
                 if retrieved:
                     context_blocks.extend([item.get('text_content', '') for item in retrieved])
                 context_text = "\n---\n".join(context_blocks)
-                
+
                 sys_prompt = "Ты мультимодальный AI-ассистент. Твоя задача детально описывать и анализировать изображения. Отвечай на вопросы пользователя с учетом истории диалога."
-                
-                messages = build_chat_messages(sys_prompt, payload.history, payload.query, context_text, images=[payload.image_base64])
-                
+
+                messages = build_chat_messages(sys_prompt, payload.history, payload.query, context_text,
+                                               images=[payload.image_base64])
+
                 first_token = True
-                async for token in model_manager.stream_vision(messages, image_bytes, payload.image_mime_type or "image/png"):
+                async for token in model_manager.stream_vision(messages, image_bytes,
+                                                               payload.image_mime_type or "image/png"):
                     if first_token:
                         profiler.mark_first_token()
                         profiler.start_stage("07_llm_streaming")
@@ -746,9 +779,11 @@ async def chat_stream_endpoint(
                 capability_val = profile.preferred_capability.value
                 target_model = settings.CAPABILITY_TO_MODEL.get(capability_val, settings.OLLAMA_QA_MODEL)
                 active_mode = "learning_tutor" if payload.chat_mode == ChatMode.LEARNING else payload.mode
-                
+
                 first_token = True
-                async for token in stream_rag_response(payload.query, retrieved, user_profile=profile_text, mode=active_mode, history=payload.history, target_model=target_model):
+                async for token in stream_rag_response(payload.query, retrieved, user_profile=profile_text,
+                                                       mode=active_mode, history=payload.history,
+                                                       target_model=target_model):
                     if first_token:
                         profiler.mark_first_token()
                         profiler.start_stage("07_llm_streaming")
@@ -759,7 +794,8 @@ async def chat_stream_endpoint(
                 yield f"event: telemetry\ndata: {json.dumps(telemetry_data, ensure_ascii=False)}\n\n"
 
             if conv:
-                msg_count = await db.scalar(select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
+                msg_count = await db.scalar(
+                    select(func.count(ConversationMessage.id)).where(ConversationMessage.conversation_id == conv.id))
                 if msg_count == 1:
                     background_tasks.add_task(generate_conversation_title_bg, conv.id, payload.query)
 

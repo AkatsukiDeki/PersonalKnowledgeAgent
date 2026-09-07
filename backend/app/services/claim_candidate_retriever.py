@@ -1,7 +1,8 @@
 from typing import List, Optional
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Claim, Source
+from ..db.models import Claim, Source
+
 
 class ClaimCandidateRetriever:
     def __init__(self, db: AsyncSession):

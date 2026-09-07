@@ -11,6 +11,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
+RUN pip install --no-cache-dir --user "Cython<3.0.0" setuptools wheel
+RUN pip install --no-cache-dir --user nvidia-cublas-cu12 nvidia-cudnn-cu12
 RUN pip install --no-cache-dir --user -r requirements.txt
 
 FROM python:3.11-slim
@@ -30,6 +32,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /root/.local /root/.local
 ENV PATH=/root/.local/bin:$PATH
 ENV PYTHONUNBUFFERED=1
+ENV LD_LIBRARY_PATH="/root/.local/lib/python3.11/site-packages/nvidia/cublas/lib:/root/.local/lib/python3.11/site-packages/nvidia/cudnn/lib:${LD_LIBRARY_PATH}"
 
 # Создание директорий для кэша и загрузок
 RUN mkdir -p /app/.cache/flashrank /app/uploads

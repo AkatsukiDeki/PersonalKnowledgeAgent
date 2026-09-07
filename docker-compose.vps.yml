@@ -17,24 +17,113 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: pka_vps_redis
+    restart: unless-stopped
+    command: redis-server --save 60 1 --loglevel warning
+    volumes:
+      - pka_redis_data:/data
+    networks:
+      - pka_internal
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
     container_name: pka_vps_backend
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pka_user}:${POSTGRES_PASSWORD:-pka_secret_password}@db:5432/${POSTGRES_DB:-pka_db}
+      REDIS_URL: redis://redis:6379/0
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_QA_MODEL: ${OLLAMA_QA_MODEL:-qwen2.5:3b}
+      LLM_ROUTING_BACKEND: ${LLM_ROUTING_BACKEND:-local}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
       CORS_ORIGINS: ${CORS_ORIGINS:-*}
+      FLAGS_use_mkldnn: "0"
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - pka_internal
     ports:
       - "8000:8000"
+    volumes:
+      - pka_backend_uploads:/app/uploads
+
+  worker_media:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pka_vps_worker_media
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pka_user}:${POSTGRES_PASSWORD:-pka_secret_password}@db:5432/${POSTGRES_DB:-pka_db}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_QA_MODEL: ${OLLAMA_QA_MODEL:-qwen2.5:3b}
+      LLM_ROUTING_BACKEND: ${LLM_ROUTING_BACKEND:-local}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      FLAGS_use_mkldnn: "0"
+      PKA_WHISPER_MODEL: "large-v3-turbo"
+      PKA_WHISPER_DEVICE: "cuda"
+      PKA_WHISPER_COMPUTE_TYPE: "float16"
+      CUDA_VISIBLE_DEVICES: "0"
+      TORCH_DEVICE: "cuda"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    command: ["arq", "app.tasks.worker.MediaWorkerSettings"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pka_internal
+    volumes:
+      - pka_backend_uploads:/app/uploads
+
+  worker_knowledge:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pka_vps_worker_knowledge
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pka_user}:${POSTGRES_PASSWORD:-pka_secret_password}@db:5432/${POSTGRES_DB:-pka_db}
+      REDIS_URL: redis://redis:6379/0
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
+      OLLAMA_QA_MODEL: ${OLLAMA_QA_MODEL:-qwen2.5:3b}
+      LLM_ROUTING_BACKEND: ${LLM_ROUTING_BACKEND:-local}
+      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
+      FLAGS_use_mkldnn: "0"
+    command: ["arq", "app.tasks.worker.KnowledgeWorkerSettings"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pka_internal
     volumes:
       - pka_backend_uploads:/app/uploads
 
@@ -61,4 +150,5 @@ volumes:
   pka_db_data:
     external: true
     name: pka_postgres_data
+  pka_redis_data:
   pka_backend_uploads:

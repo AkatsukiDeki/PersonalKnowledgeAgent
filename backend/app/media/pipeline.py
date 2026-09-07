@@ -4,15 +4,14 @@ import logging
 import asyncio
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
+from sqlalchemy import update, delete, func
 from ..db.session import async_session_factory
 from ..db.models import Source, Chunk, Claim
 from .vocabulary import build_user_vocabulary
-from sqlalchemy import update, func
 from ..media.ffmpeg_service import extract_audio_to_wav
 from ..media.transcriber import WhisperSTTService
-from ..media.separator import AudioSeparatorService
 from ..media.extractor import TranscriptInsightExtractor
 from ..knowledge.embeddings.factory import get_embedding_provider
 from ..core.config import settings
@@ -23,8 +22,6 @@ from ..media.schemas import VoiceStructuredNote
 
 logger = logging.getLogger(__name__)
 
-# Singleton for the transcriber to keep model loaded if needed, or instantiate per job.
-# We instantiate per job here to free memory after if necessary, or we can keep it global.
 _stt_service = None
 
 
@@ -48,18 +45,16 @@ def chunk_segments(segments: List[Dict[str, Any]], max_chars: int = 2500) -> Lis
     chunks = []
     current_text = []
     current_chars = 0
-    start_time = 0.0
-    
+
     if not segments:
         return []
-        
+
     start_time = segments[0]['start']
-    
+
     for seg in segments:
         text = seg['text']
         if current_chars + len(text) > max_chars and current_text:
-            # Finalize chunk
-            end_time = seg['start'] # End of previous segment
+            end_time = seg['start']
             chunks.append({
                 "text": " ".join(current_text),
                 "start_time": start_time,
@@ -72,7 +67,7 @@ def chunk_segments(segments: List[Dict[str, Any]], max_chars: int = 2500) -> Lis
         else:
             current_text.append(text)
             current_chars += len(text)
-            
+
     if current_text:
         chunks.append({
             "text": " ".join(current_text),
@@ -80,33 +75,54 @@ def chunk_segments(segments: List[Dict[str, Any]], max_chars: int = 2500) -> Lis
             "end_time": segments[-1]['end'],
             "formatted_time": format_time(start_time)
         })
-        
+
     return chunks
 
+
+MEDIA_STRUCTURING_PROMPT = """Ты — педантичный редактор технической транскрипции (Speech-to-Text). Твоя единственная задача — исправить пунктуацию, опечатки распознавания и восстановить профессиональные термины.
+
+СЫРОЙ ТЕКСТ ДЛЯ ИСПРАВЛЕНИЯ:
+\"\"\"{raw_text}\"\"\"
+
+СТРОГИЕ ПРАВИЛА:
+1. НЕ ПЕРЕСКАЗЫВАЙ, НЕ СОКРАЩАЙ И НЕ ДОБАВЛЯЙ НОВЫХ ФАКТОВ. Сохрани каждое исходное утверждение и мысль спикера.
+2. ИСПРАВЛЯЙ IT-ТЕРМИНЫ И НАЗВАНИЯ:
+   - Приводи англоязычные термины и жаргонизмы к корректному написанию: 
+     (например: "кубернетис" -> Kubernetes, "постгрес" -> PostgreSQL, "докер" -> Docker, "репозиторий", "пайплайн", "коммит", "бэкенд", "эндпоинт", "пул реквест").
+3. ПУНКТУАЦИЯ И СТРУКТУРА:
+   - Расставь точки, запятые, тире и вопросительные знаки по смыслу пауз и интонаций.
+   - Разбей сплошной текст на логические абзацы (по 2-4 предложения).
+4. ЯЗЫК: Сохраняй оригинальный язык спикера (не переводи).
+5. ФОРМАТ ВЫВОДА: Выведи ИСКЛЮЧИТЕЛЬНО исправленный текст. Категорически запрещены любые приветствия, пояснения, а также обрамление текста в markdown-блоки (```). Текст должен быть чистым.
+"""
+
+
 async def run_media_ingestion_job(
-    job_id: str,
-    source_id: str,
-    file_path: str,
-    original_filename: str,
-    subject_id: str | None = None,
-    profile: str = "speech"
+        job_id: str,
+        source_id: str,
+        file_path: str,
+        original_filename: str,
+        subject_id: str | None = None,
+        profile: str = "speech",
+        language: Optional[str] = None,
+        fast_mode: bool = True
 ):
-    logger.info(f"[Media Ingestion] Starting job {job_id} for {original_filename}")
-    
+    effective_lang = language.strip().lower() if language and language.strip() and language.strip().lower() != "auto" else "ru"
+    logger.info(
+        f"[Media Ingestion] Starting job {job_id} for {original_filename} (profile={profile}, lang={effective_lang})")
+
     input_path = Path(file_path)
     import tempfile
     wav_path = Path(tempfile.gettempdir()) / f"processing_{job_id}.wav"
-    
+
     try:
-        # 1. Extract audio
         logger.info(f"[Media Ingestion] Extracting audio...")
         await asyncio.to_thread(extract_audio_to_wav, input_path, wav_path)
-        
-        # 1.5 Video Vision (M3.4)
+
         is_video = original_filename.lower().endswith((".mp4", ".mkv", ".avi", ".mov", ".webm"))
         processed_slides = []
         slides_storage_dir = Path(f"/app/uploads/slides/{source_id}")
-        
+
         if is_video:
             logger.info(f"[Media Ingestion] Video detected. Extracting keyframes and running OCR...")
             from .video_extractor import VideoSlideExtractor
@@ -126,34 +142,25 @@ async def run_media_ingestion_job(
                     slides=unique_slides
                 )
 
-        
         applied_separation = False
         separation_fallback = False
         target_wav_path = wav_path
-        
+
         if profile == "music":
-            temp_dir = wav_path.parent / "demucs_out"
-            logger.info(f"[Media Ingestion] Running Demucs separation...")
-            separated_path = await asyncio.to_thread(
-                AudioSeparatorService.extract_vocals, 
-                wav_path, 
-                temp_dir
-            )
-            applied_separation = True
-            if separated_path == wav_path:
-                separation_fallback = True
-            else:
-                target_wav_path = separated_path
-        
-        # 2. Transcribe
-        logger.info(f"[Media Ingestion] Transcribing audio...")
+            logger.warning(f"[Media Ingestion] Profile 'music' requested, but Demucs has been disabled. Proceeding with standard speech processing.")
+
+        # Подтягиваем словарь предметной области для улучшения качества распознавания терминов
+        async with async_session_factory() as db:
+            effective_prompt = await build_user_vocabulary(db) if effective_lang == "ru" else None
+
+        logger.info(f"[Media Ingestion] Transcribing audio with language={effective_lang}...")
         import time
         t0 = time.time()
         stt = await asyncio.to_thread(get_stt_service)
-        segments = await asyncio.to_thread(stt.transcribe, target_wav_path)
+        segments = await asyncio.to_thread(stt.transcribe, target_wav_path, effective_lang, effective_prompt)
         t1 = time.time()
         latency = t1 - t0
-        
+
         if not segments:
             logger.warning(f"[Media Ingestion] No speech detected in {original_filename}")
             async with async_session_factory() as db:
@@ -164,12 +171,10 @@ async def run_media_ingestion_job(
                 )
                 await db.commit()
             return
-            
-        # 3. Chunking
+
         logger.info(f"[Media Ingestion] Chunking {len(segments)} segments...")
         chunks = chunk_segments(segments)
-        
-        # 3.2 Temporal Alignment with Slides
+
         for ch in chunks:
             ch_start = ch["start_time"]
             ch_end = ch["end_time"]
@@ -178,58 +183,76 @@ async def run_media_ingestion_job(
                 ts = s.get("timestamp_seconds", 0.0)
                 if (ch_start - 3.0) <= ts <= (ch_end + 3.0) and s.get("extracted_text"):
                     matched_slides.append(s)
-            
+
             slide_blocks = []
             for s in matched_slides:
                 slide_blocks.append(
                     f"--- [Слайд на экране ({s['formatted_time']})] ---\n"
                     f"{s['extracted_text']}\n"
                 )
-            
+
             ch["has_slides"] = len(matched_slides) > 0
-            if slide_blocks:
-                ch["slide_text"] = "\n".join(slide_blocks)
-            else:
-                ch["slide_text"] = ""
-        
-        # 3.5 LLM Post-Processing per chunk
-        ollama = OllamaClient()
-        MEDIA_STRUCTURING_PROMPT = """Ты — аккуратный редактор транскрипций аудио. Твоя задача — очистить распознанный текст от фонетических опечаток STT, исправить пунктуацию и разбить на смысловые абзацы.
+            ch["slide_text"] = "\n".join(slide_blocks) if slide_blocks else ""
 
-Сырой распознанный текст:
-\"\"\"{raw_text}\"\"\"
+        if not fast_mode:
+            logger.info(f"[Media Ingestion] Running LLM restructuring for {len(chunks)} chunks...")
+            semaphore = asyncio.Semaphore(1)
+            ollama = OllamaClient()
 
-ПРАВИЛА ОБРАБОТКИ:
-1. Сохрани оригинальный смысл и стиль речи, но исправь явные фонетические ошибки (например, когда STT неправильно расслышал слова из-за невнятной речи).
-2. ОФОРМЛЕНИЕ:
-   - Разбей текст на абзацы для удобства чтения.
-   - Не добавляй никаких музыкальных тегов (Куплет, Припев и т.д.), если это не песня.
-   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО сочинять свои строки или дублировать текст.
+            async def process_chunk_safe(i: int, c: dict):
+                prompt = MEDIA_STRUCTURING_PROMPT.format(raw_text=c["text"])
+                async with semaphore:
+                    try:
+                        structured_text = None
+                        gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+                        if gemini_key:
+                            try:
+                                from google import genai
+                                client = genai.Client(api_key=gemini_key)
+                                response = await client.aio.models.generate_content(
+                                    model="gemini-1.5-flash",
+                                    contents=prompt
+                                )
+                                structured_text = response.text
+                            except Exception as ex:
+                                logger.warning(f"Gemini failed, fallback to Ollama: {ex}")
+                                gemini_key = None
+                        
+                        if not gemini_key:
+                            structured_text = await ollama.generate(
+                                model=settings.OLLAMA_QA_MODEL,
+                                prompt=prompt,
+                                system="Ты педантичный редактор технического текста. Выводи только исправленный текст без комментариев.",
+                                num_predict=1024,
+                                temperature=0.1
+                            )
+                        
+                        if structured_text and len(structured_text.strip()) > 10:
+                            # Очистка от системных артефактов (например, markdown блоков)
+                            cleaned = structured_text.strip()
+                            if cleaned.startswith("```"):
+                                lines = cleaned.split("\n")
+                                if len(lines) > 1 and lines[0].startswith("```"):
+                                    lines = lines[1:]
+                                if len(lines) > 0 and lines[-1].strip().startswith("```"):
+                                    lines = lines[:-1]
+                                cleaned = "\n".join(lines).strip()
+                            
+                            if cleaned and len(cleaned) > 10:
+                                c["text"] = cleaned
+                            else:
+                                logger.warning(f"[Media Ingestion] Cleaned text is empty for chunk {i}. Keeping raw text.")
+                                c["text"] = c["text"]
+                        else:
+                            logger.warning(f"[Media Ingestion] LLM returned empty or short response for chunk {i}. Keeping raw text.")
+                            c["text"] = c["text"]
+                    except Exception as e:
+                        logger.warning(f"[Media Ingestion] LLM formatting failed for chunk {i}: {e}. Keeping raw text.")
+                        c["text"] = c["text"]
 
-Выведи только готовый отформатированный текст без лишних комментариев."""
+            for i, c in enumerate(chunks):
+                await process_chunk_safe(i, c)
 
-        logger.info(f"[Media Ingestion] Running LLM restructuring for {len(chunks)} chunks...")
-        
-        concurrency = int(os.getenv("PKA_LLM_MAX_CONCURRENCY", 3))
-        semaphore = asyncio.Semaphore(concurrency)
-
-        async def process_chunk_safe(i: int, c: dict):
-            prompt = MEDIA_STRUCTURING_PROMPT.format(raw_text=c["text"])
-            async with semaphore:
-                try:
-                    structured_text = await ollama.generate(
-                        model=settings.OLLAMA_QA_MODEL,
-                        prompt=prompt,
-                        system="Ты педантичный редактор текста. Отвечай только переработанным текстом."
-                    )
-                    if structured_text and len(structured_text) > 10:
-                        c["text"] = structured_text.strip()
-                except Exception as e:
-                    logger.warning(f"[Media Ingestion] LLM formatting failed for chunk {i}: {e}")
-
-        await asyncio.gather(*(process_chunk_safe(i, c) for i, c in enumerate(chunks)))
-        
-        # Full text for the source
         full_text_parts = []
         for c in chunks:
             part = f"[{c['formatted_time']}]\n"
@@ -239,32 +262,38 @@ async def run_media_ingestion_job(
             full_text_parts.append(part)
         full_text = "\n\n".join(full_text_parts)
         raw_text_full = "\n".join([seg['text'] for seg in segments])
-        
-        # 3.8 Extract Insights
-        logger.info(f"[Media Ingestion] Extracting insights...")
-        extractor = TranscriptInsightExtractor()
-        insights = await extractor.extract_insights(full_text)
-        insights_dict = insights.model_dump()
-        
-        # 4. Ingest to DB
+
+        insights_dict = {}
+        insights_decisions = []
+        insights_topics = []
+
+        if not fast_mode:
+            logger.info(f"[Media Ingestion] Extracting insights...")
+            extractor = TranscriptInsightExtractor()
+            insights = await extractor.extract_insights(full_text)
+            insights_dict = insights.model_dump()
+            insights_decisions = insights.decisions
+            insights_topics = insights.key_topics
+
         logger.info(f"[Media Ingestion] Saving to DB and embedding {len(chunks)} chunks...")
         async with async_session_factory() as db:
             source_obj = await db.get(Source, source_id)
             meta = source_obj.meta_info or {} if source_obj else {}
-            
+
             transcript_segments = [
                 {"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"].strip()}
                 for s in segments if s.get("text")
             ]
-            
+
             transcription_meta = meta.get("transcription", {})
             transcription_meta.update({
                 "latency_sec": round(latency, 2),
                 "status": "completed",
-                "slides_count": len(processed_slides)
+                "slides_count": len(processed_slides),
+                "language": effective_lang
             })
             meta["transcription"] = transcription_meta
-            
+
             if processed_slides:
                 if "media" not in meta:
                     meta["media"] = {}
@@ -278,7 +307,7 @@ async def run_media_ingestion_job(
                     }
                     for s in processed_slides
                 ]
-            
+
             meta.update({
                 "applied_separation": applied_separation,
                 "separation_fallback": separation_fallback,
@@ -286,10 +315,9 @@ async def run_media_ingestion_job(
                 "transcript_segments": transcript_segments,
                 "insights": insights_dict
             })
-            
-            
+
             media_type = meta.get("media", {}).get("media_type", "audio")
-            
+
             if media_type == MediaType.VOICE_NOTE:
                 logger.info(f"[Media Ingestion] Structuring Voice Note...")
                 struct_prompt = f"Проанализируй эту голосовую заметку и выдели суть:\n\n{raw_text_full}"
@@ -310,14 +338,15 @@ async def run_media_ingestion_job(
                 .where(Source.id == source_id)
                 .values(
                     content=full_text,
+                    raw_content=full_text,
                     meta_info=meta,
-                    status="completed",
-                    error_message=None,
-                    completed_at=datetime.utcnow()
+                    processing_status="completed",
+                    processing_stage="completed",
+                    processing_error=None,
+                    processing_completed_at=datetime.utcnow()
                 )
             )
-            
-            # Embed chunks
+
             provider = get_embedding_provider()
             texts_to_embed = []
             for c in chunks:
@@ -328,10 +357,10 @@ async def run_media_ingestion_job(
                 texts_to_embed.append(base)
 
             embeddings = await provider.embed_documents(texts_to_embed)
-            
+
             db_chunks = []
-            for idx, (chunk_data, embedding_vector, text_with_timecode) in enumerate(zip(chunks, embeddings, texts_to_embed)):
-                
+            for idx, (chunk_data, embedding_vector, text_with_timecode) in enumerate(
+                    zip(chunks, embeddings, texts_to_embed)):
                 chunk_metadata = {
                     "source_type": "audio",
                     "original_filename": original_filename,
@@ -340,40 +369,37 @@ async def run_media_ingestion_job(
                     "formatted_time": chunk_data["formatted_time"],
                     "has_slides": chunk_data.get("has_slides", False)
                 }
-                
+
                 db_chunk = Chunk(
                     id=uuid.uuid4(),
                     source_id=source_id,
                     chunk_index=idx,
                     text_content=text_with_timecode,
                     embedding=embedding_vector,
-                    tsv=func.to_tsvector("russian", text_with_timecode),
                     meta_info=chunk_metadata,
                     metadata_info=chunk_metadata,
                     is_active=True
                 )
                 db_chunks.append(db_chunk)
-                
-            db.add_all(db_chunks)
-            await db.flush() # Ensure chunks have IDs
 
-            # Add Claims mapped from Insights only for AUDIO/VIDEO
+            db.add_all(db_chunks)
+            await db.flush()
+
             if media_type in (MediaType.AUDIO, MediaType.VIDEO):
-                if insights.decisions or insights.key_topics:
+                if insights_decisions or insights_topics:
                     first_chunk_id = db_chunks[0].id if db_chunks else None
                     if first_chunk_id:
-                        for decision in insights.decisions:
-                            claim = Claim(
+                        for decision in insights_decisions:
+                            db.add(Claim(
                                 source_id=source_id,
                                 chunk_id=first_chunk_id,
                                 content=decision,
                                 claim_type="decision",
                                 confidence=0.9,
                                 meta_info={"extracted_by": "TranscriptInsightExtractor"}
-                            )
-                            db.add(claim)
-                        for topic in insights.key_topics:
-                            claim = Claim(
+                            ))
+                        for topic in insights_topics:
+                            db.add(Claim(
                                 source_id=source_id,
                                 chunk_id=first_chunk_id,
                                 content=topic,
@@ -381,131 +407,162 @@ async def run_media_ingestion_job(
                                 category="key_topic",
                                 confidence=0.9,
                                 meta_info={"extracted_by": "TranscriptInsightExtractor"}
-                            )
-                            db.add(claim)
+                            ))
 
             await db.commit()
-            
+
         logger.info(f"[Media Ingestion] Job {job_id} completed successfully.")
-        
+
     except Exception as e:
         logger.error(f"[Media Ingestion] Job {job_id} failed: {e}", exc_info=True)
         async with async_session_factory() as db:
             await db.execute(
                 update(Source)
                 .where(Source.id == source_id)
-                .values(status="error", error_message=str(e))
+                .values(
+                    processing_status="failed",
+                    processing_stage="failed",
+                    processing_error=str(e),
+                    processing_completed_at=datetime.utcnow()
+                )
             )
             await db.commit()
+        raise e
     finally:
-        # 5. Cleanup temporary wav file (keep original input_path)
         if wav_path.exists():
             wav_path.unlink()
 
-from sqlalchemy import delete
 
 async def run_retranscribe_job(
-    source_id: str,
-    file_path: str,
-    language: str = "ru",
-    initial_prompt: str | None = None
+        source_id: str,
+        file_path: str,
+        language: Optional[str] = None,
+        initial_prompt: Optional[str] = None,
+        profile: str = "speech",
+        fast_mode: bool = True
 ):
-    logger.info(f"[Media Re-Ingestion] Starting job for {source_id}")
+    effective_lang = language.strip().lower() if language and language.strip() and language.strip().lower() != "auto" else "ru"
+    logger.info(f"[Media Re-Ingestion] Starting job for {source_id} (profile={profile}, lang={effective_lang})")
     input_path = Path(file_path)
     if not input_path.exists():
         logger.error(f"[Media Re-Ingestion] File not found: {file_path}")
         return
-        
+
     import tempfile
-    import uuid
     wav_path = Path(tempfile.gettempdir()) / f"retranscribe_{uuid.uuid4()}.wav"
     try:
-        if not wav_path.exists():
-            await asyncio.to_thread(extract_audio_to_wav, input_path, wav_path)
-            
+        await asyncio.to_thread(extract_audio_to_wav, input_path, wav_path)
+
+        applied_separation = False
+        separation_fallback = False
+        target_wav_path = wav_path
+
+        if profile == "music":
+            logger.warning(f"[Media Re-Ingestion] Profile 'music' requested, but Demucs has been disabled. Proceeding with standard speech processing.")
+
         async with async_session_factory() as db:
             if initial_prompt and initial_prompt.strip():
                 effective_prompt = initial_prompt.strip()
             else:
-                effective_prompt = await build_user_vocabulary(db)
+                effective_prompt = await build_user_vocabulary(db) if effective_lang == "ru" else None
 
         stt = await asyncio.to_thread(get_stt_service)
-        segments = await asyncio.to_thread(stt.transcribe, wav_path, language, effective_prompt)
-        
+        segments = await asyncio.to_thread(stt.transcribe, target_wav_path, effective_lang, effective_prompt)
+
         if not segments:
             raise ValueError("No speech detected during re-transcription")
-            
+
         chunks = chunk_segments(segments)
-        
-        # 2. SUCCESS! Atomically clean old data
+
         async with async_session_factory() as db:
             source = await db.get(Source, source_id)
             if not source:
                 return
-                
+
             await db.execute(delete(Claim).where(Claim.source_id == source.id))
             await db.execute(delete(Chunk).where(Chunk.source_id == source.id))
             await db.commit()
-            
-        # 3. LLM Restructuring
-        ollama = OllamaClient()
-        MEDIA_STRUCTURING_PROMPT = """Ты — редактор транскрипций аудио. Твоя задача — очистить распознанный текст от фонетических опечаток STT и оформить его.
 
-Сырой распознанный текст:
-\"\"\"{raw_text}\"\"\"
+        if not fast_mode:
+            semaphore = asyncio.Semaphore(1)
+            ollama = OllamaClient()
 
-ПРАВИЛА ОБРАБОТКИ:
-1. Восстанови исходные слова по контексту и созвучию.
-2. ОФОРМЛЕНИЕ: Оформи абзацами, не сочиняй лишнего. Выведи только готовый текст."""
-        concurrency = int(os.getenv("PKA_LLM_MAX_CONCURRENCY", 3))
-        semaphore = asyncio.Semaphore(concurrency)
+            async def process_chunk_safe(i: int, c: dict):
+                prompt = MEDIA_STRUCTURING_PROMPT.format(raw_text=c["text"])
+                async with semaphore:
+                    try:
+                        structured_text = None
+                        gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+                        if gemini_key:
+                            try:
+                                from google import genai
+                                client = genai.Client(api_key=gemini_key)
+                                response = await client.aio.models.generate_content(
+                                    model="gemini-1.5-flash",
+                                    contents=prompt
+                                )
+                                structured_text = response.text
+                            except Exception as ex:
+                                logger.warning(f"Gemini failed, fallback to Ollama: {ex}")
+                                gemini_key = None
+                        
+                        if not gemini_key:
+                            structured_text = await ollama.generate(
+                                model=settings.OLLAMA_QA_MODEL,
+                                prompt=prompt,
+                                system="Ты педантичный редактор технического текста. Выводи только исправленный текст без комментариев.",
+                                num_predict=1024,
+                                temperature=0.1
+                            )
+                        
+                        if structured_text and len(structured_text.strip()) > 10:
+                            c["text"] = structured_text.strip()
+                    except Exception as e:
+                        logger.warning(f"[Media Re-Ingestion] Restructuring failed for chunk {i}: {e}. Keeping raw text.")
 
-        async def process_chunk_safe(i: int, c: dict):
-            prompt = MEDIA_STRUCTURING_PROMPT.format(raw_text=c["text"])
-            async with semaphore:
-                try:
-                    structured_text = await ollama.generate(
-                        model=settings.OLLAMA_QA_MODEL,
-                        prompt=prompt,
-                        system="Ты педантичный редактор текста. Отвечай только переработанным текстом."
-                    )
-                    if structured_text and len(structured_text) > 10:
-                        c["text"] = structured_text.strip()
-                except Exception as e:
-                    pass
+            for i, c in enumerate(chunks):
+                await process_chunk_safe(i, c)
 
-        await asyncio.gather(*(process_chunk_safe(i, c) for i, c in enumerate(chunks)))
-        
         full_text = "\n\n".join([f"[{c['formatted_time']}]\n{c['text']}" for c in chunks])
         raw_text_full = "\n".join([seg['text'] for seg in segments])
-        
-        extractor = TranscriptInsightExtractor()
-        insights = await extractor.extract_insights(full_text)
-        insights_dict = insights.model_dump()
-        
-        # 4. Ingest new chunks/claims
+
+        insights_dict = {}
+        insights_decisions = []
+        insights_topics = []
+
+        if not fast_mode:
+            extractor = TranscriptInsightExtractor()
+            insights = await extractor.extract_insights(full_text)
+            insights_dict = insights.model_dump()
+            insights_decisions = insights.decisions
+            insights_topics = insights.key_topics
+
         async with async_session_factory() as db:
-            # We already deleted old chunks, so we just update the source and add new ones
-            meta = source.meta_info or {}
-            
+            source_obj = await db.get(Source, source_id)
+            meta = source_obj.meta_info or {} if source_obj else {}
+
             transcript_segments = [
                 {"start": round(s["start"], 1), "end": round(s["end"], 1), "text": s["text"].strip()}
                 for s in segments if s.get("text")
             ]
-            
+
             transcription_meta = meta.get("transcription", {})
             transcription_meta.update({
                 "status": "completed",
-                "retranscribed_at": datetime.utcnow().isoformat()
+                "retranscribed_at": datetime.utcnow().isoformat(),
+                "processing_profile": profile,
+                "language": effective_lang
             })
             meta["transcription"] = transcription_meta
-            
+
             meta.update({
+                "applied_separation": applied_separation,
+                "separation_fallback": separation_fallback,
                 "raw_transcript": raw_text_full,
                 "transcript_segments": transcript_segments,
                 "insights": insights_dict,
             })
-            
+
             await db.execute(
                 update(Source)
                 .where(Source.id == source_id)
@@ -516,11 +573,11 @@ async def run_retranscribe_job(
                     error_message=None
                 )
             )
-            
+
             provider = get_embedding_provider()
             texts_to_embed = [f"Транскрипция:\n[{c['formatted_time']}] {c['text']}" for c in chunks]
             embeddings = await provider.embed_documents(texts_to_embed)
-            
+
             db_chunks = []
             for idx, (chunk_data, embedding_vector) in enumerate(zip(chunks, embeddings)):
                 text_with_timecode = f"Транскрипция:\n[{chunk_data['formatted_time']}]\n{chunk_data['text']}"
@@ -530,39 +587,58 @@ async def run_retranscribe_job(
                     "end_time": chunk_data["end_time"],
                     "formatted_time": chunk_data["formatted_time"]
                 }
-                
+
                 db_chunk = Chunk(
                     id=uuid.uuid4(),
                     source_id=source_id,
                     chunk_index=idx,
                     text_content=text_with_timecode,
                     embedding=embedding_vector,
-                    tsv=func.to_tsvector("russian", text_with_timecode),
                     meta_info=chunk_metadata,
                     metadata_info=chunk_metadata,
                     is_active=True
                 )
                 db_chunks.append(db_chunk)
-                
+
             db.add_all(db_chunks)
             await db.flush()
-            
-            if insights.decisions or insights.key_topics:
+
+            if insights_decisions or insights_topics:
                 first_chunk_id = db_chunks[0].id if db_chunks else None
                 if first_chunk_id:
-                    for decision in insights.decisions:
-                        db.add(Claim(source_id=source_id, chunk_id=first_chunk_id, content=decision, claim_type="decision", confidence=0.9))
-                    for topic in insights.key_topics:
-                        db.add(Claim(source_id=source_id, chunk_id=first_chunk_id, content=topic, claim_type="fact", category="key_topic", confidence=0.9))
-            
+                    for decision in insights_decisions:
+                        db.add(
+                            Claim(source_id=source_id, chunk_id=first_chunk_id, content=decision, claim_type="decision",
+                                  confidence=0.9))
+                    for topic in insights_topics:
+                        db.add(Claim(source_id=source_id, chunk_id=first_chunk_id, content=topic, claim_type="fact",
+                                     category="key_topic", confidence=0.9))
+
             await db.commit()
             logger.info(f"[Media Re-Ingestion] Job completed for {source_id}")
-            
+
     except Exception as e:
-        logger.error(f"[Media Re-Ingestion] Failed for {source_id}: {e}")
+        logger.error(f"[Media Re-Ingestion] Failed for {source_id}: {e}", exc_info=True)
         async with async_session_factory() as db:
-            await db.execute(update(Source).where(Source.id == source_id).values(status="error", error_message=str(e)))
+            await db.execute(
+                update(Source)
+                .where(Source.id == source_id)
+                .values(
+                    processing_status="failed",
+                    processing_stage="failed",
+                    processing_error=str(e),
+                    processing_completed_at=datetime.utcnow()
+                )
+            )
             await db.commit()
+        raise e
     finally:
         if wav_path.exists():
             wav_path.unlink()
+
+class MediaPipeline:
+    async def process(self, source, session, retranscribe=False, language="ru", enable_demucs=False, fast_mode=True):
+        if retranscribe:
+            await run_retranscribe_job(str(source.id), source.original_file_path, language=language, profile="music" if enable_demucs else "speech", fast_mode=fast_mode)
+        else:
+            await run_media_ingestion_job(f"job_{source.id}", str(source.id), source.original_file_path, "upload", profile="music" if enable_demucs else "speech", language=language, fast_mode=fast_mode)

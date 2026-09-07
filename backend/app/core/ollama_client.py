@@ -11,19 +11,30 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
+
 class ChatMessage(TypedDict):
     role: str
     content: str
     images: NotRequired[list[str]]
 
+
 T = TypeVar("T", bound=BaseModel)
+
+# Оптимальные параметры для CPU VPS
+DEFAULT_CPU_OPTIONS = {
+    "num_ctx": 4096,         # Ограничение окна до 4K снижает prefill latency в разы
+    "num_predict": 1024,     # Достаточно для ответа в чате, ускоряет генерацию
+    "num_thread": 4,         # Использование ядер CPU на инференс
+    "temperature": 0.2,
+    "top_p": 0.9,
+    "repeat_penalty": 1.1,
+}
 
 
 def clean_json_string(text: str) -> str:
     """Удаляет markdown, комментарии и исправляет частые опечатки LLM."""
     text = text.strip()
-    
-    # Удаление markdown оберток ```json ... ```
+
     if text.startswith("```"):
         lines = text.split('\n')
         if lines[0].startswith("```"):
@@ -32,7 +43,6 @@ def clean_json_string(text: str) -> str:
             lines = lines[:-1]
         text = "\n".join(lines).strip()
 
-    # Поиск границ JSON
     start_obj = text.find('{')
     start_arr = text.find('[')
 
@@ -49,27 +59,25 @@ def clean_json_string(text: str) -> str:
     if start_idx != -1 and end_idx != -1 and end_idx >= start_idx:
         text = text[start_idx:end_idx + 1]
 
-    # Удаление висячих запятых перед закрывающими скобками: ", }" -> "}" и ", ]" -> "]"
     text = re.sub(r',\s*([\]}])', r'\1', text)
     return text
 
 
 def robust_json_parser(text: str) -> Any:
     cleaned = clean_json_string(text)
-    
+
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
-        # Попытка восстановить оборванный JSON (добавление недостающих скобок)
         open_braces = cleaned.count('{') - cleaned.count('}')
         open_brackets = cleaned.count('[') - cleaned.count(']')
-        
+
         patched = cleaned
         if open_brackets > 0:
             patched += ']' * open_brackets
         if open_braces > 0:
             patched += '}' * open_braces
-            
+
         patched = re.sub(r',\s*([\]}])', r'\1', patched)
         return json.loads(patched)
 
@@ -77,7 +85,7 @@ def robust_json_parser(text: str) -> Any:
 class OllamaClient:
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
-        self.default_model = getattr(settings, "OLLAMA_MODEL", "qwen2.5:7b")
+        self.default_model = getattr(settings, "OLLAMA_QA_MODEL", "qwen2.5:3b")
         self.timeout = httpx.Timeout(300.0, connect=10.0)
 
     async def generate(
@@ -87,29 +95,26 @@ class OllamaClient:
             system: Optional[str] = None,
             format_schema: Optional[Any] = None,
             images: Optional[list[str]] = None,
-            num_predict: int = 4096
+            num_predict: int = 1536
     ) -> str:
         target_model = model or self.default_model
+
+        options = DEFAULT_CPU_OPTIONS.copy()
+        options["num_predict"] = num_predict
 
         payload = {
             "model": target_model,
             "prompt": prompt,
             "stream": False,
-            "keep_alive": -1,
-            "options": {
-                "num_predict": num_predict,
-                "temperature": 0.1,
-                "repeat_penalty": 1.15,
-                "top_p": 0.9,
-                "num_ctx": 8192,
-            }
+            "keep_alive": "24h",
+            "options": options
         }
         if system:
             payload["system"] = system
 
         if format_schema:
             payload["format"] = format_schema
-            
+
         if images:
             payload["images"] = images
 
@@ -145,7 +150,8 @@ class OllamaClient:
             "model": target_model,
             "prompt": prompt,
             "stream": True,
-            "keep_alive": -1,
+            "keep_alive": "24h",
+            "options": DEFAULT_CPU_OPTIONS
         }
         if system:
             payload["system"] = system
@@ -172,22 +178,20 @@ class OllamaClient:
             self,
             messages: list[ChatMessage],
             model: Optional[str] = None,
-            num_predict: int = 4096,
+            num_predict: int = 1536,
             format_schema: Optional[str] = None,
     ) -> str:
         target_model = model or self.default_model
+
+        options = DEFAULT_CPU_OPTIONS.copy()
+        options["num_predict"] = num_predict
+
         payload = {
             "model": target_model,
             "messages": messages,
             "stream": False,
-            "keep_alive": -1,
-            "options": {
-                "num_predict": num_predict,
-                "temperature": 0.1,
-                "repeat_penalty": 1.15,
-                "top_p": 0.9,
-                "num_ctx": 8192,
-            }
+            "keep_alive": "24h",
+            "options": options
         }
 
         if format_schema:
@@ -220,36 +224,35 @@ class OllamaClient:
             temperature: float = 0.2,
     ):
         target_model = model or self.default_model
-        
-        # Validation and cleanup
+
         processed_messages = []
         for msg in messages:
             role = msg.get("role", "user").lower()
             if role not in ("system", "user", "assistant"):
                 role = "user"
-            
+
             clean_msg = {"role": role, "content": msg.get("content", "")}
-            
+
             if "images" in msg and isinstance(msg["images"], list):
                 clean_images = []
                 for img in msg["images"]:
                     if img.startswith("data:image"):
-                        # Remove base64 prefix if present
                         img = img.split(",", 1)[-1]
                     clean_images.append(img)
                 if clean_images:
                     clean_msg["images"] = clean_images
-                    
+
             processed_messages.append(clean_msg)
+
+        options = DEFAULT_CPU_OPTIONS.copy()
+        options["temperature"] = temperature
 
         payload = {
             "model": target_model,
             "messages": processed_messages,
             "stream": True,
-            "keep_alive": -1,
-            "options": {
-                "temperature": temperature,
-            }
+            "keep_alive": "24h",
+            "options": options
         }
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -273,7 +276,7 @@ class OllamaClient:
             prompt: str,
             model: Optional[str] = None,
             system: Optional[str] = None,
-            num_predict: int = 4096
+            num_predict: int = 1536
     ) -> Dict[str, Any]:
         target_model = model or self.default_model
         strict_sys = "You must output ONLY valid, raw JSON. Do not write markdown wrappers, explanations, or intro text. Output valid RFC 8259 JSON in RUSSIAN."
@@ -307,7 +310,7 @@ class OllamaClient:
                 prompt=retry_prompt,
                 system=system_prompt,
                 format_schema="json",
-                num_predict=4096
+                num_predict=num_predict
             )
             try:
                 parsed_2 = robust_json_parser(raw_response_2)
@@ -328,7 +331,7 @@ class OllamaClient:
         strict_sys = f"You must output ONLY valid JSON matching this schema: {json.dumps(json_schema)}. Do not wrap the JSON object in any outer keys. Return the raw object matching the schema directly. Use strictly RUSSIAN language."
         system = f"{system}\n\n{strict_sys}" if system else strict_sys
 
-        raw_response = await self.generate(target_model, prompt, system=system, format_schema=json_schema, num_predict=4096)
+        raw_response = await self.generate(target_model, prompt, system=system, format_schema=json_schema, num_predict=2048)
         try:
             parsed = robust_json_parser(raw_response)
 
@@ -364,7 +367,7 @@ class OllamaClient:
                 retry_prompt,
                 system=system,
                 format_schema=json_schema,
-                num_predict=4096
+                num_predict=2048
             )
 
             try:

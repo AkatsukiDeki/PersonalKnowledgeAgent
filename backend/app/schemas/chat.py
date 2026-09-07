@@ -22,6 +22,10 @@ class Citation(BaseModel):
     source_id: uuid.UUID
     text_snippet: str
     score: float
+    media_type: Optional[str] = None
+    start_time: Optional[float] = None
+    end_time: Optional[float] = None
+    source_title: Optional[str] = None
 
 
 class ChatResponse(BaseModel):

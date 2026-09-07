@@ -36,13 +36,26 @@ export const EntityInspector: React.FC = () => {
   const [copilotResult, setCopilotResult] = useState<string | null>(null);
   const [copilotError, setCopilotError] = useState<string | null>(null);
 
-  // Reset copilot state when entity changes
+  // Состояние для дополнительных деталей графа
+  const [graphDetails, setGraphDetails] = useState<any>(null);
+  const [loadingDetails, setLoadingDetails] = useState(false);
+
+  // Reset state and load details if needed
   useEffect(() => {
     setCopilotOpen(false);
     setCopilotResult(null);
     setCopilotError(null);
     setCopilotAction(null);
-  }, [activeEntity?.id]);
+    setGraphDetails(null);
+
+    if (activeEntity?.type === 'graph_node') {
+      setLoadingDetails(true);
+      graphApi.getEntityDetails(activeEntity.id)
+        .then(res => setGraphDetails(res))
+        .catch(err => console.error('Failed to load graph node details:', err))
+        .finally(() => setLoadingDetails(false));
+    }
+  }, [activeEntity?.id, activeEntity?.type]);
 
   // Закрытие по Escape
   useEffect(() => {
@@ -94,8 +107,87 @@ export const EntityInspector: React.FC = () => {
       case 'claim': return 'Утверждение / Факт';
       case 'pattern': return 'Скрытый паттерн';
       case 'timeline_event': return 'Событие таймлайна';
+      case 'graph_node': return 'Узел графа';
       default: return 'Сущность';
     }
+  };
+
+  const renderGraphNodeDetails = () => {
+    if (loadingDetails) {
+      return (
+        <div className="p-5 flex items-center justify-center text-zinc-500 text-xs">
+          <Loader2 size={16} className="animate-spin mr-2" />
+          Загрузка структуры...
+        </div>
+      );
+    }
+    if (!graphDetails) return null;
+
+    return (
+      <div className="space-y-4">
+        {graphDetails.relations?.length > 0 && (
+          <div className="space-y-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-2">
+              Связи в графе ({graphDetails.relations.length})
+            </span>
+            <div className="space-y-1.5">
+              {graphDetails.relations.map((rel: any) => (
+                <div key={rel.id} className="p-2.5 bg-zinc-900/60 border border-zinc-800/80 rounded-xl flex items-center justify-between text-xs transition-colors hover:bg-zinc-800/60">
+                  <div className="flex flex-col gap-1 min-w-0">
+                    <div className="flex items-center gap-1.5">
+                      <span className={clsx("px-1.5 py-0.5 rounded text-[9px] uppercase font-bold tracking-wider",
+                        rel.relation_type === 'depends_on' ? 'bg-red-500/20 text-red-400' :
+                        rel.relation_type === 'implements' ? 'bg-emerald-500/20 text-emerald-400' :
+                        rel.relation_type === 'uses' ? 'bg-blue-500/20 text-blue-400' :
+                        rel.relation_type === 'conflicts_with' ? 'bg-amber-500/20 text-amber-400' :
+                        'bg-purple-500/20 text-purple-400'
+                      )}>
+                        {rel.relation_type}
+                      </span>
+                      {rel.direction === 'outgoing' ? <ExternalLink size={10} className="text-zinc-500" /> : <ExternalLink size={10} className="text-zinc-500 rotate-180" />}
+                    </div>
+                    <span className="font-medium text-zinc-200 truncate">{rel.related_name}</span>
+                  </div>
+                  {activeEntity?.onJumpToTargetNode && (
+                    <button 
+                      onClick={() => activeEntity.onJumpToTargetNode?.(rel.related_id)}
+                      className="p-1.5 text-zinc-400 hover:text-white bg-zinc-800 rounded hover:bg-zinc-700 ml-2 shrink-0"
+                      title="Перейти к узлу"
+                    >
+                      <Sparkles size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {graphDetails.sources?.length > 0 && (
+          <div className="space-y-2">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-400 block mb-2 mt-4">
+              Источники знаний ({graphDetails.sources.length})
+            </span>
+            <div className="space-y-1.5">
+              {graphDetails.sources.map((src: any) => (
+                <button
+                  key={src.id}
+                  onClick={() => activeEntity?.onOpenSource?.(src.id)}
+                  className="w-full p-2.5 bg-zinc-900/60 border border-zinc-800/80 rounded-xl flex items-center justify-between text-xs text-left transition-colors hover:bg-zinc-800/60 group"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText size={14} className="text-blue-400 shrink-0" />
+                    <span className="font-medium text-zinc-300 truncate group-hover:text-white transition-colors">
+                      {src.title}
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -145,8 +237,12 @@ export const EntityInspector: React.FC = () => {
           </div>
         )}
 
+        {/* Дополнительные данные узла графа */}
+        {activeEntity.type === 'graph_node' && renderGraphNodeDetails()}
+
         {/* Контекст происхождения (Почему оно здесь) */}
-        <div className="space-y-2">
+        {activeEntity.type !== 'graph_node' && (
+          <div className="space-y-2">
           {activeEntity.meta?.superseded_by && (
             <div className="p-3 mb-2 bg-amber-950/40 border border-amber-900/60 rounded-xl text-xs text-amber-200/80">
               <span className="font-semibold text-amber-400 block mb-1">Заменено новым решением</span>
@@ -185,6 +281,7 @@ export const EntityInspector: React.FC = () => {
             </div>
           ))}
         </div>
+        )}
 
         {/* Graph Copilot Section */}
         <div className="border border-indigo-500/20 rounded-xl overflow-hidden">

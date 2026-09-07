@@ -22,104 +22,135 @@ EDGE_PRIORITY = {
 class GraphTraversalEngine:
     def __init__(self, db: AsyncSession):
         self.db = db
-        
-    async def traverse_from_claims(self, seed_claim_ids: List[uuid.UUID], max_depth: int = 2, limit_neighbors: int = 5) -> str:
+
+    async def traverse_from_claims(
+        self,
+        seed_claim_ids: List[uuid.UUID],
+        max_depth: int = 2,
+        limit_neighbors: int = 5
+    ) -> str:
         """
-        Многошаговый обход графа (Multi-Hop) от заданных стартовых узлов (утверждений).
+        Многошаговый обход графа (Multi-Hop) за 1 SQL-запрос.
+        - Исключает N+1 через JOIN исходного и целевого утверждений.
+        - Отслеживает visited_ids для защиты от циклических зависимостей.
+        - Применяет ранжирование связей и лимит соседей.
         """
         if not seed_claim_ids:
             return ""
-            
-        visited_claims: Set[uuid.UUID] = set(seed_claim_ids)
-        current_layer: Set[uuid.UUID] = set(seed_claim_ids)
-        
-        all_relations_text = []
-        
-        for depth in range(1, max_depth + 1):
-            if not current_layer:
-                break
-                
-            next_layer = set()
-            
-            # 1. Прямые связи через ClaimRelation (исходящие)
-            stmt_out = select(ClaimRelation, Claim).join(Claim, ClaimRelation.target_claim_id == Claim.id).where(
-                ClaimRelation.source_claim_id.in_(current_layer)
+
+        from sqlalchemy import literal, func, union_all, case, and_
+        from sqlalchemy.orm import aliased
+        from sqlalchemy.dialects.postgresql import array
+
+        # Веса типов связей для детерминированного приоритета
+        priority_case = case(
+            (ClaimRelation.relation_type == "supersedes", 4),
+            (ClaimRelation.relation_type == "contradicts", 3),
+            (ClaimRelation.relation_type == "depends_on", 3),
+            (ClaimRelation.relation_type == "supports", 2),
+            (ClaimRelation.relation_type == "applies_to", 2),
+            (ClaimRelation.relation_type == "used_in", 2),
+            else_=0
+        )
+
+        # 1. Приводим ребра к двунаправленному виду: u -> v
+        # Исходящие
+        out_edges = select(
+            ClaimRelation.source_claim_id.label("from_id"),
+            ClaimRelation.target_claim_id.label("to_id"),
+            ClaimRelation.relation_type.label("relation_type"),
+            ClaimRelation.confidence.label("confidence"),
+            priority_case.label("priority")
+        )
+        # Входящие (инвертируем направление, помечая реверс)
+        in_edges = select(
+            ClaimRelation.target_claim_id.label("from_id"),
+            ClaimRelation.source_claim_id.label("to_id"),
+            func.concat("<-", ClaimRelation.relation_type, "-").label("relation_type"),
+            ClaimRelation.confidence.label("confidence"),
+            priority_case.label("priority")
+        )
+        unified_edges = union_all(out_edges, in_edges).subquery("unified_edges")
+
+        # 2. Anchor (Базовый уровень CTE)
+        # Начинаем с seed-узлов на глубине 0
+        anchor_stmt = select(
+            literal(None, type_=unified_edges.c.from_id.type).label("source_id"),
+            Claim.id.label("target_id"),
+            literal(None, type_=unified_edges.c.relation_type.type).label("relation_type"),
+            literal(1.0).label("confidence"),
+            literal(0).label("priority"),
+            literal(0).label("depth"),
+            array([Claim.id]).label("visited_ids")
+        ).where(Claim.id.in_(seed_claim_ids))
+
+        graph_cte = anchor_stmt.cte(name="graph_traversal", recursive=True)
+
+        # 3. Recursive Part CTE
+        # Раскрываем соседей, фильтруя циклы через проверку в массиве visited_ids
+        recurse_stmt = select(
+            graph_cte.c.target_id.label("source_id"),
+            unified_edges.c.to_id.label("target_id"),
+            unified_edges.c.relation_type.label("relation_type"),
+            unified_edges.c.confidence.label("confidence"),
+            unified_edges.c.priority.label("priority"),
+            (graph_cte.c.depth + 1).label("depth"),
+            func.array_append(graph_cte.c.visited_ids, unified_edges.c.to_id).label("visited_ids")
+        ).join(
+            unified_edges,
+            unified_edges.c.from_id == graph_cte.c.target_id
+        ).where(
+            and_(
+                graph_cte.c.depth < max_depth,
+                # Защита от циклов: узел не должен присутствовать в истории текущего пути
+                ~unified_edges.c.to_id.op("=")(func.any(graph_cte.c.visited_ids))
             )
-            out_rels = (await self.db.execute(stmt_out)).all()
-            
-            # 2. Прямые связи через ClaimRelation (входящие)
-            stmt_in = select(ClaimRelation, Claim).join(Claim, ClaimRelation.source_claim_id == Claim.id).where(
-                ClaimRelation.target_claim_id.in_(current_layer)
+        )
+
+        graph_cte = graph_cte.union_all(recurse_stmt)
+
+        # 4. Оконная фильтрация (ROW_NUMBER) и сбор контента Claim без N+1
+        SourceClaim = aliased(Claim, name="source_claim")
+        TargetClaim = aliased(Claim, name="target_claim")
+
+        ranked_subq = select(
+            graph_cte.c.source_id,
+            graph_cte.c.target_id,
+            graph_cte.c.relation_type,
+            graph_cte.c.confidence,
+            graph_cte.c.depth,
+            func.row_number().over(
+                partition_by=[graph_cte.c.source_id, graph_cte.c.depth],
+                order_by=[graph_cte.c.priority.desc(), graph_cte.c.confidence.desc()]
+            ).label("rn")
+        ).where(graph_cte.c.depth > 0).subquery("ranked_edges")
+
+        final_query = (
+            select(
+                ranked_subq.c.depth,
+                ranked_subq.c.relation_type,
+                ranked_subq.c.confidence,
+                SourceClaim.content.label("source_content"),
+                TargetClaim.content.label("target_content")
             )
-            in_rels = (await self.db.execute(stmt_in)).all()
-            
-            # Собираем и ранжируем
-            edges = []
-            
-            for rel, target_claim in out_rels:
-                if target_claim.id not in visited_claims:
-                    edges.append({
-                        "source_id": rel.source_claim_id,
-                        "target_claim": target_claim,
-                        "type": rel.relation_type,
-                        "conf": rel.confidence,
-                        "priority": EDGE_PRIORITY.get(rel.relation_type, 0)
-                    })
-                    
-            for rel, source_claim in in_rels:
-                if source_claim.id not in visited_claims:
-                    edges.append({
-                        "source_id": rel.target_claim_id, # perspective from current layer
-                        "target_claim": source_claim,
-                        "type": f"<-{rel.relation_type}-", # Reverse notation
-                        "conf": rel.confidence,
-                        "priority": EDGE_PRIORITY.get(rel.relation_type, 0)
-                    })
-            
-            # 3. Транзитные связи через Entity
-            stmt_entities = select(claim_entities).where(claim_entities.c.claim_id.in_(current_layer))
-            entities_links = (await self.db.execute(stmt_entities)).mappings().all()
-            entity_ids = [e["entity_id"] for e in entities_links]
-            
-            if entity_ids:
-                stmt_entity_claims = select(claim_entities, Claim).join(Claim, claim_entities.c.claim_id == Claim.id).where(
-                    claim_entities.c.entity_id.in_(entity_ids),
-                    claim_entities.c.claim_id.notin_(visited_claims)
-                )
-                entity_claims_rels = (await self.db.execute(stmt_entity_claims)).all()
-                for c_id, ent_id, e_claim in entity_claims_rels:
-                     edges.append({
-                        "source_id": None, # Transitive, not direct
-                        "target_claim": e_claim,
-                        "type": "shares_entity",
-                        "conf": 1.0,
-                        "priority": 1 # Lower priority
-                     })
-                     
-            # Sort edges by priority and limit
-            edges.sort(key=lambda x: (x["priority"], x["conf"]), reverse=True)
-            edges = edges[:limit_neighbors]
-            
-            # Process selected edges
-            for edge in edges:
-                target_claim = edge["target_claim"]
-                next_layer.add(target_claim.id)
-                visited_claims.add(target_claim.id)
-                
-                # We need source claim text
-                if edge["source_id"]:
-                    source_claim = await self.db.get(Claim, edge["source_id"])
-                    source_text = source_claim.content if source_claim else "Unknown"
-                    if edge["type"].startswith("<-"):
-                        all_relations_text.append(f"[GRAPH RELATION] \"{target_claim.content}\" --({edge['type'][2:-2]})--> \"{source_text}\" (conf: {edge['conf']:.2f})")
-                    else:
-                        all_relations_text.append(f"[GRAPH RELATION] \"{source_text}\" --({edge['type']})--> \"{target_claim.content}\" (conf: {edge['conf']:.2f})")
-                else:
-                    all_relations_text.append(f"[GRAPH RELATION] Транзитная связь через сущность --> \"{target_claim.content}\"")
-                    
-            current_layer = next_layer
-            
-        if not all_relations_text:
+            .join(SourceClaim, SourceClaim.id == ranked_subq.c.source_id)
+            .join(TargetClaim, TargetClaim.id == ranked_subq.c.target_id)
+            .where(ranked_subq.c.rn <= limit_neighbors)
+            .order_by(ranked_subq.c.depth.asc(), ranked_subq.c.confidence.desc())
+        )
+
+        rows = (await self.db.execute(final_query)).all()
+        if not rows:
             return ""
-            
-        return "\n".join(all_relations_text)
+
+        # Формирование итогового графового контекста
+        formatted_relations = []
+        for row in rows:
+            rel = (
+                f"[Hop {row.depth}] \"{row.source_content}\" "
+                f"--({row.relation_type})--> "
+                f"\"{row.target_content}\" (conf: {row.confidence:.2f})"
+            )
+            formatted_relations.append(rel)
+
+        return "\n".join(formatted_relations)

@@ -1,8 +1,8 @@
 from typing import List, Tuple
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.db.models import Source, Claim, Chunk
-from app.learning.schemas import LearningScope
+from ..db.models import Source, Claim, Chunk
+from ..learning.schemas import LearningScope
 
 class LearningContextResolver:
     def __init__(self, db_session):

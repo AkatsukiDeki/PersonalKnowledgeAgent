@@ -1,15 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Message, Citation, OrbitContext } from '../../types/chat';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Message, Citation, OrbitContext, ChatMode, LearningContext } from '../../types/chat';
 import { streamChat } from '../../api/chat';
 import { conversationsApi } from '../../api/conversations';
 import { MessageView } from './MessageView';
-import { MessageLatencyBadge } from './MessageLatencyBadge';
-import { Send, Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose, Zap, Database, HelpCircle, Rocket, Satellite, AudioLines } from 'lucide-react';
+import { Loader2, Paperclip, X, Sparkles, PanelLeft, PanelLeftClose, Zap, Database, HelpCircle, Rocket, Satellite, AudioLines } from 'lucide-react';
 import { ConversationSidebar } from './ConversationSidebar';
 import { sourcesApi } from '../../api/sources';
 import { profileApi } from '../../api/profile';
 import { ChatModeSelector } from './ChatModeSelector';
-import { ChatMode, LearningContext } from '../../types/chat';
+import { ActiveAudioProvider } from './ActiveAudioContext';
+import { useCopilot } from '../../hooks/useCopilot';
+import { CopilotTextarea } from './CopilotTextarea';
 
 interface Props {
   onOrbitUpdate?: (ctx: OrbitContext | null) => void;
@@ -35,6 +36,19 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   });
   const [learningContext, setLearningContext] = useState<LearningContext | undefined>(undefined);
 
+  const lastMsg = messages.length > 0 ? messages[messages.length - 1] : undefined;
+  const lastAssistantContent = lastMsg && lastMsg.role === 'assistant' ? lastMsg.content : undefined;
+
+  const {
+    suggestion,
+    handleInputChange: handleCopilotChange,
+    acceptSuggestion,
+    dismissSuggestion,
+  } = useCopilot({
+    debounceMs: 350,
+    lastAssistantMessage: lastAssistantContent,
+  });
+
   useEffect(() => {
     localStorage.setItem('pka_chat_mode', chatMode);
   }, [chatMode]);
@@ -47,23 +61,22 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   });
   const [isSeeded, setIsSeeded] = useState(false);
 
-  const [attachedFiles, setAttachedFiles] = useState<{id: string, name: string, status?: string}[]>([]);
+  const [attachedFiles, setAttachedFiles] = useState<{ id: string; name: string; status?: string }[]>([]);
   const [attachedImage, setAttachedImage] = useState<{
     file: File;
     previewUrl: string;
     base64: string;
     mimeType: string;
   } | null>(null);
-  
+
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [mediaProfile, setMediaProfile] = useState<'speech' | 'music'>('speech');
-  const fileInputRef = React.useRef<HTMLInputElement>(null);
-  const skipLoadRef = React.useRef(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const skipLoadRef = useRef(false);
 
-  const messagesEndRef = React.useRef<HTMLDivElement| null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -74,7 +87,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       if (skipLoadRef.current) {
         skipLoadRef.current = false;
       } else {
-        loadConversation(activeConvId);
+        void loadConversation(activeConvId);
       }
     } else {
       localStorage.removeItem('pka_active_conv_id');
@@ -97,14 +110,14 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         setActiveConvId(convId);
       }
     };
-    
+
     const handleInjectPrompt = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (customEvent.detail) {
         setInput(customEvent.detail);
       }
     };
-    
+
     const handleOpenChatContext = (e: Event) => {
       const customEvent = e as CustomEvent;
       if (customEvent.detail) {
@@ -112,18 +125,20 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         if (customEvent.detail.learningContext) setLearningContext(customEvent.detail.learningContext);
       }
     };
-    
+
     window.addEventListener('openConversation', handleOpenConv);
     window.addEventListener('injectChatPrompt', handleInjectPrompt);
     window.addEventListener('openChatWithContext', handleOpenChatContext);
-    
-    // Check if user is already seeded
-    profileApi.getProfile().then(profile => {
-      if (profile && profile.is_seeded) {
-        setIsSeeded(true);
-      }
-    }).catch(err => console.error("Failed to fetch profile", err));
-    
+
+    profileApi
+      .getProfile()
+      .then((profile) => {
+        if (profile && profile.is_seeded) {
+          setIsSeeded(true);
+        }
+      })
+      .catch((err) => console.error('Failed to fetch profile', err));
+
     return () => {
       window.removeEventListener('openConversation', handleOpenConv);
       window.removeEventListener('injectChatPrompt', handleInjectPrompt);
@@ -131,15 +146,18 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     };
   }, []);
 
-  const pushOrbit = useCallback((ctx: OrbitContext | null) => {
-    onOrbitUpdate?.(ctx);
-  }, [onOrbitUpdate]);
+  const pushOrbit = useCallback(
+    (ctx: OrbitContext | null) => {
+      onOrbitUpdate?.(ctx);
+    },
+    [onOrbitUpdate]
+  );
 
   const loadConversation = async (id: string) => {
     try {
       const data = await conversationsApi.getConversationDetail(id);
 
-      const formatted = data.messages.map(m => {
+      const formatted: Message[] = data.messages.map((m) => {
         let r: 'user' | 'assistant' = 'user';
         if (m.role === 'assistant' || m.role === 'system') r = 'assistant';
         return {
@@ -154,31 +172,29 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       });
       setMessages(formatted);
 
-      // Push decisions to orbit
       pushOrbit({
         decisions: data.decisions || [],
         evidences: [],
         insights: [],
       });
     } catch (err) {
-      console.error("Failed to load conversation", err);
+      console.error('Failed to load conversation', err);
     }
   };
 
   const handleNewConversation = async () => {
     try {
-      const conv = await conversationsApi.createConversation("Новый диалог");
+      const conv = await conversationsApi.createConversation('Новый диалог');
       setActiveConvId(conv.id);
     } catch (err) {
-      console.error("Failed to create conversation", err);
+      console.error('Failed to create conversation', err);
     }
   };
 
   const handleSubmit = async (e: React.FormEvent, overrideInput?: string) => {
     e.preventDefault();
     const textToSend = overrideInput !== undefined ? overrideInput : input;
-    
-    // Allow empty text only if there's an attached image or file
+
     if ((!textToSend.trim() && !attachedImage && attachedFiles.length === 0) || isLoading || isCooldown) return;
 
     let targetConvId = activeConvId;
@@ -191,7 +207,7 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         skipLoadRef.current = true;
         setActiveConvId(conv.id);
       } catch (err) {
-        console.error("Failed to create first conversation", err);
+        console.error('Failed to create first conversation', err);
         return;
       }
     }
@@ -227,12 +243,12 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     let streamBuffer = '';
     let currentCitations: Citation[] = [];
 
-    const sourceIds = attachedFiles.map(f => f.id);
+    const sourceIds = attachedFiles.map((f) => f.id);
     const imagePayload = attachedImage;
-    
+
     setAttachedFiles([]);
     setAttachedImage(null);
-    
+
     await streamChat(
       userMsg.content,
       history,
@@ -249,11 +265,8 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       (citations) => {
         currentCitations = citations;
         setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId ? { ...msg, citations } : msg
-          )
+          prev.map((msg) => (msg.id === assistantId ? { ...msg, citations } : msg))
         );
-        // Push evidences to orbit
         pushOrbit({
           decisions: [],
           evidences: citations,
@@ -263,17 +276,13 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
       (token) => {
         streamBuffer += token;
         setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === assistantId ? { ...msg, content: streamBuffer } : msg
-          )
+          prev.map((msg) => (msg.id === assistantId ? { ...msg, content: streamBuffer } : msg))
         );
       },
       (error) => {
         setMessages((prev) =>
           prev.map((msg) =>
-            msg.id === assistantId
-              ? { ...msg, content: `Ошибка: ${error}`, isStreaming: false }
-              : msg
+            msg.id === assistantId ? { ...msg, content: `Ошибка: ${error}`, isStreaming: false } : msg
           )
         );
         setIsLoading(false);
@@ -317,23 +326,16 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     );
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit(e as unknown as React.FormEvent);
-    }
-  };
-
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(true);
   };
-  
+
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
   };
-  
+
   const handleImageAttach = (file: File) => {
     const reader = new FileReader();
     reader.onload = (e) => {
@@ -352,23 +354,28 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const file = e.dataTransfer.files[0];
-      if (file.type.startsWith('image/')) {
-        handleImageAttach(file);
-      } else {
-        await handleFileUpload(file);
+    const files = Array.from(e.dataTransfer.files || []);
+    if (files.length > 0) {
+      const file = files[0];
+      if (file) {
+        if (file.type.startsWith('image/')) {
+          handleImageAttach(file);
+        } else {
+          await handleFileUpload(file);
+        }
       }
     }
   };
 
   const handlePaste = async (e: React.ClipboardEvent) => {
-    const items = e.clipboardData.items;
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].type.indexOf('image') !== -1) {
+    const items = Array.from(e.clipboardData?.items || []);
+    for (const item of items) {
+      if (item && item.type.indexOf('image') !== -1) {
         e.preventDefault();
-        const file = items[i].getAsFile();
-        if (file) handleImageAttach(file);
+        const file = item.getAsFile();
+        if (file) {
+          handleImageAttach(file);
+        }
         break;
       }
     }
@@ -379,23 +386,23 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     try {
       if (file.type.startsWith('audio/') || file.type.startsWith('video/')) {
         const source = await sourcesApi.uploadMedia(file, mediaProfile);
-        setAttachedFiles(prev => [...prev, { id: source.id, name: file.name, status: source.status }]);
+        setAttachedFiles((prev) => [...prev, { id: source.id, name: file.name, status: source.status }]);
       } else {
         const source = await sourcesApi.upload(file);
-        setAttachedFiles(prev => [...prev, { id: source.id, name: file.name, status: source.status }]);
+        setAttachedFiles((prev) => [...prev, { id: source.id, name: file.name, status: source.status }]);
       }
     } catch (err) {
-      console.error("Failed to upload file", err);
-      alert("Ошибка при загрузке файла");
+      console.error('Failed to upload file', err);
+      alert('Ошибка при загрузке файла');
     } finally {
       setIsUploading(false);
     }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      for (let i = 0; i < e.target.files.length; i++) {
-        const file = e.target.files[i];
+    const files = Array.from(e.target.files || []);
+    if (files.length > 0) {
+      for (const file of files) {
         if (file.type.startsWith('image/')) {
           handleImageAttach(file);
         } else {
@@ -407,358 +414,410 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   };
 
   return (
-    <div className="flex h-full w-full bg-transparent">
-      {isSidebarOpen && (
-        <>
-          {/* Mobile backdrop */}
-          <div 
-            className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[90] sm:hidden transition-opacity"
-            onClick={() => setIsSidebarOpen(false)}
-          />
-          <ConversationSidebar
-            activeConversationId={activeConvId}
-            onSelectConversation={(id) => {
-              setActiveConvId(id);
-              if (window.innerWidth < 640) setIsSidebarOpen(false);
-            }}
-            onNewConversation={() => {
-              handleNewConversation();
-              if (window.innerWidth < 640) setIsSidebarOpen(false);
-            }}
-          />
-        </>
-      )}
-
-      <div 
-        className="flex flex-col flex-1 h-full min-w-0 relative text-slate-200 overflow-hidden"
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-      >
-        {/* Cosmic Background */}
-        <div className="absolute inset-0 pointer-events-none z-0 bg-[#030308]">
-          <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#05050a]/80 to-[#020205]" />
-          <div className="absolute inset-0 opacity-40" style={{ backgroundImage: 'radial-gradient(1px 1px at 25px 25px, white, transparent), radial-gradient(1px 1px at 75px 75px, white, transparent), radial-gradient(1.5px 1.5px at 120px 40px, #a5b4fc, transparent), radial-gradient(1.5px 1.5px at 40px 120px, #c4b5fd, transparent)', backgroundSize: '200px 200px' }} />
-          <div className="absolute inset-0 opacity-30" style={{ backgroundImage: 'radial-gradient(1px 1px at 10px 150px, white, transparent), radial-gradient(1px 1px at 170px 10px, white, transparent), radial-gradient(2px 2px at 150px 150px, #818cf8, transparent)', backgroundSize: '250px 250px' }} />
-        </div>
-
-        {isDragging && (
-          <div className="absolute inset-0 z-50 bg-indigo-500/10 backdrop-blur-sm border-2 border-dashed border-indigo-500/50 flex items-center justify-center rounded-2xl m-4">
-            <p className="text-indigo-400 font-medium text-lg">Перетащите файл сюда для загрузки</p>
-          </div>
+    <ActiveAudioProvider>
+      <div className="flex h-full w-full bg-transparent">
+        {isSidebarOpen && (
+          <>
+            <div
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[90] sm:hidden transition-opacity"
+              onClick={() => setIsSidebarOpen(false)}
+            />
+            <ConversationSidebar
+              activeConversationId={activeConvId}
+              onSelectConversation={(id) => {
+                setActiveConvId(id);
+                if (window.innerWidth < 640) setIsSidebarOpen(false);
+              }}
+              onNewConversation={() => {
+                void handleNewConversation();
+                if (window.innerWidth < 640) setIsSidebarOpen(false);
+              }}
+            />
+          </>
         )}
 
-        {/* Action Header */}
-        <header className="flex-shrink-0 w-full pt-[calc(1rem+env(safe-area-inset-top))] px-4 sm:px-6 pb-2 flex items-center justify-between z-20 relative">
-          <button
-            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-            className="p-2 sm:p-2.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center w-10 h-10 sm:w-auto sm:h-auto shrink-0"
-            title="Переключить боковую панель"
-          >
-            {isSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
-          </button>
-          
-          <div className="flex-1 min-w-0" />
-          
-          {activeConvId && messages.length > 0 && (
-            <button
-              onClick={() => window.dispatchEvent(new CustomEvent('focusNode', { detail: activeConvId }))}
-              className="shrink-0 flex items-center gap-1.5 px-3 py-2 sm:py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-xl transition-all shadow-lg active:scale-95"
-              title="Показать на карте Вселенной"
-            >
-              <Sparkles size={16} className="sm:w-[14px] sm:h-[14px]" />
-              <span className="hidden sm:inline">В Galaxy</span>
-            </button>
-          )}
-        </header>
-
-        {/* Message stream */}
-        <main 
-          className="flex-1 min-h-0 overflow-y-auto w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
-          style={{ maskImage: 'linear-gradient(to bottom, transparent 0%, black 20px, black 100%)', WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 20px, black 100%)' }}
+        <div
+          className="flex flex-col flex-1 h-full min-w-0 relative text-slate-200 overflow-hidden"
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          onPaste={handlePaste}
         >
-          <div className="max-w-3xl w-full mx-auto px-6 h-full">
-            {messages.length === 0 ? (
-              <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm pt-10">
-                {!isSeeded ? (
-                  <>
-                    <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
-                      🪐
+          <div className="absolute inset-0 pointer-events-none z-0 bg-[#030308]">
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#05050a]/80 to-[#020205]" />
+            <div
+              className="absolute inset-0 opacity-40"
+              style={{
+                backgroundImage:
+                  'radial-gradient(1px 1px at 25px 25px, white, transparent), radial-gradient(1px 1px at 75px 75px, white, transparent), radial-gradient(1.5px 1.5px at 120px 40px, #a5b4fc, transparent), radial-gradient(1.5px 1.5px at 40px 120px, #c4b5fd, transparent)',
+                backgroundSize: '200px 200px',
+              }}
+            />
+            <div
+              className="absolute inset-0 opacity-30"
+              style={{
+                backgroundImage:
+                  'radial-gradient(1px 1px at 10px 150px, white, transparent), radial-gradient(1px 1px at 170px 10px, white, transparent), radial-gradient(2px 2px at 150px 150px, #818cf8, transparent)',
+                backgroundSize: '250px 250px',
+              }}
+            />
+          </div>
+
+          {isDragging && (
+            <div className="absolute inset-0 z-50 bg-indigo-500/10 backdrop-blur-sm border-2 border-dashed border-indigo-500/50 flex items-center justify-center rounded-2xl m-4">
+              <p className="text-indigo-400 font-medium text-lg">Перетащите файл сюда для загрузки</p>
+            </div>
+          )}
+
+          <header className="flex-shrink-0 w-full pt-[calc(1rem+env(safe-area-inset-top))] px-4 sm:px-6 pb-2 flex items-center justify-between z-20 relative">
+            <button
+              onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+              className="p-2 sm:p-2.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 rounded-xl transition-all shadow-lg active:scale-95 flex items-center justify-center w-10 h-10 sm:w-auto sm:h-auto shrink-0"
+              title="Переключить боковую панель"
+            >
+              {isSidebarOpen ? <PanelLeftClose size={20} /> : <PanelLeft size={20} />}
+            </button>
+
+            <div className="flex-1 min-w-0" />
+
+            {activeConvId && messages.length > 0 && (
+              <button
+                onClick={() => window.dispatchEvent(new CustomEvent('focusNode', { detail: activeConvId }))}
+                className="shrink-0 flex items-center gap-1.5 px-3 py-2 sm:py-1.5 bg-indigo-500/10 hover:bg-indigo-500/20 backdrop-blur-md border border-indigo-500/30 text-indigo-300 text-xs font-medium rounded-xl transition-all shadow-lg active:scale-95"
+                title="Показать на карте Вселенной"
+              >
+                <Sparkles size={16} className="sm:w-[14px] sm:h-[14px]" />
+                <span className="hidden sm:inline">В Galaxy</span>
+              </button>
+            )}
+          </header>
+
+          <main
+            className="flex-1 min-h-0 overflow-y-auto w-full scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent relative z-10"
+            style={{
+              maskImage: 'linear-gradient(to bottom, transparent 0%, black 20px, black 100%)',
+              WebkitMaskImage: 'linear-gradient(to bottom, transparent 0%, black 20px, black 100%)',
+            }}
+          >
+            <div className="max-w-3xl w-full mx-auto px-6 h-full">
+              {messages.length === 0 ? (
+                <div className="h-full flex flex-col gap-6 items-center justify-center text-white/60 text-sm pt-10">
+                  {!isSeeded ? (
+                    <>
+                      <div className="w-12 h-12 rounded-full bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-2">
+                        🪐
+                      </div>
+                      <div className="text-center space-y-2">
+                        <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
+                        <p className="font-light max-w-sm">
+                          База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).
+                        </p>
+                      </div>
+                      {!activeConvId && (
+                        <button
+                          onClick={(e) => {
+                            const seedText =
+                              'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
+                            setInput(seedText);
+                            void handleSubmit(e, seedText);
+                          }}
+                          className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
+                        >
+                          Начать инициализацию (Primary Seed)
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <div className="flex flex-col items-center gap-6 max-w-2xl w-full">
+                      <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-4 shadow-[0_0_30px_-5px_rgba(99,102,241,0.3)]">
+                        <Sparkles size={28} />
+                      </div>
+
+                      <h2 className="text-2xl text-white font-semibold tracking-tight">Как обращаться к агенту?</h2>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
+                        <div
+                          onClick={(e) => {
+                            setChatMode('fast');
+                            const text = 'Кто ты, что ты умеешь и какие у тебя функции?';
+                            setInput(text);
+                            void handleSubmit(e, text);
+                          }}
+                          className="p-5 rounded-2xl bg-[#0f0f16]/80 border border-white/5 hover:border-indigo-500/30 hover:bg-indigo-500/5 transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center gap-2 text-indigo-300 font-medium mb-3 group-hover:text-indigo-200">
+                            <Zap size={16} /> Fast-режим (Мгновенный ответ)
+                          </div>
+                          <p className="text-xs text-white/50 mb-4 leading-relaxed group-hover:text-white/60">
+                            Без тяжелого поиска по базе. Подходит для мета-вопросов о системе и агенте. Нажмите, чтобы спросить:
+                          </p>
+                          <ul className="space-y-2 text-xs text-white/80">
+                            <li className="flex items-start gap-2">
+                              <span className="text-indigo-400 font-bold">›</span> кто ты, что ты умеешь, какие функции
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="text-indigo-400 font-bold">›</span> настройки, профиль, конфигурация
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="text-indigo-400 font-bold">›</span> очисти контекст, новый чат, справка
+                            </li>
+                          </ul>
+                        </div>
+
+                        <div
+                          onClick={(e) => {
+                            setChatMode('vault');
+                            const text = 'Что известно о твоей архитектуре, как ты устроен?';
+                            setInput(text);
+                            void handleSubmit(e, text);
+                          }}
+                          className="p-5 rounded-2xl bg-[#0f0f16]/80 border border-white/5 hover:border-emerald-500/30 hover:bg-emerald-500/5 transition-all cursor-pointer group"
+                        >
+                          <div className="flex items-center gap-2 text-emerald-400 font-medium mb-3 group-hover:text-emerald-300">
+                            <Database size={16} /> RAG-режим (База Знаний)
+                          </div>
+                          <p className="text-xs text-white/50 mb-4 leading-relaxed group-hover:text-white/60">
+                            Глубокий поиск по документам, графу и инвариантам. Нажмите, чтобы спросить:
+                          </p>
+                          <ul className="space-y-2 text-xs text-white/80">
+                            <li className="flex items-start gap-2">
+                              <span className="text-emerald-400 font-bold">›</span> найди, поищи, что известно о...
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="text-emerald-400 font-bold">›</span> когда, где, сколько, почему, как устроено
+                            </li>
+                            <li className="flex items-start gap-2">
+                              <span className="text-emerald-400 font-bold">›</span> документ, заметка, проект, инвариант
+                            </li>
+                          </ul>
+                        </div>
+                      </div>
                     </div>
-                    <div className="text-center space-y-2">
-                      <h2 className="text-xl text-white font-medium">Welcome to Universe 2.0</h2>
-                      <p className="font-light max-w-sm">База знаний пуста. Чтобы агент мог понимать ваш контекст, давайте проведем начальную настройку (Primary Seed).</p>
-                    </div>
-                    {!activeConvId && (
-                      <button
-                        onClick={(e) => {
-                          const seedText = 'Привет! Давай проведем базовую настройку (Primary Seed). Расскажи, какие данные тебе нужны для старта?';
-                          setInput(seedText);
-                          handleSubmit(e as any, seedText);
-                        }}
-                        className="px-6 py-2.5 bg-indigo-600/80 hover:bg-indigo-500 text-white border border-indigo-500/50 rounded-xl text-sm font-medium transition-all shadow-lg shadow-indigo-500/20"
-                      >
-                        Начать инициализацию (Primary Seed)
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {messages.map((msg) => (
+                    <MessageView key={msg.id} message={msg} />
+                  ))}
+                  <div className="h-8 shrink-0" />
+                  <div ref={messagesEndRef} />
+                </div>
+              )}
+            </div>
+          </main>
+
+          {loadingStatus && (
+            <div className="max-w-3xl w-full mx-auto px-6 pb-2">
+              <div className="flex items-center gap-2.5 text-xs text-indigo-400/80 font-mono">
+                <Loader2 size={13} className="animate-spin" />
+                <span>{loadingStatus}</span>
+              </div>
+            </div>
+          )}
+
+          <footer className="flex-shrink-0 w-full pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2 px-2 sm:px-4 relative z-20">
+            <div className="max-w-3xl mx-auto w-full flex flex-col items-start select-none">
+              <div className="flex justify-between items-center w-full relative mb-1">
+                <ChatModeSelector
+                  value={chatMode}
+                  onChange={setChatMode}
+                  learningSubject={learningContext?.subject_name}
+                  onClearSubject={() => {
+                    setLearningContext(undefined);
+                    if (chatMode === 'learning') setChatMode('vault');
+                  }}
+                />
+
+                <button
+                  type="button"
+                  onClick={() => setShowHelpPopover(!showHelpPopover)}
+                  className={`p-2.5 rounded-xl transition-colors flex items-center justify-center active:scale-95 ${
+                    showHelpPopover
+                      ? 'bg-indigo-500/20 text-indigo-300'
+                      : 'bg-transparent hover:bg-white/5 text-white/40 hover:text-white/80'
+                  }`}
+                  title="Показать подсказки по режимам"
+                >
+                  <HelpCircle size={20} />
+                </button>
+
+                {showHelpPopover && (
+                  <div className="absolute bottom-full right-0 mb-2 w-[calc(100vw-2rem)] sm:w-80 max-w-xs bg-[#0f0f16]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-bottom-2">
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="text-sm font-medium text-white">Быстрые команды</h3>
+                      <button onClick={() => setShowHelpPopover(false)} className="p-2 -mr-2 text-white/40 hover:text-white/80 active:scale-95">
+                        <X size={16} />
                       </button>
-                    )}
-                  </>
-                ) : (
-                  <div className="flex flex-col items-center gap-6 max-w-2xl w-full">
-                    <div className="w-16 h-16 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400 mb-4 shadow-[0_0_30px_-5px_rgba(99,102,241,0.3)]">
-                      <Sparkles size={28} />
                     </div>
-                    
-                    <h2 className="text-2xl text-white font-semibold tracking-tight">Как обращаться к агенту?</h2>
-                    
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full">
-                      <div 
+
+                    <div className="space-y-2">
+                      <div
                         onClick={(e) => {
                           setChatMode('fast');
                           const text = 'Кто ты, что ты умеешь и какие у тебя функции?';
                           setInput(text);
-                          handleSubmit(e as any, text);
+                          setShowHelpPopover(false);
+                          void handleSubmit(e, text);
                         }}
-                        className="p-5 rounded-2xl bg-[#0f0f16]/80 border border-white/5 hover:border-indigo-500/30 hover:bg-indigo-500/5 transition-all cursor-pointer group"
+                        className="p-3 rounded-xl bg-white/5 hover:bg-indigo-500/20 border border-transparent hover:border-indigo-500/30 transition-all cursor-pointer group active:scale-95"
                       >
-                        <div className="flex items-center gap-2 text-indigo-300 font-medium mb-3 group-hover:text-indigo-200">
-                          <Zap size={16} /> Fast-режим (Мгновенный ответ)
+                        <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium mb-1">
+                          <Zap size={14} /> Спросить про функции (Fast)
                         </div>
-                        <p className="text-xs text-white/50 mb-4 leading-relaxed group-hover:text-white/60">
-                          Без тяжелого поиска по базе. Подходит для мета-вопросов о системе и агенте. Нажмите, чтобы спросить:
+                        <p className="text-[10px] text-white/50 group-hover:text-white/70 leading-relaxed">
+                          Узнать, что умеет агент. Работает мгновенно без поиска по базе.
                         </p>
-                        <ul className="space-y-2 text-xs text-white/80">
-                          <li className="flex items-start gap-2"><span className="text-indigo-400 font-bold">›</span> кто ты, что ты умеешь, какие функции</li>
-                          <li className="flex items-start gap-2"><span className="text-indigo-400 font-bold">›</span> настройки, профиль, конфигурация</li>
-                          <li className="flex items-start gap-2"><span className="text-indigo-400 font-bold">›</span> очисти контекст, новый чат, справка</li>
-                        </ul>
                       </div>
 
-                      <div 
+                      <div
                         onClick={(e) => {
                           setChatMode('vault');
                           const text = 'Что известно о твоей архитектуре, как ты устроен?';
                           setInput(text);
-                          handleSubmit(e as any, text);
+                          setShowHelpPopover(false);
+                          void handleSubmit(e, text);
                         }}
-                        className="p-5 rounded-2xl bg-[#0f0f16]/80 border border-white/5 hover:border-emerald-500/30 hover:bg-emerald-500/5 transition-all cursor-pointer group"
+                        className="p-3 rounded-xl bg-white/5 hover:bg-emerald-500/20 border border-transparent hover:border-emerald-500/30 transition-all cursor-pointer group active:scale-95"
                       >
-                        <div className="flex items-center gap-2 text-emerald-400 font-medium mb-3 group-hover:text-emerald-300">
-                          <Database size={16} /> RAG-режим (База Знаний)
+                        <div className="flex items-center gap-2 text-emerald-400 text-xs font-medium mb-1">
+                          <Database size={14} /> Найти информацию (RAG)
                         </div>
-                        <p className="text-xs text-white/50 mb-4 leading-relaxed group-hover:text-white/60">
-                          Глубокий поиск по документам, графу и инвариантам. Нажмите, чтобы спросить:
+                        <p className="text-[10px] text-white/50 group-hover:text-white/70 leading-relaxed">
+                          Искать по всей вашей базе знаний (документы, инсайты, решения).
                         </p>
-                        <ul className="space-y-2 text-xs text-white/80">
-                          <li className="flex items-start gap-2"><span className="text-emerald-400 font-bold">›</span> найди, поищи, что известно о...</li>
-                          <li className="flex items-start gap-2"><span className="text-emerald-400 font-bold">›</span> когда, где, сколько, почему, как устроено</li>
-                          <li className="flex items-start gap-2"><span className="text-emerald-400 font-bold">›</span> документ, заметка, проект, инвариант</li>
-                        </ul>
                       </div>
                     </div>
                   </div>
                 )}
               </div>
-            ) : (
-              <div className="space-y-6">
-                {messages.map((msg) => (
-                  <MessageView key={msg.id} message={msg} />
-                ))}
-                {/* Spacer so the last message is pushed above the input bar when scrolling to the end */}
-                <div className="h-8 shrink-0" />
-                <div ref={messagesEndRef} />
-              </div>
-            )}
-          </div>
-        </main>
 
-        {/* Loading status */}
-        {loadingStatus && (
-          <div className="max-w-3xl w-full mx-auto px-6 pb-2">
-            <div className="flex items-center gap-2.5 text-xs text-indigo-400/80 font-mono">
-              <Loader2 size={13} className="animate-spin" />
-              <span>{loadingStatus}</span>
-            </div>
-          </div>
-        )}
-
-        {/* Glass Input Bar */}
-        <footer className="flex-shrink-0 w-full pb-[calc(1rem+env(safe-area-inset-bottom))] pt-2 px-2 sm:px-4 relative z-20">
-          <div className="max-w-3xl mx-auto w-full flex flex-col items-start select-none">
-          
-          <div className="flex justify-between items-center w-full relative mb-1">
-            <ChatModeSelector 
-              value={chatMode} 
-              onChange={setChatMode} 
-              learningSubject={learningContext?.subject_name}
-              onClearSubject={() => {
-                setLearningContext(undefined);
-                if (chatMode === 'learning') setChatMode('vault');
-              }}
-            />
-            
-            <button
-              type="button"
-              onClick={() => setShowHelpPopover(!showHelpPopover)}
-              className={`p-2.5 rounded-xl transition-colors flex items-center justify-center active:scale-95 ${showHelpPopover ? 'bg-indigo-500/20 text-indigo-300' : 'bg-transparent hover:bg-white/5 text-white/40 hover:text-white/80'}`}
-              title="Показать подсказки по режимам"
-            >
-              <HelpCircle size={20} />
-            </button>
-
-            {showHelpPopover && (
-              <div className="absolute bottom-full right-0 mb-2 w-[calc(100vw-2rem)] sm:w-80 max-w-xs bg-[#0f0f16]/95 backdrop-blur-xl border border-white/10 rounded-2xl shadow-2xl p-4 z-50 animate-in fade-in slide-in-from-bottom-2">
-                <div className="flex justify-between items-center mb-3">
-                  <h3 className="text-sm font-medium text-white">Быстрые команды</h3>
-                  <button onClick={() => setShowHelpPopover(false)} className="p-2 -mr-2 text-white/40 hover:text-white/80 active:scale-95">
-                    <X size={16} />
-                  </button>
-                </div>
-                
-                <div className="space-y-2">
-                  <div 
-                    onClick={(e) => {
-                      setChatMode('fast');
-                      const text = 'Кто ты, что ты умеешь и какие у тебя функции?';
-                      setInput(text);
-                      setShowHelpPopover(false);
-                      handleSubmit(e as any, text);
-                    }}
-                    className="p-3 rounded-xl bg-white/5 hover:bg-indigo-500/20 border border-transparent hover:border-indigo-500/30 transition-all cursor-pointer group active:scale-95"
-                  >
-                    <div className="flex items-center gap-2 text-indigo-300 text-xs font-medium mb-1">
-                      <Zap size={14} /> Спросить про функции (Fast)
+              {(attachedFiles.length > 0 || attachedImage) && (
+                <div className="flex flex-wrap gap-2 mb-2 px-1">
+                  {attachedFiles.map((file) => (
+                    <div
+                      key={file.id}
+                      className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-200 text-xs px-2.5 py-1 rounded-md border border-indigo-500/30"
+                    >
+                      {file.status === 'processing' && <Loader2 size={12} className="animate-spin text-amber-400" />}
+                      <span className="truncate max-w-[150px]">{file.name}</span>
+                      <button
+                        onClick={() => setAttachedFiles((prev) => prev.filter((f) => f.id !== file.id))}
+                        className="p-1 hover:text-white transition-colors active:scale-95"
+                      >
+                        <X size={12} />
+                      </button>
                     </div>
-                    <p className="text-[10px] text-white/50 group-hover:text-white/70 leading-relaxed">
-                      Узнать, что умеет агент. Работает мгновенно без поиска по базе.
-                    </p>
-                  </div>
-
-                  <div 
-                    onClick={(e) => {
-                      setChatMode('vault');
-                      const text = 'Что известно о твоей архитектуре, как ты устроен?';
-                      setInput(text);
-                      setShowHelpPopover(false);
-                      handleSubmit(e as any, text);
-                    }}
-                    className="p-3 rounded-xl bg-white/5 hover:bg-emerald-500/20 border border-transparent hover:border-emerald-500/30 transition-all cursor-pointer group active:scale-95"
-                  >
-                    <div className="flex items-center gap-2 text-emerald-400 text-xs font-medium mb-1">
-                      <Database size={14} /> Найти информацию (RAG)
+                  ))}
+                  {attachedImage && (
+                    <div className="relative group bg-[#111116]/80 backdrop-blur-xl border border-indigo-500/20 rounded-xl p-1.5 flex items-center gap-3">
+                      <img src={attachedImage.previewUrl} alt="Preview" className="w-10 h-10 object-cover rounded-lg border border-white/5" />
+                      <div className="flex flex-col mr-6">
+                        <span className="text-[11px] font-medium text-white/90 truncate max-w-[150px]">{attachedImage.file.name}</span>
+                        <span className="text-[9px] text-white/40 uppercase font-mono">{(attachedImage.file.size / 1024).toFixed(1)} KB</span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setAttachedImage(null)}
+                        className="absolute top-1.5 right-1.5 w-6 h-6 bg-black/60 hover:bg-red-500/80 text-white rounded-full flex items-center justify-center transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 active:scale-95"
+                      >
+                        <X size={12} />
+                      </button>
                     </div>
-                    <p className="text-[10px] text-white/50 group-hover:text-white/70 leading-relaxed">
-                      Искать по всей вашей базе знаний (документы, инсайты, решения).
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-
-          {(attachedFiles.length > 0 || attachedImage) && (
-            <div className="flex flex-wrap gap-2 mb-2 px-1">
-              {attachedFiles.map(file => (
-                <div key={file.id} className="flex items-center gap-1.5 bg-indigo-500/20 text-indigo-200 text-xs px-2.5 py-1 rounded-md border border-indigo-500/30">
-                  {file.status === 'processing' && <Loader2 size={12} className="animate-spin text-amber-400" />}
-                  <span className="truncate max-w-[150px]">{file.name}</span>
-                  <button onClick={() => setAttachedFiles(prev => prev.filter(f => f.id !== file.id))} className="p-1 hover:text-white transition-colors active:scale-95">
-                    <X size={12} />
-                  </button>
-                </div>
-              ))}
-              {attachedImage && (
-                <div className="relative group bg-[#111116]/80 backdrop-blur-xl border border-indigo-500/20 rounded-xl p-1.5 flex items-center gap-3">
-                  <img src={attachedImage.previewUrl} alt="Preview" className="w-10 h-10 object-cover rounded-lg border border-white/5" />
-                  <div className="flex flex-col mr-6">
-                    <span className="text-[11px] font-medium text-white/90 truncate max-w-[150px]">{attachedImage.file.name}</span>
-                    <span className="text-[9px] text-white/40 uppercase font-mono">{(attachedImage.file.size / 1024).toFixed(1)} KB</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setAttachedImage(null)}
-                    className="absolute top-1.5 right-1.5 w-6 h-6 bg-black/60 hover:bg-red-500/80 text-white rounded-full flex items-center justify-center transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100 active:scale-95"
-                  >
-                    <X size={12} />
-                  </button>
+                  )}
                 </div>
               )}
-            </div>
-          )}
-          
-          <form
-            id="chat-input-form"
-            onSubmit={handleSubmit}
-            className="w-full bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-2 p-1.5 sm:gap-3 sm:p-2 shadow-2xl transition-all focus-within:border-white/20"
-          >
-            <input 
-              type="file" 
-              accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.json,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a,.mp4,.mkv,.webm,.ogg,audio/*,video/*"
-              multiple
-              ref={fileInputRef} 
-              className="hidden" 
-              onChange={handleFileChange}
-            />
-            
-            <div className="flex flex-col items-center shrink-0 self-stretch justify-end pb-0.5">
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isUploading}
-                className="text-white/40 hover:text-white/80 hover:bg-white/5 rounded-xl transition-colors p-2.5 disabled:opacity-50 active:scale-95 flex items-center justify-center w-10 h-10"
-              >
-                {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
-              </button>
-            </div>
 
-            <div className="flex-1 flex flex-col justify-end min-h-[44px]">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                onPaste={handlePaste}
-                placeholder={isCooldown ? 'Подождите…' : 'Сообщение...'}
-                disabled={isLoading || isCooldown}
-                rows={1}
-                className="w-full bg-transparent border-none text-base sm:text-sm text-white/90 placeholder-white/30 focus:outline-none resize-none max-h-32 py-3 px-1 disabled:opacity-40 font-light scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent [&::-webkit-scrollbar-button]:hidden"
-                style={{ minHeight: '44px' }}
-              />
-            </div>
-
-            <div className="flex items-center gap-1.5 shrink-0 self-stretch justify-end pb-0.5 pr-0.5">
-              <button
-                type="button"
-                onClick={() => setMediaProfile(p => p === 'speech' ? 'music' : 'speech')}
-                className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white/90 rounded-xl px-3 py-1.5 transition-all cursor-pointer h-10 border border-transparent flex items-center justify-center gap-2 group active:scale-95"
-                title={mediaProfile === 'speech' ? "Прием сигнала (Речь)" : "Акустические волны (Музыка)"}
+              <form
+                id="chat-input-form"
+                onSubmit={(e) => void handleSubmit(e)}
+                className="w-full bg-[#0a0a0a]/80 backdrop-blur-xl border border-white/10 rounded-2xl flex items-end gap-2 p-1.5 sm:gap-3 sm:p-2 shadow-2xl transition-all focus-within:border-white/20"
               >
-                {mediaProfile === 'speech' ? (
-                  <>
-                    <Satellite size={16} className="text-blue-400 group-hover:animate-pulse" />
-                    <span className="text-[11px] font-medium tracking-wide uppercase">Сигнал</span>
-                  </>
-                ) : (
-                  <>
-                    <AudioLines size={16} className="text-purple-400 group-hover:animate-pulse" />
-                    <span className="text-[11px] font-medium tracking-wide uppercase">Спектр</span>
-                  </>
-                )}
-              </button>
+                <input
+                  type="file"
+                  accept=".pdf,.md,.txt,.docx,.xlsx,.csv,.json,.png,.jpg,.jpeg,.webp,.mp3,.wav,.m4a,.mp4,.mkv,.webm,.ogg,audio/*,video/*"
+                  multiple
+                  ref={fileInputRef}
+                  className="hidden"
+                  onChange={(e) => void handleFileChange(e)}
+                />
 
-              <button
-                type="submit"
-                onClick={handleSubmit}
-                disabled={isLoading || isCooldown || !input.trim()}
-                className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-all shadow-lg shadow-indigo-500/20 disabled:shadow-none active:scale-95 group"
-              >
-                {isLoading ? <Loader2 size={16} className="animate-spin" /> : <Rocket size={16} strokeWidth={1.5} className="group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform" />}
-              </button>
+                <div className="flex flex-col items-center shrink-0 self-stretch justify-end pb-0.5">
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={isUploading}
+                    className="text-white/40 hover:text-white/80 hover:bg-white/5 rounded-xl transition-colors p-2.5 disabled:opacity-50 active:scale-95 flex items-center justify-center w-10 h-10"
+                  >
+                    {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Paperclip size={18} />}
+                  </button>
+                </div>
+
+                <div className="flex-1 flex flex-col justify-end min-h-[44px]">
+                  <CopilotTextarea
+                    value={input}
+                    onChange={(val) => {
+                      setInput(val);
+                      handleCopilotChange(val);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        if (!isLoading && !isCooldown && input.trim()) {
+                          void handleSubmit(e);
+                        }
+                      }
+                    }}
+                    suggestion={suggestion}
+                    onAccept={() => setInput(acceptSuggestion(input))}
+                    onDismiss={dismissSuggestion}
+                    placeholder={isCooldown ? 'Подождите…' : 'Сообщение...'}
+                    disabled={isLoading || isCooldown}
+                    className="py-3 px-1 border-none text-base sm:text-sm max-h-32 font-light scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent [&::-webkit-scrollbar-button]:hidden"
+                  />
+                </div>
+
+                <div className="flex items-center gap-1.5 shrink-0 self-stretch justify-end pb-0.5 pr-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMediaProfile((p) => (p === 'speech' ? 'music' : 'speech'))}
+                    className="bg-white/5 hover:bg-white/10 text-white/60 hover:text-white/90 rounded-xl px-3 py-1.5 transition-all cursor-pointer h-10 border border-transparent flex items-center justify-center gap-2 group active:scale-95"
+                    title={mediaProfile === 'speech' ? 'Прием сигнала (Речь)' : 'Акустические волны (Музыка)'}
+                  >
+                    {mediaProfile === 'speech' ? (
+                      <>
+                        <Satellite size={16} className="text-blue-400 group-hover:animate-pulse" />
+                        <span className="text-[11px] font-medium tracking-wide uppercase">Сигнал</span>
+                      </>
+                    ) : (
+                      <>
+                        <AudioLines size={16} className="text-purple-400 group-hover:animate-pulse" />
+                        <span className="text-[11px] font-medium tracking-wide uppercase">Спектр</span>
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    type="submit"
+                    disabled={isLoading || isCooldown || !input.trim()}
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-white/5 disabled:text-white/20 text-white w-10 h-10 rounded-xl flex items-center justify-center transition-all shadow-lg shadow-indigo-500/20 disabled:shadow-none active:scale-95 group"
+                  >
+                    {isLoading ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Rocket
+                        size={16}
+                        strokeWidth={1.5}
+                        className="group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform"
+                      />
+                    )}
+                  </button>
+                </div>
+              </form>
             </div>
-          </form>
-          </div>
-        </footer>
+          </footer>
+        </div>
       </div>
-    </div>
+    </ActiveAudioProvider>
   );
 }
-
-export default ChatWorkspace;

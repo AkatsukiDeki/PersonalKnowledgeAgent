@@ -102,17 +102,8 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
                     
                 # Create relation
                 async with db.begin_nested():
-                    # Check if already exists
-                    stmt_dup = select(ClaimRelation).where(
-                        ClaimRelation.source_claim_id == rel.source_claim_id,
-                        ClaimRelation.target_claim_id == rel.target_claim_id,
-                        ClaimRelation.relation_type == rel.relation_type
-                    )
-                    dup = (await db.execute(stmt_dup)).first()
-                    if dup:
-                        continue
-                        
-                    new_rel = ClaimRelation(
+                    from sqlalchemy.dialects.postgresql import insert
+                    stmt = insert(ClaimRelation).values(
                         source_claim_id=rel.source_claim_id,
                         target_claim_id=rel.target_claim_id,
                         relation_type=rel.relation_type,
@@ -120,8 +111,10 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
                         evidence_summary=rel.evidence_summary,
                         evidence_claim_ids=[rel.source_claim_id, rel.target_claim_id],
                         evidence_chunk_ids=[]
+                    ).on_conflict_do_nothing(
+                        index_elements=['source_claim_id', 'target_claim_id', 'relation_type']
                     )
-                    db.add(new_rel)
+                    await db.execute(stmt)
                     
             await db.commit()
             

@@ -15,22 +15,36 @@ from .ollama_client import OllamaClient
 
 logger = logging.getLogger(__name__)
 
+
 class TaskType(enum.Enum):
     EXTRACTION = "EXTRACTION"
     ROUTINE_QA = "ROUTINE_QA"
     DEEP_SYNTHESIS = "DEEP_SYNTHESIS"
 
+
 class ReasoningProviderUnavailableError(Exception):
     pass
 
+
 T = TypeVar("T", bound=BaseModel)
+
+
+def _sanitize_model_name(model_name: Optional[str]) -> str:
+    """Автоматически заменяет устаревшие версии моделей Google на актуальные."""
+    if not model_name or not model_name.strip():
+        return "gemini-3.6-flash"
+    m = model_name.strip().lower()
+    if "1.5" in m or m == "gemini-1.5-flash":
+        return "gemini-3.6-flash"
+    return model_name.strip()
+
 
 class ModelManager:
     """Диспетчер LLM: Local-First с контролируемой деградацией или Cloud-First при пакетной обработке."""
 
     def __init__(self):
-        self.fast_model = settings.FAST_LLM_MODEL
-        self.reasoning_model = settings.REASONING_LLM_MODEL
+        self.fast_model = _sanitize_model_name(getattr(settings, "FAST_LLM_MODEL", "gemini-3.6-flash"))
+        self.reasoning_model = _sanitize_model_name(getattr(settings, "REASONING_LLM_MODEL", "gemini-3.6-flash"))
         self.ollama_client = OllamaClient()  # Инициализация Ollama клиента
         self._cloud_client = None
         self._cloud_semaphore = asyncio.Semaphore(8)  # Ограничение конкурентных вызовов к облачному API
@@ -47,7 +61,7 @@ class ModelManager:
         try:
             self._cloud_client = genai.Client(api_key=key)
             self.cloud_available = True
-            logger.info("[ModelManager] Cloud Provider (Gemini): ACTIVE.")
+            logger.info(f"[ModelManager] Cloud Provider (Gemini): ACTIVE (Model: {self.fast_model}).")
         except Exception as e:
             self.cloud_available = False
             logger.warning(f"[ModelManager] Cloud Provider init failed: {e}. Falling back to Local-Only.")
@@ -55,7 +69,8 @@ class ModelManager:
     def get_model(self, model_type: str = "fast") -> str:
         return self.reasoning_model if model_type == "reasoning" else self.fast_model
 
-    async def _call_ollama_structured(self, prompt: str, schema: Type[T], system_instruction: Optional[str] = None) -> T:
+    async def _call_ollama_structured(self, prompt: str, schema: Type[T],
+                                      system_instruction: Optional[str] = None) -> T:
         return await self.ollama_client.generate_structured(
             model=settings.OLLAMA_EXTRACTION_MODEL,
             prompt=prompt,
@@ -63,7 +78,8 @@ class ModelManager:
             system=system_instruction
         )
 
-    async def _call_gemini_structured(self, prompt: str, schema: Type[T], system_instruction: Optional[str] = None) -> T:
+    async def _call_gemini_structured(self, prompt: str, schema: Type[T],
+                                      system_instruction: Optional[str] = None) -> T:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=schema.model_json_schema(),
@@ -71,7 +87,7 @@ class ModelManager:
         )
         if system_instruction:
             config.system_instruction = system_instruction
-        
+
         response = await self._cloud_client.aio.models.generate_content(
             model=self.fast_model,
             contents=prompt,
@@ -81,15 +97,12 @@ class ModelManager:
             raise ValueError("Empty response from Gemini fallback")
         return schema.model_validate_json(response.text)
 
-    async def generate_structured(self, task_type: TaskType, schema: Type[T], prompt: str, system_instruction: Optional[str] = None, allow_cloud_fallback: bool = False) -> Optional[T]:
-        """
-        Основной метод генерации структурированных данных.
-        Приоритет зависит от настроек LLM_ROUTING_BACKEND.
-        """
+    async def generate_structured(self, task_type: TaskType, schema: Type[T], prompt: str,
+                                  system_instruction: Optional[str] = None, allow_cloud_fallback: bool = False) -> \
+    Optional[T]:
         backend = (getattr(settings, "LLM_ROUTING_BACKEND", "hybrid") or "hybrid").lower()
         has_gemini_key = self.cloud_available and self._cloud_client is not None
 
-        # 1. Сценарий: Приоритет облака (cloud / hybrid при наличии ключа)
         if backend in ("cloud", "hybrid") and has_gemini_key:
             try:
                 async with self._cloud_semaphore:
@@ -99,12 +112,12 @@ class ModelManager:
                         system_instruction=system_instruction
                     )
             except Exception as e:
-                logger.warning(f"[ModelManager] Primary Gemini structured generation failed: {e}. Falling back to Ollama.")
+                logger.warning(
+                    f"[ModelManager] Primary Gemini structured generation failed: {e}. Falling back to Ollama.")
                 if backend == "cloud":
                     logger.error("Cloud-only mode forced, but cloud failed. Returning None.")
                     return None
 
-        # 2. Сценарий: Локальный инференс (local или fallback от cloud)
         try:
             return await self._call_ollama_structured(
                 prompt=prompt,
@@ -113,7 +126,6 @@ class ModelManager:
             )
         except Exception as e:
             logger.error(f"[ModelManager] Ollama structured generation failed: {e}")
-            # Если стартовали с local, но есть ключ Gemini и разрешен fallback — пробуем как аварийный fallback
             if backend == "local" and has_gemini_key and allow_cloud_fallback:
                 logger.info("[ModelManager] Attempting emergency fallback to Gemini from local mode...")
                 try:
@@ -127,7 +139,8 @@ class ModelManager:
                     logger.error(f"[ModelManager] Gemini emergency fallback failed: {cloud_err}")
             return None
 
-    async def generate_text(self, task_type: TaskType, prompt: str, system_instruction: Optional[str] = None, allow_cloud_fallback: bool = False) -> str:
+    async def generate_text(self, task_type: TaskType, prompt: str, system_instruction: Optional[str] = None,
+                            allow_cloud_fallback: bool = False) -> str:
         if task_type != TaskType.ROUTINE_QA:
             raise ValueError(f"Unsupported text task type: {task_type}")
 
@@ -145,7 +158,6 @@ class ModelManager:
             )
             return response.text or ""
 
-        # 1. Cloud / Hybrid Priority
         if backend in ("cloud", "hybrid") and has_gemini_key:
             try:
                 async with self._cloud_semaphore:
@@ -156,7 +168,6 @@ class ModelManager:
                     logger.error("Cloud-only mode forced, but cloud failed. Returning empty string.")
                     return ""
 
-        # 2. Local fallback
         try:
             return await self.ollama_client.generate(
                 model=settings.OLLAMA_QA_MODEL,
@@ -175,16 +186,15 @@ class ModelManager:
             return ""
 
     async def stream_text(
-        self,
-        task_type: TaskType,
-        prompt: str,
-        system_instruction: Optional[str] = None,
-        allow_cloud_fallback: bool = True
+            self,
+            task_type: TaskType,
+            prompt: str,
+            system_instruction: Optional[str] = None,
+            allow_cloud_fallback: bool = True
     ):
-        """Стриминг текстового ответа (Ollama -> Cloud Fallback)"""
         backend = (getattr(settings, "LLM_ROUTING_BACKEND", "hybrid") or "hybrid").lower()
         has_gemini_key = self.cloud_available and self._cloud_client is not None
-        
+
         async def _stream_gemini():
             config = types.GenerateContentConfig(temperature=0.3)
             if system_instruction:
@@ -198,10 +208,8 @@ class ModelManager:
                 if chunk.text:
                     yield chunk.text
 
-        # 1. Cloud / Hybrid Priority
         if backend in ("cloud", "hybrid") and has_gemini_key:
             try:
-                # We yield from the generator
                 async for chunk in _stream_gemini():
                     yield chunk
                 return
@@ -212,12 +220,11 @@ class ModelManager:
                     yield f"\n\n[Ошибка генерации: Cloud API недоступен]"
                     return
 
-        # 2. Local fallback
         try:
             async for chunk in self.ollama_client.stream_generate(
-                model=settings.OLLAMA_QA_MODEL,
-                prompt=prompt,
-                system=system_instruction
+                    model=settings.OLLAMA_QA_MODEL,
+                    prompt=prompt,
+                    system=system_instruction
             ):
                 yield chunk
             return
@@ -231,14 +238,11 @@ class ModelManager:
                     return
                 except Exception as cloud_err:
                     logger.error(f"[ModelManager] Gemini emergency text stream fallback failed: {cloud_err}")
-            
+
             yield f"\n\n[Ошибка генерации: Локальная модель недоступна]"
 
-    async def generate_vision(self, messages: list, image_bytes: bytes, mime_type: str, allow_cloud_fallback: bool = True) -> str:
-        """
-        Обработка изображений через Vision-модель (Ollama -> Gemini Fallback).
-        """
-        # 1. Ollama (Local)
+    async def generate_vision(self, messages: list, image_bytes: bytes, mime_type: str,
+                              allow_cloud_fallback: bool = True) -> str:
         vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5-vl")
         try:
             return await self.ollama_client.chat(
@@ -247,21 +251,17 @@ class ModelManager:
             )
         except Exception as e:
             logger.error(f"[ModelManager] Ollama Vision failed ({e}).")
-            
-            # 2. Cloud Fallback (Gemini)
+
             if allow_cloud_fallback and self.cloud_available and self._cloud_client:
                 logger.warning("[ModelManager] Falling back to Gemini for Vision.")
                 try:
                     from google.genai import types
                     from ..agent.gemini import _to_gemini_contents
-                    
+
                     config = types.GenerateContentConfig(temperature=0.2)
-                    
-                    # Gemini expects image bytes in the part, not base64. 
-                    # We inject the image bytes into the last message manually.
                     gemini_contents = _to_gemini_contents(messages)
                     gemini_contents[-1].parts.insert(0, types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-                    
+
                     response = await self._cloud_client.aio.models.generate_content(
                         model=self.fast_model,
                         contents=gemini_contents,
@@ -270,42 +270,36 @@ class ModelManager:
                     return response.text or ""
                 except Exception as cloud_err:
                     logger.error(f"[ModelManager] Gemini Vision fallback failed: {cloud_err}")
-            
-            # Если оба упали, возвращаем дефолтный текст ошибки
+
             return "[Ошибка обработки изображения: Vision-провайдер недоступен]"
 
     async def stream_vision(
-        self,
-        messages: list,
-        image_bytes: bytes,
-        mime_type: str = "image/png",
-        allow_cloud_fallback: bool = True,
+            self,
+            messages: list,
+            image_bytes: bytes,
+            mime_type: str = "image/png",
+            allow_cloud_fallback: bool = True,
     ):
-        """Стриминг мультимодального ответа (Ollama -> Cloud Fallback)"""
-        # 1. Попытка локально через Ollama
         try:
             vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5-vl")
             async for chunk in self.ollama_client.stream_chat(
-                messages=messages,
-                model=vision_model,
+                    messages=messages,
+                    model=vision_model,
             ):
                 yield chunk
             return
         except Exception as e:
             logger.warning(f"[ModelManager] Stream Ollama Vision failed: {e}. Switching to Cloud Fallback...")
 
-        # 2. Cloud Fallback (Gemini)
         if allow_cloud_fallback and self.cloud_available and self._cloud_client:
             try:
                 from google.genai import types
                 from ..agent.gemini import _to_gemini_contents
-                
+
                 config = types.GenerateContentConfig(temperature=0.2)
-                
-                # We inject the image bytes into the last user turn.
                 gemini_contents = _to_gemini_contents(messages)
                 gemini_contents[-1].parts.insert(0, types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-                
+
                 response_stream = await self._cloud_client.aio.models.generate_content_stream(
                     model=self.fast_model,
                     contents=gemini_contents,
@@ -322,13 +316,14 @@ class ModelManager:
 
         yield "\n\n[Ошибка: Мультимодальные модели недоступны]"
 
+
 model_manager = ModelManager()
 
-# We keep the old retry decorators for backward compatibility in other parts of the system for now
-# though we should transition them to the ModelManager routing methods eventually.
+
 def is_retryable_error(exception: BaseException) -> bool:
     err_str = str(exception).lower()
     return "429" in err_str or "resource_exhausted" in err_str or "quota" in err_str or "404" in err_str or "not_found" in err_str
+
 
 tenacity_retry_llm = retry(
     retry=retry_if_exception(is_retryable_error),
@@ -338,17 +333,24 @@ tenacity_retry_llm = retry(
 
 tenacity_retry_reasoning_llm = tenacity_retry_llm
 
+
 async def generate_with_retry(prompt: str, system: Optional[str] = None) -> str:
-    return await model_manager.generate_text(TaskType.ROUTINE_QA, prompt, system_instruction=system, allow_cloud_fallback=True)
+    return await model_manager.generate_text(TaskType.ROUTINE_QA, prompt, system_instruction=system,
+                                             allow_cloud_fallback=True)
+
 
 async def generate_structured_with_retry(prompt: str, schema_cls: Type[T], system: Optional[str] = None) -> T:
-    res = await model_manager.generate_structured(TaskType.EXTRACTION, schema_cls, prompt, system_instruction=system, allow_cloud_fallback=True)
+    res = await model_manager.generate_structured(TaskType.EXTRACTION, schema_cls, prompt, system_instruction=system,
+                                                  allow_cloud_fallback=True)
     if res is None:
         raise ValueError("Extraction failed.")
     return res
 
+
 async def generate_reasoning_with_retry(prompt: str, schema_cls: Type[T], system: Optional[str] = None) -> T:
-    return await model_manager.generate_structured(TaskType.DEEP_SYNTHESIS, schema_cls, prompt, system_instruction=system)
+    return await model_manager.generate_structured(TaskType.DEEP_SYNTHESIS, schema_cls, prompt,
+                                                   system_instruction=system)
+
 
 def get_genai_client():
     return model_manager._cloud_client

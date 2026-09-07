@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { ChevronRight, ChevronDown } from 'lucide-react';
 import { Citation } from '../../types/chat';
 import { ENTITY_TOKENS } from '../../utils/entityTokens';
+import { MediaSourceSnippet } from './MediaSourceSnippet';
 
 interface Props {
   citations: Citation[];
@@ -13,6 +14,7 @@ interface TreeNode {
   label: string;
   detail?: string;
   score?: number;
+  citation?: Citation;
   children: TreeNode[];
 }
 
@@ -41,6 +43,7 @@ function buildTree(citations: Citation[]): TreeNode[] {
         label: c.text_snippet.length > 80 ? c.text_snippet.slice(0, 80) + '…' : c.text_snippet,
         detail: c.text_snippet,
         score: c.score,
+        citation: c,
         children: [],
       })),
     };
@@ -109,6 +112,21 @@ function TreeNodeView({ node, depth = 0 }: { node: TreeNode; depth?: number }) {
           </button>
         )}
       </div>
+      
+      {/* Media Snippet if available */}
+      {node.type === 'claim' && node.citation?.media_type && node.citation?.start_time !== undefined && (
+        <div className="ml-5 mr-2">
+          <MediaSourceSnippet
+            chunkId={node.citation.chunk_id}
+            sourceId={node.citation.source_id}
+            sourceTitle={node.citation.source_title || node.citation.source_id.slice(0, 8)}
+            mediaType={node.citation.media_type}
+            startTime={node.citation.start_time}
+            endTime={node.citation.end_time || node.citation.start_time + 30}
+            textSnippet={node.citation.text_snippet}
+          />
+        </div>
+      )}
 
       {/* Children */}
       {expanded && hasChildren && (

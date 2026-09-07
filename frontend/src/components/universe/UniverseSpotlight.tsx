@@ -5,7 +5,7 @@ export interface SearchableEntity {
   id: string;
   title: string;
   subtitle: string;
-  type: 'constellation' | 'subject' | 'chat_folder' | 'source' | 'conversation' | 'insight';
+  type: 'constellation' | 'subject' | 'chat_folder' | 'source' | 'conversation' | 'insight' | 'graph_node';
   category: string;
   color: string;
   worldX: number;
@@ -83,6 +83,8 @@ export const UniverseSpotlight: React.FC<UniverseSpotlightProps> = ({
         return <Folder size={14} className="text-cyan-400" />;
       case 'insight':
         return <Lightbulb size={14} className="text-amber-400" />;
+      case 'graph_node':
+        return <Sparkles size={14} className="text-emerald-400" />;
       default:
         return <Sparkles size={14} className="text-zinc-400" />;
     }

@@ -1,8 +1,8 @@
 import uuid
 import re
 from typing import Optional
-from app.core.llm import model_manager, TaskType
-from app.schemas.learning import FlashcardResponse, QuizResponse
+from ..core.llm import model_manager, TaskType
+from ..schemas.learning import FlashcardResponse, QuizResponse
 
 
 def clean_cjk_prefix(text: str) -> str:

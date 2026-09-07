@@ -85,3 +85,4 @@ class PatternScheduler:
             logger.error(f"[PatternScheduler] Error in check loop: {e}")
 
 scheduler = PatternScheduler(check_interval_seconds=60) # Check every 60 seconds
+

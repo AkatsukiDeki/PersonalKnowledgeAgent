@@ -7,6 +7,7 @@ import { learningApi } from '../../api/learning';
 import { QuizView } from './QuizView';
 import { useQuizGenerator } from '../../hooks/useQuizGenerator';
 import { NoteCopilotDrawer } from './NoteCopilotDrawer';
+import { MermaidViewer } from './MermaidViewer';
 
 interface StudyCanvasProps {
   note: StudyNoteResponse | null;
@@ -246,6 +247,17 @@ export function StudyCanvas({ note, isLoading, currentScope, moduleId, activeTop
                   <blockquote className="border-l-4 border-indigo-500/50 bg-indigo-500/10 p-4 rounded-r-lg my-4 not-prose text-sm text-indigo-100 shadow-sm" {...props}>
                     {children}
                   </blockquote>
+                );
+              },
+              code: ({ node, className, children, ...props }: any) => {
+                const match = /language-(\w+)/.exec(className || '');
+                if (match && match[1] === 'mermaid') {
+                  return <MermaidViewer chart={String(children).replace(/\n$/, '')} />;
+                }
+                return (
+                  <code className={`${className} bg-zinc-800 text-zinc-300 rounded px-1.5 py-0.5 text-xs`} {...props}>
+                    {children}
+                  </code>
                 );
               }
             }}
