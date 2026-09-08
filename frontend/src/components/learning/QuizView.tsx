@@ -88,7 +88,7 @@ export const QuizView: React.FC<QuizViewProps> = ({ quiz, onClose }) => {
         </div>
 
         <div className="space-y-4 mb-6">
-          {quiz.questions.map((q, idx) => (
+          {(quiz.questions || []).map((q, idx) => (
             <div key={q.id} className="p-4 bg-slate-800 rounded-lg border border-slate-700">
               <p className="font-semibold mb-2">
                 {idx + 1}. {q.prompt}
@@ -131,7 +131,7 @@ export const QuizView: React.FC<QuizViewProps> = ({ quiz, onClose }) => {
         )}
 
         <div className="space-y-3">
-          {currentQuestion.options.map((opt) => {
+          {(currentQuestion.options || []).map((opt) => {
             const isSelected = selectedOptions.includes(opt.id);
             return (
               <button
@@ -164,7 +164,7 @@ export const QuizView: React.FC<QuizViewProps> = ({ quiz, onClose }) => {
           Назад
         </button>
 
-        {currentIndex < quiz.questions.length - 1 ? (
+        {currentIndex < (quiz.questions || []).length - 1 ? (
           <button
             onClick={() => setCurrentIndex((prev) => prev + 1)}
             className="px-6 py-2 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-sm font-medium transition-colors"

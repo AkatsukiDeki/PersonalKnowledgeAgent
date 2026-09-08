@@ -39,8 +39,8 @@ export function RoadmapExplorer({ roadmap, selectedTopicId, onTopicSelect, isGen
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 pb-24 space-y-4">
-        {roadmap.modules.map((mod, idx) => (
-          <div key={mod.id} className="bg-white/5 rounded-lg border border-white/5 overflow-hidden">
+        {(roadmap.modules || []).map((mod, idx) => (
+          <div key={mod.id || idx} className="bg-white/5 rounded-lg border border-white/5 overflow-hidden">
             <div className="p-3 border-b border-white/5">
               <div className="flex items-start justify-between gap-2">
                 <h3 className="text-sm font-semibold text-zinc-200">
@@ -55,10 +55,10 @@ export function RoadmapExplorer({ roadmap, selectedTopicId, onTopicSelect, isGen
             </div>
             
             <div className="p-2 space-y-1">
-              {mod.topics.map((topic, tIdx) => {
+              {(mod.topics || []).map((topic, tIdx) => {
                 const isActive = selectedTopicId === topic.id;
-                const totalClaims = topic.evidence.reduce((acc, ev) => acc + ev.claim_ids.length, 0);
-                const totalChunks = topic.evidence.reduce((acc, ev) => acc + ev.chunk_ids.length, 0);
+                const totalClaims = (topic.evidence || []).reduce((acc, ev) => acc + (ev.claim_ids || []).length, 0);
+                const totalChunks = (topic.evidence || []).reduce((acc, ev) => acc + (ev.chunk_ids || []).length, 0);
                 
                 return (
                   <button

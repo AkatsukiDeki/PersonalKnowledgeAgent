@@ -176,7 +176,7 @@ export function StudyCanvas({ note, isLoading, currentScope, moduleId, activeTop
             
             {extraResult.type === 'flashcards' && (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {extraResult.data.map((c: any, i: number) => (
+                {(extraResult.data || []).map((c: any, i: number) => (
                   <div key={c.id || i} className="p-4 bg-zinc-900/50 rounded-lg flex flex-col justify-between group relative overflow-hidden">
                     <div className="mb-4">
                       <span className="text-[10px] text-amber-500/50 uppercase font-bold tracking-wider mb-1 block">Вопрос {i+1}</span>
@@ -199,7 +199,7 @@ export function StudyCanvas({ note, isLoading, currentScope, moduleId, activeTop
               <Lightbulb size={16} /> Ключевые выводы
             </h3>
             <ul className="space-y-2">
-              {note.key_insights.map((insight, idx) => (
+              {(note.key_insights || []).map((insight, idx) => (
                 <li key={idx} className="text-sm text-zinc-300 flex items-start gap-2">
                   <span className="text-indigo-500/50 mt-1">•</span>
                   <span>{insight}</span>
