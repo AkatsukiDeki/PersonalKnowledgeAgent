@@ -11,3 +11,15 @@ frontend/dist/
 .aider*
 *.db
 *.sqlite3
+
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm

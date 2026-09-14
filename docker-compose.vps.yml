@@ -142,6 +142,21 @@ services:
     networks:
       - pka_internal
 
+  bot:
+    build:
+      context: ./bot
+      dockerfile: Dockerfile
+    container_name: pka_vps_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - BOT_REDIS_URL=redis://redis:6379/1
+    depends_on:
+      - backend
+    networks:
+      - pka_internal
+
 networks:
   pka_internal:
     driver: bridge
