@@ -8,6 +8,7 @@ import uuid
 from typing import Optional
 import os
 import mimetypes
+import asyncio
 
 from ..db.session import get_db
 from ..db.models import Source
@@ -21,6 +22,35 @@ from ..core.config import settings
 
 router = APIRouter(prefix="/media", tags=["Media"])
 
+@router.post("/transcribe-quick")
+async def transcribe_quick(
+    file: UploadFile = File(...),
+    language: str | None = Form(None),
+    redis: ArqRedis = Depends(get_redis_pool)
+):
+    file_bytes = await file.read()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    effective_language = language.strip() if language and language.strip() else "ru"
+    
+    job = await redis.enqueue_job(
+        "fast_transcribe",
+        file_bytes,
+        effective_language,
+        _queue_name=settings.ARQ_QUEUE_MEDIA
+    )
+    if not job:
+        raise HTTPException(status_code=500, detail="Failed to enqueue transcription task")
+        
+    try:
+        # job.result returns the value returned by the arq task
+        text = await asyncio.wait_for(job.result(timeout=120.0), timeout=125.0)
+        return {"text": text}
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Transcription timed out")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Transcription failed: {str(e)}")
 
 @router.post("/upload", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
 async def upload_media(

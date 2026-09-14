@@ -90,8 +90,27 @@ async def process_media_transcription(
                 await session.commit()
         raise e
     finally:
-        # Снятие блокировки
         await redis.delete(lock_key)
+
+async def fast_transcribe(ctx, audio_bytes: bytes, language: str = "ru") -> str:
+    from ..media.pipeline import get_stt_service
+    import tempfile
+    import os
+    from pathlib import Path
+    stt = get_stt_service()
+    
+    fd, temp_path = tempfile.mkstemp(suffix=".ogg")
+    try:
+        with open(temp_path, "wb") as f:
+            f.write(audio_bytes)
+            
+        segments = stt.transcribe(Path(temp_path), language=language)
+        text = " ".join([seg["text"] for seg in segments]).strip()
+        return text
+    finally:
+        os.close(fd)
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
 
 from ..knowledge.ingestion import process_source_chunks_bg
 from ..db.models import Claim, Chunk
@@ -135,7 +154,7 @@ async def relink_durable_claims_task(ctx):
 
 
 class MediaWorkerSettings:
-    functions = [process_media_transcription]
+    functions = [process_media_transcription, fast_transcribe]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(settings.REDIS_URL)

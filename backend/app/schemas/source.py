@@ -28,6 +28,7 @@ class SourceCreate(SourceBase):
 class SourceUpdateContent(BaseModel):
     raw_content: str
     domain: Optional[str] = Field(default=None, max_length=50)
+    meta_info: Optional[Dict[str, Any]] = None
 
     @field_validator("domain", mode="before")
     @classmethod

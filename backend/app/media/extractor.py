@@ -22,14 +22,22 @@ class TranscriptInsights(BaseModel):
     sentiment_or_mood: Optional[str] = Field(default=None, description="Тон встречи на русском языке")
 
 
-EXTRACTION_SYSTEM_PROMPT = """Ты — русскоязычный аналитический модуль базы знаний.
-Твоя задача — извлечь из транскрипта ключевые факты, решения и сформировать резюме.
+VOICE_EXTRACTION_SYSTEM_PROMPT = """Ты — ассистент базы знаний. Твоя задача — преобразовать сырую разговорную расшифровку аудиозаметки в четкую инженерную структуру.
 
-КРИТИЧЕСКИ ВАЖНЫЕ ПРАВИЛА:
-1. ВСЕ поля (summary, key_topics, decisions, task) заполняй СТРОГО НА РУССКОМ ЯЗЫКЕ. Никакого английского языка в значениях полей.
-2. Категорически запрещено переводить термины на английский, пиши: "Асимметричное шифрование", "Алгоритм RSA", "Функция Эйлера".
-3. Каждая задача (ActionItem) должна содержать реальную цитату из текста (context_quote).
-4. Выведи валидный JSON строго по схеме."""
+Правила:
+1. Выдели краткую суть (summary) в 2-4 предложениях.
+2. Извлеки ключевые концепты, инсайты и факты (key_points).
+3. Найди все практические действия, задачи и todo (action_items).
+4. Отфильтруй разговорный мусор ("э-э-э", "ну", повторы).
+5. Язык вывода — строго русский.
+
+Ответ должен быть валидным JSON следующего формата:
+{
+  "summary": "...",
+  "key_points": ["...", "..."],
+  "action_items": ["...", "..."]
+}
+"""
 
 
 class TranscriptInsightExtractor:
@@ -52,7 +60,7 @@ class TranscriptInsightExtractor:
                 model=self.model,
                 prompt=prompt,
                 schema_cls=TranscriptInsights,
-                system=EXTRACTION_SYSTEM_PROMPT
+                system=VOICE_EXTRACTION_SYSTEM_PROMPT
             )
             logger.info(f"Successfully extracted {len(insights.action_items)} action items and {len(insights.decisions)} decisions.")
             return insights

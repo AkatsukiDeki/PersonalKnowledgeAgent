@@ -27,7 +27,8 @@ DEFAULT_CPU_OPTIONS = {
     "num_thread": 4,         # Использование ядер CPU на инференс
     "temperature": 0.2,
     "top_p": 0.9,
-    "repeat_penalty": 1.1,
+    "repeat_penalty": 1.15,
+    "stop": ["<|im_end|>", "<|endoftext|>"],
 }
 
 
@@ -185,10 +186,24 @@ class OllamaClient:
 
         options = DEFAULT_CPU_OPTIONS.copy()
         options["num_predict"] = num_predict
+        
+        # Внедряем жесткую инструкцию от иероглифов
+        anti_hallucination_prompt = "Отвечай исключительно на русском языке. Использование китайских иероглифов категорически запрещено."
+        processed_messages = []
+        has_system = False
+        for msg in messages:
+            msg_copy = dict(msg)
+            if msg_copy.get("role") == "system":
+                msg_copy["content"] = f"{msg_copy.get('content', '')}\n\n{anti_hallucination_prompt}"
+                has_system = True
+            processed_messages.append(msg_copy)
+            
+        if not has_system:
+            processed_messages.insert(0, {"role": "system", "content": anti_hallucination_prompt})
 
         payload = {
             "model": target_model,
-            "messages": messages,
+            "messages": processed_messages,
             "stream": False,
             "keep_alive": "24h",
             "options": options
@@ -225,13 +240,21 @@ class OllamaClient:
     ):
         target_model = model or self.default_model
 
+        anti_hallucination_prompt = "Отвечай исключительно на русском языке. Использование китайских иероглифов категорически запрещено."
         processed_messages = []
+        has_system = False
+        
         for msg in messages:
             role = msg.get("role", "user").lower()
             if role not in ("system", "user", "assistant"):
                 role = "user"
 
-            clean_msg = {"role": role, "content": msg.get("content", "")}
+            content = msg.get("content", "")
+            if role == "system":
+                content = f"{content}\n\n{anti_hallucination_prompt}"
+                has_system = True
+
+            clean_msg = {"role": role, "content": content}
 
             if "images" in msg and isinstance(msg["images"], list):
                 clean_images = []
@@ -243,6 +266,9 @@ class OllamaClient:
                     clean_msg["images"] = clean_images
 
             processed_messages.append(clean_msg)
+            
+        if not has_system:
+            processed_messages.insert(0, {"role": "system", "content": anti_hallucination_prompt})
 
         options = DEFAULT_CPU_OPTIONS.copy()
         options["temperature"] = temperature

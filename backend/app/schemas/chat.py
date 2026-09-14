@@ -15,6 +15,8 @@ class ChatRequest(BaseModel):
     attached_source_ids: List[uuid.UUID] = []
     image_base64: Optional[str] = None
     image_mime_type: Optional[str] = "image/png"
+    scope_folder: Optional[str] = None
+    role_preset: Optional[str] = None
 
 
 class Citation(BaseModel):

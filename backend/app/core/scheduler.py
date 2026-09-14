@@ -84,5 +84,71 @@ class PatternScheduler:
         except Exception as e:
             logger.error(f"[PatternScheduler] Error in check loop: {e}")
 
-scheduler = PatternScheduler(check_interval_seconds=60) # Check every 60 seconds
+class GraphScheduler:
+    def __init__(self, check_interval_seconds: int = 120):
+        self.check_interval_seconds = check_interval_seconds
+        self.task = None
 
+    async def start(self):
+        logger.info("[GraphScheduler] Starting background scheduler...")
+        self.task = asyncio.create_task(self._run_loop())
+
+    async def stop(self):
+        if self.task:
+            logger.info("[GraphScheduler] Stopping background scheduler...")
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[GraphScheduler] Stopped.")
+
+    async def _run_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(self.check_interval_seconds)
+                await self._check_and_run()
+        except asyncio.CancelledError:
+            logger.info("[GraphScheduler] Task cancelled.")
+        except Exception as e:
+            logger.error(f"[GraphScheduler] Unexpected error: {e}")
+
+    async def _check_and_run(self):
+        try:
+            async with async_session_factory() as db:
+                # Check for claims with memory_score >= 0.60 and < 2 relations
+                check_stmt = text("""
+                    WITH rel_counts AS (
+                        SELECT source_claim_id as claim_id, COUNT(id) as cnt FROM claim_relations GROUP BY source_claim_id
+                        UNION ALL
+                        SELECT target_claim_id as claim_id, COUNT(id) as cnt FROM claim_relations GROUP BY target_claim_id
+                    ),
+                    agg_counts AS (
+                        SELECT claim_id, SUM(cnt) as total_rels FROM rel_counts GROUP BY claim_id
+                    )
+                    SELECT COUNT(c.id) as unconnected_count
+                    FROM claims c
+                    LEFT JOIN agg_counts a ON c.id = a.claim_id
+                    WHERE c.is_active = true 
+                      AND c.memory_score >= 0.60 
+                      AND COALESCE(a.total_rels, 0) < 2
+                """)
+                res = await db.execute(check_stmt)
+                row = res.fetchone()
+                await db.rollback()
+                
+                if row:
+                    unconnected_count = row.unconnected_count
+                    if unconnected_count >= 5:
+                        logger.info(f"[GraphScheduler] Threshold reached (Unconnected Claims: {unconnected_count} >= 5). Triggering Relink Pipeline.")
+                        # Import and run relinking
+                        from ..knowledge.graph_linker import relink_durable_claims
+                        await relink_durable_claims(db)
+                    else:
+                        logger.debug(f"[GraphScheduler] Threshold not met. (Unconnected Claims: {unconnected_count}/5)")
+        except Exception as e:
+            logger.error(f"[GraphScheduler] Error in check loop: {e}")
+
+
+scheduler = PatternScheduler(check_interval_seconds=60) # Check every 60 seconds
+graph_scheduler = GraphScheduler(check_interval_seconds=120) # Check every 120 seconds

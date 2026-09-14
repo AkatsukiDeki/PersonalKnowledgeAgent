@@ -29,11 +29,14 @@ IMPORTANT RULES:
     @staticmethod
     async def generate_flashcards(
         context_text: str,
-        count: int = 5,
+        count: int = 10,
         language: str = "🇷🇺 Русский",
-        difficulty: str = "medium"
+        difficulty: str = "medium",
+        extra_instruction: str = ""
     ) -> FlashcardResponse:
         prompt = f"Сгенерируй {count} флешкарточек (вопрос-ответ) на основе следующего материала:\n\n{context_text[:20000]}"
+        if extra_instruction:
+            prompt += f"\n\n{extra_instruction}"
         
         difficulty_hint = ""
         if difficulty == "easy":
@@ -67,7 +70,7 @@ IMPORTANT RULES:
     @staticmethod
     async def generate_quiz(
         context_text: str,
-        count: int = 5,
+        count: int = 10,
         language: str = "🇷🇺 Русский",
         difficulty: str = "medium"
     ) -> QuizResponse:

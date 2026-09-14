@@ -210,7 +210,7 @@ async def run_media_ingestion_job(
                                 from google import genai
                                 client = genai.Client(api_key=gemini_key)
                                 response = await client.aio.models.generate_content(
-                                    model="gemini-1.5-flash",
+                                    model="gemini-3.6-flash",
                                     contents=prompt
                                 )
                                 structured_text = response.text
@@ -223,8 +223,7 @@ async def run_media_ingestion_job(
                                 model=settings.OLLAMA_QA_MODEL,
                                 prompt=prompt,
                                 system="Ты педантичный редактор технического текста. Выводи только исправленный текст без комментариев.",
-                                num_predict=1024,
-                                temperature=0.1
+                                num_predict=1024
                             )
                         
                         if structured_text and len(structured_text.strip()) > 10:
@@ -320,16 +319,26 @@ async def run_media_ingestion_job(
 
             if media_type == MediaType.VOICE_NOTE:
                 logger.info(f"[Media Ingestion] Structuring Voice Note...")
-                struct_prompt = f"Проанализируй эту голосовую заметку и выдели суть:\n\n{raw_text_full}"
+                from ..core.prompts import VOICE_NOTE_STRUCT_PROMPT_TEMPLATE
+                struct_prompt = VOICE_NOTE_STRUCT_PROMPT_TEMPLATE.format(raw_text_full=raw_text_full)
                 try:
                     structured_note = await model_manager.generate_structured(
                         task_type=TaskType.EXTRACTION,
                         schema=VoiceStructuredNote,
                         prompt=struct_prompt,
-                        system_instruction="Ты помощник, который структурирует сырые аудиозаметки."
+                        system_instruction="Ты профессиональный ассистент, который структурирует голосовые заметки и тексты."
                     )
                     if structured_note:
                         meta["media"]["structured_note"] = structured_note.model_dump()
+                        
+                        from ..api.sources import build_markdown_from_structure
+                        formatted_markdown = build_markdown_from_structure(
+                            title=source_obj.title or "Голосовая заметка",
+                            structure=meta["media"]["structured_note"],
+                            raw_transcript=raw_text_full
+                        )
+                        full_text = formatted_markdown
+                        
                 except Exception as e:
                     logger.warning(f"[Media Ingestion] Failed to structure Voice Note: {e}")
 
@@ -346,6 +355,14 @@ async def run_media_ingestion_job(
                     processing_completed_at=datetime.utcnow()
                 )
             )
+
+            if media_type == MediaType.VOICE_NOTE:
+                await db.commit()
+                from ..core.redis import init_redis_pool
+                redis = await init_redis_pool()
+                await redis.enqueue_job("_safe_reindex", source_id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
+                logger.info(f"[Media Ingestion] Queued _safe_reindex for structured Voice Note {source_id}.")
+                return
 
             provider = get_embedding_provider()
             texts_to_embed = []
@@ -498,7 +515,7 @@ async def run_retranscribe_job(
                                 from google import genai
                                 client = genai.Client(api_key=gemini_key)
                                 response = await client.aio.models.generate_content(
-                                    model="gemini-1.5-flash",
+                                    model="gemini-3.6-flash",
                                     contents=prompt
                                 )
                                 structured_text = response.text
@@ -511,8 +528,7 @@ async def run_retranscribe_job(
                                 model=settings.OLLAMA_QA_MODEL,
                                 prompt=prompt,
                                 system="Ты педантичный редактор технического текста. Выводи только исправленный текст без комментариев.",
-                                num_predict=1024,
-                                temperature=0.1
+                                num_predict=1024
                             )
                         
                         if structured_text and len(structured_text.strip()) > 10:
@@ -641,4 +657,4 @@ class MediaPipeline:
         if retranscribe:
             await run_retranscribe_job(str(source.id), source.original_file_path, language=language, profile="music" if enable_demucs else "speech", fast_mode=fast_mode)
         else:
-            await run_media_ingestion_job(f"job_{source.id}", str(source.id), source.original_file_path, "upload", profile="music" if enable_demucs else "speech", language=language, fast_mode=fast_mode)
+            await run_media_ingestion_job(f"job_{source.id}", str(source.id), source.original_file_path, source.title, profile="music" if enable_demucs else "speech", language=language, fast_mode=fast_mode)

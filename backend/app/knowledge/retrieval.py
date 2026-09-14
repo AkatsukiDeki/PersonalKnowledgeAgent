@@ -17,7 +17,10 @@ async def hybrid_search(
     original_query: str,
     search_query: str,
     source_ids: Optional[List[str]] = None,
+    scope_folder: Optional[str] = None,
     limit: int = 5,
+    min_similarity: float = 0.45,
+    min_rrf_score: float = 0.015,
     include_history: bool = False,
     profiler = None,
 ) -> List[Dict[str, Any]]:
@@ -41,7 +44,9 @@ async def hybrid_search(
         LEFT JOIN sources s ON c.source_id = s.id
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
           AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
+          AND (CAST(:scope_folder AS TEXT) IS NULL OR s.folder = CAST(:scope_folder AS TEXT) OR s.folder LIKE CAST(:scope_folder AS TEXT) || '/%')
           AND c.embedding IS NOT NULL
+          AND (c.embedding <=> CAST(:embedding AS vector)) < :max_distance
         ORDER BY distance
         LIMIT 40
     """)
@@ -50,6 +55,8 @@ async def hybrid_search(
         "include_history": include_history,
         "has_source_filter": source_ids is not None and len(source_ids) > 0,
         "source_ids": source_ids if source_ids else [],
+        "scope_folder": scope_folder,
+        "max_distance": 1.0 - min_similarity,
     })
     vector_rows = [dict(row) for row in res_vec.mappings().all()]
     t_vec_duration = time.perf_counter() - t_vec_start
@@ -65,6 +72,7 @@ async def hybrid_search(
         LEFT JOIN sources s ON c.source_id = s.id
         WHERE (:include_history = TRUE OR c.is_active = TRUE)
           AND (:has_source_filter = FALSE OR c.source_id = ANY(:source_ids))
+          AND (CAST(:scope_folder AS TEXT) IS NULL OR s.folder = CAST(:scope_folder AS TEXT) OR s.folder LIKE CAST(:scope_folder AS TEXT) || '/%')
           AND c.tsv @@ (websearch_to_tsquery('russian', :combined_query) || websearch_to_tsquery('english', :combined_query))
         ORDER BY score DESC
         LIMIT 40
@@ -74,6 +82,7 @@ async def hybrid_search(
         "include_history": include_history,
         "has_source_filter": source_ids is not None and len(source_ids) > 0,
         "source_ids": source_ids if source_ids else [],
+        "scope_folder": scope_folder,
     })
     text_rows = [dict(row) for row in res_text.mappings().all()]
     t_bm25_duration = time.perf_counter() - t_bm25_start
@@ -102,6 +111,8 @@ async def hybrid_search(
             "similarity": 1.0 - row["distance"] if "distance" in row else 0.0
         })
 
+    # Filter out those below minimum RRF score
+    merged = [m for m in merged if m["rrf_score"] >= min_rrf_score]
     merged.sort(key=lambda x: x["rrf_score"], reverse=True)
     rows = merged[:limit]
     t_rrf_duration = time.perf_counter() - t_rrf_start

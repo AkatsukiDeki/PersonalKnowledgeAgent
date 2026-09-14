@@ -603,6 +603,12 @@ async def update_source_content(
                 source.raw_content = value
                 source.content = value
                 needs_reindex = True
+        elif field == "meta_info":
+            if value is not None:
+                source.meta_info = value
+                source.metadata_info = value
+                flag_modified(source, "meta_info")
+                flag_modified(source, "metadata_info")
         else:
             setattr(source, field, value)
 
@@ -770,6 +776,114 @@ def _format_time(seconds: float) -> str:
     m = int(seconds // 60)
     s = int(seconds % 60)
     return f"[{m:02d}:{s:02d}]"
+
+
+def build_markdown_from_structure(
+    title: str, structure: dict, raw_transcript: str | None = None
+) -> str:
+    """Собирает структурированный Markdown из JSON-ответа экстрактора."""
+    md_parts = [f"# {title}\n"]
+
+    summary = structure.get("summary")
+    if summary:
+        md_parts.append(f"## Саммари\n{summary}\n")
+
+    key_points = structure.get("key_points") or structure.get("ideas") or []
+    if key_points:
+        md_parts.append("## Ключевые мысли и идеи")
+        for pt in key_points:
+            md_parts.append(f"- {pt}")
+        md_parts.append("")
+
+    tasks = structure.get("tasks") or structure.get("action_items") or []
+    if tasks:
+        md_parts.append("## Задачи и действия")
+        for task in tasks:
+            if isinstance(task, dict):
+                md_parts.append(f"- [ ] {task.get('text', '')}")
+            else:
+                md_parts.append(f"- [ ] {task}")
+        md_parts.append("")
+
+    if raw_transcript:
+        md_parts.append(f"## Исходная расшифровка\n{raw_transcript}\n")
+
+    return "\n".join(md_parts)
+
+
+@router.post("/{source_id}/generate-structure")
+async def generate_structure_manually(
+    source_id: str, 
+    db: AsyncSession = Depends(get_db),
+    redis: ArqRedis = Depends(get_redis_pool)
+):
+    try:
+        sid = uuid.UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid UUID format")
+
+    source = await db.get(Source, sid)
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    meta = getattr(source, "metadata_info", None) or getattr(source, "meta_info", None) or {}
+    raw_text_full = source.content or source.raw_content or meta.get("raw_transcript") or ""
+    
+    if not raw_text_full:
+        raise HTTPException(status_code=400, detail="No content to process")
+
+    from ..core.llm import model_manager, TaskType
+    from ..media.schemas import VoiceStructuredNote
+    from sqlalchemy.orm.attributes import flag_modified
+    from ..core.prompts import VOICE_NOTE_STRUCT_PROMPT_TEMPLATE
+
+    struct_prompt = VOICE_NOTE_STRUCT_PROMPT_TEMPLATE.format(raw_text_full=raw_text_full)
+    
+    try:
+        structured_note = await model_manager.generate_structured(
+            task_type=TaskType.EXTRACTION,
+            schema=VoiceStructuredNote,
+            prompt=struct_prompt,
+            system_instruction="Ты профессиональный ассистент, который структурирует голосовые заметки и тексты."
+        )
+
+        if structured_note:
+            structured_data = structured_note.model_dump()
+            
+            # 1. Сохраняем сырой транскрипт в meta_info
+            if not source.meta_info:
+                source.meta_info = {}
+            source.meta_info["raw_transcript"] = source.content or source.raw_content or meta.get("raw_transcript")
+            
+            media_data = source.meta_info.get("media", {})
+            media_data["structured_note"] = structured_data
+            source.meta_info["media"] = media_data
+            
+            source.metadata_info = source.meta_info
+            flag_modified(source, "meta_info")
+            flag_modified(source, "metadata_info")
+
+            # 2. Генерируем Markdown под новый структурный чанкер
+            formatted_markdown = build_markdown_from_structure(
+                title=source.title or "Голосовая заметка",
+                structure=structured_data,
+                raw_transcript=source.meta_info.get("raw_transcript"),
+            )
+
+            source.content = formatted_markdown
+            source.processing_status = "completed"
+            
+            await db.commit()
+            
+            # 3. Запуск реиндексации
+            await redis.enqueue_job("_safe_reindex", source.id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
+            
+            return {"status": "ok", "structured_note": media_data["structured_note"]}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to generate structured note")
+    except Exception as e:
+        logger.error(f"[Generate Structure] Failed for {source_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ─── Динамический пул моделей для трансляции ────────────────────────────────

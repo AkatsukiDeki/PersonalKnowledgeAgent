@@ -69,6 +69,11 @@ class GenerateRoadmapRequest(BaseModel):
     target_role: Optional[str] = None
     target_goal: Optional[str] = None
     preferred_depth: Optional[int] = None
+    
+class AdaptiveSessionRequest(BaseModel):
+    subject_id: str
+    mode: Literal["quiz", "flashcards"] = "quiz"
+    question_count: int = 5
 
 class StudyCitation(BaseModel):
     marker: int
@@ -125,6 +130,7 @@ class GenerateQuizRequest(BaseModel):
     scope: LearningScope
     module_id: Optional[str] = None
     topic_id: Optional[str] = None
+    topic_title: Optional[str] = None
     difficulty: Literal["beginner", "intermediate", "advanced"] = "intermediate"
     question_count: int = 5
 

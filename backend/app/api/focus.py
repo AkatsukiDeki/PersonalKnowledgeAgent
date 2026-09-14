@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from ..db.session import get_db
-from ..db.models import FocusSession, Source
+from ..db.models import FocusSession, Source, Task, TaskStatus
 
 router = APIRouter(prefix="/focus", tags=["Focus & Pomodoro"])
 
@@ -18,6 +18,7 @@ class StartFocusRequest(BaseModel):
     session_type: str = "focus"
     target_duration_min: int = 25
     subject_id: Optional[uuid.UUID] = None
+    task_id: Optional[uuid.UUID] = None
     task_name: Optional[str] = None
 
 class StartFocusResponse(BaseModel):
@@ -53,9 +54,16 @@ async def start_session(req: StartFocusRequest, db: AsyncSession = Depends(get_d
         session_type=req.session_type,
         target_duration_min=req.target_duration_min,
         subject_id=req.subject_id,
+        task_id=req.task_id,
         task_name=req.task_name,
     )
     db.add(session)
+    
+    if req.task_id:
+        task = await db.get(Task, req.task_id)
+        if task and task.status == TaskStatus.TODO:
+            task.status = TaskStatus.IN_PROGRESS
+            
     await db.commit()
     await db.refresh(session)
     
@@ -100,6 +108,11 @@ async def finish_session(req: FinishFocusRequest, db: AsyncSession = Depends(get
         await db.flush()
         created_source_id = source.id
         
+    if session.task_id and req.completed:
+        task = await db.get(Task, session.task_id)
+        if task:
+            task.status = TaskStatus.DONE
+            
     await db.commit()
     
     return FinishFocusResponse(

@@ -20,6 +20,9 @@ from ...db.models import (
     SubjectTutorConversation,
     SubjectTutorMessage,
     SubjectFlashcard,
+    Task,
+    TaskStatus,
+    TaskPriority,
 )
 from datetime import datetime, timezone, timedelta, date
 from typing import Tuple
@@ -52,6 +55,10 @@ class SubjectUpdate(BaseModel):
 class NodeStatusUpdate(BaseModel):
     status: str  # "not_started" | "in_progress" | "completed"
 
+
+class RegenerateRoadmapRequest(BaseModel):
+    prompt_adjustment: Optional[str] = None
+    target_depth: Optional[str] = "balanced"  # "overview" | "balanced" | "deep"
 
 class GeneratePracticeRequest(BaseModel):
     node_id: Optional[str] = None
@@ -306,59 +313,99 @@ async def detach_source_from_subject(
 @router.post("/{subject_id}/roadmap/generate")
 async def generate_subject_roadmap(
     subject_id: uuid.UUID,
+    req: Optional[RegenerateRoadmapRequest] = Body(default=None),
     db: AsyncSession = Depends(get_db),
 ):
-    subject = await db.get(Subject, subject_id)
+    subject = await db.get(Subject, subject_id, options=[selectinload(Subject.sources)])
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    claims_stmt = (
-        select(Claim.content)
-        .join(Source, Claim.source_id == Source.id)
-        .join(subject_sources, subject_sources.c.source_id == Source.id)
+    data = req or RegenerateRoadmapRequest()
+
+    from ...db.models import Source, Chunk, Claim, subject_sources
+    from ...learning.roadmap_generator import RoadmapGenerator
+    from ...learning.schemas import GenerateRoadmapRequest, LearningScope
+
+    # 1. Извлечение привязанных источников
+    sources_stmt = (
+        select(Source)
+        .join(subject_sources)
         .where(
             subject_sources.c.subject_id == subject_id,
-            Claim.is_active == True,
             Source.is_deleted == False,
         )
-        .limit(50)
     )
-    claims_res = await db.execute(claims_stmt)
-    facts = claims_res.scalars().all()
-    context_text = "\n".join([f"- {f}" for f in facts]) if facts else f"Фундаментальные концепции предмета {subject.title}"
+    sources = (await db.execute(sources_stmt)).scalars().all()
+    source_ids = [s.id for s in sources]
 
-    prompt = f"""Создай структурированную дорожную карту изучения предмета "{subject.title}".
-Материалы и факты:
-{context_text}
+    chunks = []
+    claims = []
+    if source_ids:
+        # Случайная выборка для вариативности при перегенерации
+        chunks_stmt = select(Chunk).where(Chunk.source_id.in_(source_ids)).order_by(func.random()).limit(60)
+        chunks = (await db.execute(chunks_stmt)).scalars().all()
 
-Верни СТРОГО валидный JSON следующей структуры:
-{{
-  "modules": [
-    {{
-      "id": "mod_1",
-      "title": "Название модуля",
-      "description": "Краткое описание",
-      "topics": [
-        {{
-          "id": "top_1",
-          "title": "Название темы",
-          "status": "not_started"
-        }}
-      ]
-    }}
-  ]
-}}"""
+        claims_stmt = (
+            select(Claim)
+            .where(Claim.source_id.in_(source_ids), Claim.is_active == True)
+            .order_by(func.random())
+            .limit(60)
+        )
+        claims = (await db.execute(claims_stmt)).scalars().all()
 
-    roadmap_content = await ollama_client.generate_json(prompt)
-    if not roadmap_content or "modules" not in roadmap_content:
-        raise HTTPException(status_code=500, detail="Не удалось сформировать дорожную карту через LLM.")
+    # 2. Дополнительная директива от пользователя
+    custom_instruction = ""
+    if data.prompt_adjustment and data.prompt_adjustment.strip():
+        custom_instruction = (
+            f"\nДОПОЛНИТЕЛЬНЫЕ ТРЕБОВАНИЯ ПОЛЬЗОВАТЕЛЯ К СТРУКТУРЕ:"
+            f" {data.prompt_adjustment.strip()}"
+            f"\nОбязательно перестрой темы и модули с учетом этих требований!"
+        )
 
+    # 3. Генерация адаптивного графа
+    generator = RoadmapGenerator()
+    req_obj = GenerateRoadmapRequest(
+        scope=LearningScope(subject_id=subject_id),
+        target_goal=f"Полное освоение предмета {subject.title}{custom_instruction}",
+    )
+
+    try:
+        roadmap_payload = await generator.generate(req_obj, sources, claims, chunks)
+        roadmap_content = roadmap_payload.model_dump()
+    except Exception as e:
+        logger.exception("Roadmap generator failed, building fallback roadmap: %s", e)
+        roadmap_content = {
+            "title": subject.title,
+            "overview": subject.description or "Базовый трек обучения",
+            "mermaid_code": "graph TD\n  A[Введение] --> B[Основные концепции]\n  B --> C[Практика]",
+            "nodes": [
+                {"id": "intro", "title": "Введение в тему", "description": "Базовые понятия", "status": "not_started"},
+                {"id": "core", "title": "Ключевые концепции", "description": "Теоретические основы", "status": "not_started"},
+                {"id": "practice", "title": "Практическое применение", "description": "Решение прикладных задач", "status": "not_started"},
+            ],
+            "edges": [["intro", "core"], ["core", "practice"]],
+            "modules": [
+                {
+                    "id": "mod_1",
+                    "title": "Основы дисциплины",
+                    "description": "Базовый модуль",
+                    "topics": [
+                        {"id": "intro", "title": "Введение в тему", "status": "not_started"},
+                        {"id": "core", "title": "Ключевые концепции", "status": "not_started"},
+                        {"id": "practice", "title": "Практическое применение", "status": "not_started"},
+                    ],
+                }
+            ],
+        }
+
+    # 4. Сохранение в БД с фиксацией мутации JSONB
     rm_stmt = select(SubjectRoadmap).where(SubjectRoadmap.subject_id == subject_id)
     existing_rm = (await db.execute(rm_stmt)).scalar_one_or_none()
 
     if existing_rm:
         existing_rm.content = roadmap_content
-        existing_rm.version += 1
+        existing_rm.version = (existing_rm.version or 1) + 1
+        flag_modified(existing_rm, "content")
     else:
         new_rm = SubjectRoadmap(subject_id=subject_id, content=roadmap_content, version=1)
         db.add(new_rm)
@@ -444,7 +491,7 @@ async def generate_quiz(
     }.get(difficulty, "Средняя сложность.")
 
     try:
-        from app.learning.practice_generator import PracticeGenerator
+        from ...learning.practice_generator import PracticeGenerator
         result_model = await PracticeGenerator.generate_quiz(
             context_text=context_text,
             count=count,
@@ -501,7 +548,7 @@ async def generate_flashcards(
         context_text = "\n".join([f"- {f}" for f in facts]) if facts else f"Ключевые понятия по теме: {topic}"
 
         try:
-            from app.learning.practice_generator import PracticeGenerator
+            from ...learning.practice_generator import PracticeGenerator
             result_model = await PracticeGenerator.generate_flashcards(
                 context_text=context_text,
                 count=needed,
@@ -702,8 +749,41 @@ async def record_session(
                 subject = await db.get(Subject, data.subject_id)
                 if subject and all_topics:
                     subject.mastery_score = round((completed_count / len(all_topics)) * 100, 1)
-                    if data.session_type == "exam" and data.score >= 85.0:
+                    if (
+                        data.session_type == "exam"
+                        and data.score >= 85.0
+                        and subject.mastery_score >= 80.0
+                    ):
                         subject.is_mastered = True
+
+        # 2. Если балл < 70 — создаём задачу на повторение
+        if data.score < 70.0:
+            failed_info = (
+                f" Ошибки в концептах: {', '.join(data.failed_concepts)}"
+                if data.failed_concepts
+                else ""
+            )
+            # Проверяем, нет ли уже активной задачи с таким названием для этого предмета
+            existing_task_stmt = select(Task).where(
+                Task.subject_id == data.subject_id,
+                Task.topic_name == data.topic_name,
+                Task.status == TaskStatus.TODO,
+            )
+            existing_task = (await db.execute(existing_task_stmt)).scalar_one_or_none()
+            if not existing_task:
+                review_task = Task(
+                    title=f"Повторить тему: {data.topic_name}",
+                    description=(
+                        f"Низкий балл на сессии ({int(data.score)}%).{failed_info}"
+                        " Требуется проработка материалов."
+                    ),
+                    priority=TaskPriority.HIGH,
+                    status=TaskStatus.TODO,
+                    subject_id=data.subject_id,
+                    topic_name=data.topic_name,
+                    due_date=datetime.now(timezone.utc) + timedelta(days=1),
+                )
+                db.add(review_task)
 
     await db.commit()
     return {"status": "ok", "session_id": str(session.id)}
@@ -825,15 +905,23 @@ async def get_subject_stats(
 # ---------------------------------------------------------
 
 @router.get("/{subject_id}/tutor/messages")
-async def get_tutor_history(subject_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
+async def get_tutor_history(
+    subject_id: uuid.UUID,
+    topic_id: str = "general",
+    mode: str = "mentor",
+    db: AsyncSession = Depends(get_db)
+):
     subject = await db.get(Subject, subject_id)
     if not subject:
         raise HTTPException(status_code=404, detail="Subject not found")
 
-    # Ищем диалог тьютора по предмету
     conv_stmt = (
         select(SubjectTutorConversation)
-        .where(SubjectTutorConversation.subject_id == subject_id)
+        .where(
+            SubjectTutorConversation.subject_id == subject_id,
+            SubjectTutorConversation.topic_id == topic_id,
+            SubjectTutorConversation.chat_mode == mode
+        )
         .options(selectinload(SubjectTutorConversation.messages))
     )
     conv_res = await db.execute(conv_stmt)
@@ -930,7 +1018,7 @@ async def send_tutor_message(
 
         prompt = f"История диалога:\n{history_text}\n\nСтудент: {data.message}\nТьютор:"
 
-        from app.core.llm import model_manager
+        from ...core.llm import model_manager
         ai_reply = await model_manager.generate_text(
             prompt=prompt,
             system_instruction=system_instruction
@@ -967,8 +1055,20 @@ async def send_tutor_message(
 
 
 @router.delete("/{subject_id}/tutor/messages")
-async def reset_tutor_history(subject_id: uuid.UUID, db: AsyncSession = Depends(get_db)):
-    conv_stmt = select(SubjectTutorConversation).where(SubjectTutorConversation.subject_id == subject_id)
+async def reset_tutor_history(
+    subject_id: uuid.UUID,
+    topic_id: str = "general",
+    mode: str = "mentor",
+    db: AsyncSession = Depends(get_db)
+):
+    conv_stmt = (
+        select(SubjectTutorConversation)
+        .where(
+            SubjectTutorConversation.subject_id == subject_id,
+            SubjectTutorConversation.topic_id == topic_id,
+            SubjectTutorConversation.chat_mode == mode
+        )
+    )
     conv_res = await db.execute(conv_stmt)
     conv = conv_res.scalar_one_or_none()
 

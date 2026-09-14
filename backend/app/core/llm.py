@@ -44,7 +44,7 @@ class ModelManager:
 
     def __init__(self):
         self.fast_model = _sanitize_model_name(getattr(settings, "FAST_LLM_MODEL", "gemini-3.6-flash"))
-        self.reasoning_model = _sanitize_model_name(getattr(settings, "REASONING_LLM_MODEL", "gemini-3.6-flash"))
+        self.reasoning_model = _sanitize_model_name(getattr(settings, "REASONING_LLM_MODEL", "gemini-2.0-pro"))
         self.ollama_client = OllamaClient()  # Инициализация Ollama клиента
         self._cloud_client = None
         self._cloud_semaphore = asyncio.Semaphore(8)  # Ограничение конкурентных вызовов к облачному API

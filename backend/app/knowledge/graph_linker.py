@@ -39,7 +39,21 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
     if new_claims is not None:
         claims_to_process = new_claims
     else:
-        stmt = select(Claim).where(Claim.is_active == True, Claim.memory_score >= 0.60)
+        from sqlalchemy import func
+        # Выбираем клеймы, у которых < 2 связей (source или target)
+        subq_source = select(ClaimRelation.source_claim_id, func.count(ClaimRelation.id).label('s_cnt')).group_by(ClaimRelation.source_claim_id).subquery()
+        subq_target = select(ClaimRelation.target_claim_id, func.count(ClaimRelation.id).label('t_cnt')).group_by(ClaimRelation.target_claim_id).subquery()
+        
+        stmt = (
+            select(Claim)
+            .outerjoin(subq_source, Claim.id == subq_source.c.source_claim_id)
+            .outerjoin(subq_target, Claim.id == subq_target.c.target_claim_id)
+            .where(
+                Claim.is_active == True,
+                Claim.memory_score >= 0.60,
+                func.coalesce(subq_source.c.s_cnt, 0) + func.coalesce(subq_target.c.t_cnt, 0) < 2
+            )
+        )
         claims_res = await db.execute(stmt)
         claims_to_process = claims_res.scalars().all()
     
@@ -87,6 +101,10 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
                 """
             )
             
+            if not response_model or not hasattr(response_model, 'relations'):
+                logger.warning(f"[GraphLinker] No valid relations returned for claim {claim.id}")
+                continue
+            
             for rel in response_model.relations:
                 if rel.confidence < 0.70:
                     continue
@@ -120,4 +138,3 @@ async def relink_durable_claims(db: AsyncSession, new_claims: Optional[List[Clai
             
         except Exception as e:
             logger.error(f"[GraphLinker] Failed to extract relations for claim {claim.id}: {e}")
-            await db.rollback()

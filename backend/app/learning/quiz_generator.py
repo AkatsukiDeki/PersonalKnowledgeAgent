@@ -16,15 +16,21 @@ class QuizGenerator:
         chunks = context.get("chunks", [])
 
         if not claims and not chunks:
-            raise ValueError("Insufficient context for generating a quiz.")
-
-        context_summary_parts = []
-        if claims:
-            context_summary_parts.append("\n".join([f"- [Claim ID: {c.id}]: {c.content}" for c in claims[:20]]))
-        if chunks:
-            context_summary_parts.append("\n".join([f"- [Chunk ID: {ch.id}]: {ch.text_content[:300]}..." for ch in chunks[:15]]))
-            
-        context_summary = "\n".join(context_summary_parts)
+            # Fallback if context is empty
+            topic_title = (
+                getattr(request, "topic_title", None)
+                or getattr(request, "topic_id", None)
+                or context.get("extra_instruction")
+                or "Основы дисциплины"
+            )
+            context_summary = f"Предмет: {topic_title}. Сгенерируй концептуальные проверочные вопросы на понимание ключевых принципов этой дисциплины."
+        else:
+            context_summary_parts = []
+            if claims:
+                context_summary_parts.append("\n".join([f"- [Claim ID: {c.id}]: {c.content}" for c in claims[:20]]))
+            if chunks:
+                context_summary_parts.append("\n".join([f"- [Chunk ID: {ch.id}]: {ch.text_content[:300]}..." for ch in chunks[:15]]))
+            context_summary = "\n\n".join(context_summary_parts)
 
         system_prompt = (
             "Ты — строгий технический ментор. На основе предоставленных фактов и фрагментов документации "
@@ -33,14 +39,20 @@ class QuizGenerator:
             "1. Вопросы должны проверять понимание архитектуры и кода, а не банальное запоминание текста.\n"
             "2. Каждый вопрос должен содержать корректное объяснение (explanation).\n"
             "3. Четко укажи id связанных утверждений (Claim ID) в evidence_claim_ids.\n"
-            "4. В массиве опций (options) отметь правильные ответы (is_correct=true)."
+            "4. В массиве опций (options) отметь правильные ответы (is_correct=true).\n"
+            "5. Каждый вариант в options должен быть коротким термином или лаконичной фразой (до 75 символов).\n"
+            "6. Пояснение (explanation) не должно превышать 150 символов."
         )
 
         user_prompt = (
-            f"Сложность: {request.difficulty}\n"
+            f"Уровень сложности: {request.difficulty}\n"
             f"Количество вопросов: {request.question_count}\n\n"
-            f"База фактов для генерации:\n{context_summary}"
+            f"Вводные факты/фрагменты:\n{context_summary}"
         )
+        
+        extra_instruction = context.get("extra_instruction")
+        if extra_instruction:
+            user_prompt += f"\n\n{extra_instruction}"
 
         quiz = await model_manager.generate_structured(
             task_type=TaskType.DEEP_SYNTHESIS,

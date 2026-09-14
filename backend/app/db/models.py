@@ -1,9 +1,11 @@
 import uuid
+import enum
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pgvector.sqlalchemy import Vector
 from ..core.config import settings
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime, text
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime, text, UniqueConstraint, Enum as SQLEnum
+from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
 from sqlalchemy import Computed
@@ -507,7 +509,7 @@ class Subject(Base, TimestampedUUIDMixin):
                                                        cascade="all, delete-orphan", lazy="selectin")
     sessions: Mapped[List["LearningSession"]] = relationship("LearningSession", back_populates="subject",
                                                              cascade="all, delete-orphan", lazy="selectin")
-    tutor_conversation: Mapped[Optional["SubjectTutorConversation"]] = relationship("SubjectTutorConversation", back_populates="subject",
+    tutor_conversations: Mapped[List["SubjectTutorConversation"]] = relationship("SubjectTutorConversation", back_populates="subject",
                                                                                     cascade="all, delete-orphan", lazy="selectin")
     conversations = relationship("Conversation", back_populates="subject", lazy="selectin")
     sources: Mapped[List["Source"]] = relationship("Source", secondary=subject_sources, lazy="selectin")
@@ -556,10 +558,16 @@ class LearningSession(Base, TimestampedUUIDMixin):
 class SubjectTutorConversation(Base, TimestampedUUIDMixin):
     __tablename__ = "subject_tutor_conversations"
 
-    subject_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False, unique=True)
+    subject_id: Mapped[uuid.UUID] = mapped_column(PG_UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="CASCADE"), nullable=False)
+    topic_id: Mapped[str] = mapped_column(String(255), nullable=False, default="general")
+    chat_mode: Mapped[str] = mapped_column(String(50), nullable=False, default="mentor")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    subject: Mapped["Subject"] = relationship("Subject", back_populates="tutor_conversation")
+    __table_args__ = (
+        UniqueConstraint('subject_id', 'topic_id', 'chat_mode', name='uix_subject_topic_mode'),
+    )
+
+    subject: Mapped["Subject"] = relationship("Subject", back_populates="tutor_conversations")
     messages: Mapped[List["SubjectTutorMessage"]] = relationship("SubjectTutorMessage", back_populates="conversation", cascade="all, delete-orphan", lazy="selectin", order_by="SubjectTutorMessage.sequence_num")
 
 
@@ -602,8 +610,115 @@ class FocusSession(Base, TimestampedUUIDMixin):
     actual_duration_sec = Column(Integer, nullable=False, default=0)
     
     subject_id = Column(PG_UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="SET NULL"), nullable=True, index=True)
+    task_id = Column(PG_UUID(as_uuid=True), ForeignKey("tasks.id", ondelete="SET NULL"), nullable=True, index=True)
     task_name = Column(String(255), nullable=True)
     session_notes = Column(Text, nullable=True)
     
     completed = Column(Boolean, nullable=False, default=False)
     interrupted = Column(Boolean, nullable=False, default=False)
+
+
+class TaskStatus(str, enum.Enum):
+    TODO = "todo"
+    IN_PROGRESS = "in_progress"
+    DONE = "done"
+    ARCHIVED = "archived"
+
+
+class TaskPriority(str, enum.Enum):
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+
+
+class Task(Base, TimestampedUUIDMixin):
+    __tablename__ = "tasks"
+
+    title = Column(String(512), nullable=False)
+    description = Column(Text, nullable=True)
+
+    status = Column(
+        SQLEnum(TaskStatus, name="task_status_enum", native_enum=False),
+        default=TaskStatus.TODO,
+        nullable=False,
+        index=True,
+    )
+    priority = Column(
+        SQLEnum(TaskPriority, name="task_priority_enum", native_enum=False),
+        default=TaskPriority.MEDIUM,
+        nullable=False,
+    )
+
+    source_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("sources.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    subject_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("subjects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    topic_name = Column(String(256), nullable=True, index=True)
+
+    due_date = Column(DateTime(timezone=True), nullable=True)
+    created_by = Column(
+        String(64), default="user", nullable=False
+    )  # 'user', 'ai_agent', 'adaptive_engine'
+
+
+class ConceptMastery(Base):
+    __tablename__ = "concept_mastery"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    node_id = Column(String, nullable=True, index=True)
+    topic_name = Column(String, nullable=False, index=True)
+
+    # Метрики мастерства
+    mastery_level = Column(Float, default=0.0, nullable=False)  # 0.0 - 1.0
+    total_attempts = Column(Integer, default=0, nullable=False)
+    successful_attempts = Column(Integer, default=0, nullable=False)
+
+    # SM-2 параметры для концепта
+    ease_factor = Column(Float, default=2.5, nullable=False)
+    interval_days = Column(Integer, default=0, nullable=False)
+    last_reviewed_at = Column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    next_review_due = Column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "subject_id", "topic_name", name="uq_subject_topic_mastery"
+        ),
+    )
+
+
+class LearningAttempt(Base):
+    __tablename__ = "learning_attempts"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    subject_id = Column(
+        PG_UUID(as_uuid=True),
+        ForeignKey("subjects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    node_id = Column(String, nullable=True)
+    topic_name = Column(String, nullable=False)
+    is_correct = Column(Boolean, nullable=False)
+    response_time_ms = Column(Integer, nullable=True)
+    item_type = Column(
+        String, default="quiz"
+    )  # 'quiz', 'flashcard', 'sandbox_code'
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
