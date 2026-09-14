@@ -254,9 +254,6 @@ async def upload_source(
     if not file.filename:
         raise HTTPException(status_code=400, detail="Filename is required")
 
-    if not is_supported(file.filename):
-        raise HTTPException(status_code=400, detail=f"Unsupported file type: {file.filename}")
-
     file_bytes = await file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty file")
@@ -269,43 +266,42 @@ async def upload_source(
         raise HTTPException(status_code=400, detail="Executable files are not allowed")
 
     _ensure_data_dir()
+    task_id = str(uuid.uuid4())
+    raw_dir = os.path.join(DATA_DIR, "raw")
+    os.makedirs(raw_dir, exist_ok=True)
+    saved_path = os.path.join(raw_dir, f"{task_id}_{file.filename}")
+
+    with open(saved_path, "wb") as f:
+        f.write(file_bytes)
+
     source_title = title.strip() if (title and title.strip()) else os.path.splitext(file.filename)[0]
 
-    try:
-        source, ingest_status = await ingest_file_revision(
-            db=db,
-            filename=file.filename,
-            file_bytes=file_bytes,
-            title=source_title,
-            domain=domain,
-            importance=importance,
-            original_path=None,
-        )
-    except Exception as e:
-        logger.error(f"[Sources] Parse/Ingest error for {file.filename}: {e}")
-        raise HTTPException(status_code=422, detail=f"Failed to ingest file: {e}")
+    await redis.set(
+        f"task:progress:{task_id}",
+        json.dumps({"status": "queued", "step": "enqueued", "progress": 0, "error": None}),
+        ex=3600
+    )
 
-    source.is_deleted = False
-    if folder is not None:
-        source.folder = None if folder in ("", "root", "none") else folder
+    queue_name = settings.ARQ_QUEUE_NAME if hasattr(settings, "ARQ_QUEUE_NAME") else "arq:queue"
+    await redis.enqueue_job(
+        "process_media_source_task", 
+        task_id=task_id, 
+        file_path=saved_path, 
+        title=source_title,
+        domain=domain,
+        importance=importance,
+        _queue_name=queue_name
+    )
 
-    source_dir = os.path.join(DATA_DIR, str(source.id))
-    os.makedirs(source_dir, exist_ok=True)
-    original_path = os.path.join(source_dir, file.filename)
-
-    with open(original_path, "wb") as f:
-        f.write(file_bytes)
-    source.original_file_path = original_path
-
-    await db.commit()
-    await db.refresh(source)
-
-    if ingest_status != "unchanged" or source.status == "pending":
-        await redis.enqueue_job("process_source_chunks_bg", source.id, _queue_name=settings.ARQ_QUEUE_KNOWLEDGE)
-
-    chunks_count = await _count(db, Chunk, Chunk.source_id == source.id)
-    claims_count = await _count(db, Claim, Claim.source_id == source.id)
-    return _enrich_source_response(source, chunks_count, claims_count)
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=202,
+        content={
+            "task_id": task_id,
+            "status": "queued",
+            "message": "File accepted for background processing"
+        }
+    )
 
 
 @router.post("/", response_model=SourceResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -447,6 +443,14 @@ async def rename_folder(
 
     await db.commit()
     return {"status": "ok", "renamed_count": len(sources_to_update)}
+
+
+@router.get("/tasks/{task_id}")
+async def get_task_status(task_id: str, redis: ArqRedis = Depends(get_redis_pool)):
+    raw = await redis.get(f"task:progress:{task_id}")
+    if not raw:
+        raise HTTPException(status_code=404, detail="Task not found or expired")
+    return json.loads(raw)
 
 
 # ─── Delete empty folder ──────────────────────────────────────────────────────

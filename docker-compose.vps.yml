@@ -61,11 +61,11 @@ services:
     volumes:
       - pka_backend_uploads:/app/uploads
 
-  worker_media:
+  worker:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: pka_vps_worker_media
+    container_name: pka_vps_worker
     restart: unless-stopped
     env_file:
       - .env
@@ -89,7 +89,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
-    command: ["arq", "app.tasks.worker.MediaWorkerSettings"]
+    command: python -m arq app.worker.WorkerSettings
     depends_on:
       db:
         condition: service_healthy
@@ -152,6 +152,7 @@ services:
       - .env
     environment:
       - BOT_REDIS_URL=redis://redis:6379/1
+      - PYTHONUNBUFFERED=1
     depends_on:
       - backend
     networks:

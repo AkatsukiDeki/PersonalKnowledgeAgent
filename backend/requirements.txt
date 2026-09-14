@@ -13,7 +13,7 @@ google-generativeai
 
 cachetools
 
-arq>=0.25.0
+arq>=0.26.0
 redis>=5.0.0
 
 tenacity>=8.2.0
