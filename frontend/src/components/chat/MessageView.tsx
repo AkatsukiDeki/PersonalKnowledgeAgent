@@ -4,6 +4,7 @@ import { Message } from '../../types/chat';
 import { Bot, User, X, Copy, Check } from 'lucide-react';
 import { ProvenanceTree } from './ProvenanceTree';
 import { MessageLatencyBadge } from './MessageLatencyBadge';
+import { SandboxTerminalWidget } from './SandboxTerminalWidget';
 
 interface Props {
   message: Message;
@@ -93,6 +94,11 @@ export function MessageView({ message }: Props) {
         {message.isStreaming && (
           <span className="inline-block w-1.5 h-4 ml-1 bg-entity-claim rounded-sm animate-pulse align-middle" />
         )}
+
+        {/* Tool executions */}
+        {message.toolStates && message.toolStates.map((tool, idx) => (
+          <SandboxTerminalWidget key={tool.id || idx} tool={tool} />
+        ))}
 
         {/* Provenance Tree — replaces old flat citation list */}
         {!isUser && !message.isStreaming && message.citations && message.citations.length > 0 && (

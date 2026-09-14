@@ -19,6 +19,16 @@ interface Props {
 }
 
 export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Props) {
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+    };
+  }, []);
+
   const [messages, setMessages] = useState<Message[]>([]);
 
   const [input, setInput] = useState('');
@@ -197,6 +207,12 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
 
     if ((!textToSend.trim() && !attachedImage && attachedFiles.length === 0) || isLoading || isCooldown) return;
 
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     let targetConvId = activeConvId;
     if (!targetConvId) {
       try {
@@ -277,6 +293,43 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
         streamBuffer += token;
         setMessages((prev) =>
           prev.map((msg) => (msg.id === assistantId ? { ...msg, content: streamBuffer } : msg))
+        );
+      },
+      (tool) => {
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== assistantId) return msg;
+            const existingStates = msg.toolStates || [];
+            const newState: import('../../types/chat').ToolState = {
+              id: tool.execution_id || Date.now().toString(),
+              tool_name: tool.tool_name,
+              status: 'running',
+              script: tool.args?.script || tool.script || '',
+            };
+            return { ...msg, toolStates: [...existingStates, newState] };
+          })
+        );
+      },
+      (result) => {
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.id !== assistantId) return msg;
+            const existingStates = msg.toolStates || [];
+            const targetId = result.execution_id;
+            const idx = targetId ? existingStates.findIndex(t => t.id === targetId) : existingStates.length - 1;
+            
+            if (idx >= 0) {
+              const updated = [...existingStates];
+              updated[idx] = {
+                ...updated[idx],
+                status: result.status === 'success' ? 'success' : 'error',
+                stdout: result.result?.stdout || result.stdout,
+                stderr: result.result?.stderr || result.stderr || result.error,
+              };
+              return { ...msg, toolStates: updated };
+            }
+            return msg;
+          })
         );
       },
       (error) => {

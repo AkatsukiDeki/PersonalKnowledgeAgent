@@ -98,7 +98,7 @@ export function StudyCanvas({ note, isLoading, currentScope, moduleId, activeTop
     setExtraResult(null);
     try {
       if (type === 'flashcards') {
-        const res = await learningApi.generateFlashcards({ topic: note.title, count: 5 });
+        const res = await learningApi.generateFlashcards({ topic: note.title, count: 10 });
         setExtraResult({ type: 'flashcards', data: res });
       }
     } catch (e: any) {

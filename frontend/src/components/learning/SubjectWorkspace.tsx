@@ -6,23 +6,26 @@ import { SubjectRoadmap } from './SubjectRoadmap';
 import { SubjectMaterials } from './SubjectMaterials';
 import { SubjectTutorChat } from './SubjectTutorChat';
 import { SubjectStats } from './SubjectStats';
+import { SubjectTasks } from './SubjectTasks';
 import { CustomPracticeModal } from './CustomPracticeModal';
 import { QuizSessionModal } from './QuizSessionModal';
 import { FlashcardsSessionModal } from './FlashcardsSessionModal';
 import { useLanguage } from '../../context/LanguageContext';
+import { CheckSquare, BrainCircuit } from 'lucide-react';
+import { learningApi } from '../../api/learning';
 
-type Tab = 'roadmap' | 'materials' | 'tutor' | 'stats' | 'sources';
+type Tab = 'roadmap' | 'materials' | 'tasks' | 'tutor' | 'stats' | 'sources';
 
 export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void; initialTab?: Tab }> = ({ subjectId, onBack, initialTab }) => {
   const { t } = useLanguage();
   const [subject, setSubject] = useState<SubjectDetail | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(() => {
-    if (initialTab && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(initialTab)) {
+    if (initialTab && ['roadmap', 'materials', 'sources', 'tasks', 'tutor', 'stats'].includes(initialTab)) {
       return initialTab === 'sources' ? 'materials' : initialTab;
     }
     if (typeof window !== 'undefined') {
       const saved = localStorage.getItem(`pka_subject_tab_${subjectId}`);
-      if (saved && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(saved)) {
+      if (saved && ['roadmap', 'materials', 'sources', 'tasks', 'tutor', 'stats'].includes(saved)) {
         return (saved === 'sources' ? 'materials' : saved) as Tab;
       }
     }
@@ -41,14 +44,34 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
 
   const [initialTutorTopic, setInitialTutorTopic] = useState<{ id: string; title: string } | null>(null);
   const [isPracticeModalOpen, setIsPracticeModalOpen] = useState(false);
-  const [quizSession, setQuizSession] = useState<{ topicId: string; topicName: string; isExam: boolean; params?: any } | null>(null);
-  const [flashcardSession, setFlashcardSession] = useState<{ topicId: string; topicName: string; params?: any } | null>(null);
+  const [quizSession, setQuizSession] = useState<{ topicId: string; topicName: string; isExam: boolean; params?: any, adaptiveData?: any } | null>(null);
+  const [flashcardSession, setFlashcardSession] = useState<{ topicId: string; topicName: string; params?: any, adaptiveData?: any } | null>(null);
+  const [isAdaptiveLoading, setIsAdaptiveLoading] = useState(false);
 
   useEffect(() => {
-    if (initialTab && ['roadmap', 'materials', 'sources', 'tutor', 'stats'].includes(initialTab)) {
+    if (initialTab && ['roadmap', 'materials', 'sources', 'tasks', 'tutor', 'stats'].includes(initialTab)) {
       setActiveTab(initialTab === 'sources' ? 'materials' : initialTab);
     }
   }, [initialTab]);
+
+  const handleStartAdaptive = async () => {
+    if (!subject) return;
+    try {
+      setIsAdaptiveLoading(true);
+      const data = await learningApi.generateAdaptiveSession({ subject_id: subject.id, mode: 'quiz', count: 5 });
+      setQuizSession({
+        topicId: 'adaptive',
+        topicName: 'Адаптивная сессия',
+        isExam: false,
+        adaptiveData: data
+      });
+    } catch (e) {
+      console.error('Failed to start adaptive session', e);
+      alert('Ошибка запуска адаптивной сессии');
+    } finally {
+      setIsAdaptiveLoading(false);
+    }
+  };
 
   useEffect(() => {
     subjectsApi.getSubject(subjectId).then((data) => {
@@ -81,6 +104,7 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
   const tabs = [
     { id: 'roadmap', label: t('learning.roadmap'), icon: Map },
     { id: 'materials', label: t('learning.materials'), icon: BookOpen },
+    { id: 'tasks', label: 'Задачи', icon: CheckSquare },
     { id: 'tutor', label: t('learning.tutor'), icon: MessageSquare },
     { id: 'stats', label: t('learning.stats'), icon: BarChart2 },
   ] as const;
@@ -155,7 +179,15 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
               className="flex items-center gap-1.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-300 hover:text-indigo-200 border border-indigo-500/30 hover:border-indigo-500/50 px-3 py-1.5 rounded-xl transition-all text-xs font-medium shadow-sm"
             >
               <GraduationCap size={14} className="text-indigo-400" />
-              <span>Сдать экзамен</span>
+              <span>Глобальный Экзамен</span>
+            </button>
+            <button
+              onClick={handleStartAdaptive}
+              disabled={isAdaptiveLoading}
+              className="flex items-center gap-1.5 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-300 hover:text-emerald-200 border border-emerald-500/30 hover:border-emerald-500/50 px-3 py-1.5 rounded-xl transition-all text-xs font-medium shadow-sm disabled:opacity-50"
+            >
+              <BrainCircuit size={14} className="text-emerald-400" />
+              <span>{isAdaptiveLoading ? 'Сборка...' : 'Адаптивная сессия'}</span>
             </button>
           </div>
           <div className="hidden md:block w-px h-5 bg-zinc-800 mx-1"></div>
@@ -195,6 +227,10 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
         
         {activeTab === 'materials' && (
           <SubjectMaterials subjectId={subject.id} />
+        )}
+
+        {activeTab === 'tasks' && (
+          <SubjectTasks subjectId={subject.id} />
         )}
         
         {activeTab === 'tutor' && (
@@ -238,17 +274,19 @@ export const SubjectWorkspace: React.FC<{ subjectId: string; onBack: () => void;
       )}
 
       {quizSession && (
-        <QuizSessionModal
-          subjectId={subject.id}
-          topicId={quizSession.topicId}
-          topicName={quizSession.topicName}
-          isExam={quizSession.isExam}
-          practiceParams={quizSession.params}
-          onClose={() => setQuizSession(null)}
-          onComplete={(score) => {
-             // We can refresh stats or something, but modal handles itself.
-          }}
-        />
+          <QuizSessionModal
+            subjectId={subject.id}
+            topicId={quizSession.topicId}
+            topicName={quizSession.topicName}
+            isExam={quizSession.isExam}
+            practiceParams={quizSession.params}
+            adaptiveData={quizSession.adaptiveData}
+            onClose={() => setQuizSession(null)}
+            onComplete={(score) => {
+               // We can refresh stats or something, but modal handles itself.
+               console.log("Quiz completed with score:", score);
+            }}
+          />
       )}
 
       {flashcardSession && (

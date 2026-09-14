@@ -32,7 +32,7 @@ export function LearningModal({ isOpen, onClose, sourceId, topic }: Props) {
   const handleStartFlashcards = async () => {
     setIsLoading(true);
     try {
-      const cards = await learningApi.generateFlashcards({ source_id: sourceId, topic, count: 5 });
+      const cards = await learningApi.generateFlashcards({ source_id: sourceId, topic, count: 10 });
       setFlashcards(cards);
       setMode('flashcards');
     } catch (e) {
@@ -46,7 +46,7 @@ export function LearningModal({ isOpen, onClose, sourceId, topic }: Props) {
   const handleStartQuiz = async () => {
     setIsLoading(true);
     try {
-      const qs = await learningApi.generateQuiz({ source_id: sourceId, topic, count: 5 });
+      const qs = await learningApi.generateQuiz({ source_id: sourceId, topic, count: 10 });
       setQuizQuestions(qs);
       setMode('quiz');
     } catch (e) {

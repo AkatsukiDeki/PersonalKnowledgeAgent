@@ -11,6 +11,8 @@ export async function streamChat(
   onStatus: (status: string) => void,
   onCitations: (citations: Citation[]) => void,
   onToken: (token: string) => void,
+  onToolStart: (tool: any) => void,
+  onToolResult: (result: any) => void,
   onError: (error: string) => void,
   onDone: () => void,
   onTelemetry: (telemetry: any) => void,
@@ -18,7 +20,8 @@ export async function streamChat(
   learning_context?: LearningContext,
   mode: string = 'assistant',
   image_base64?: string,
-  image_mime_type?: string
+  image_mime_type?: string,
+  signal?: AbortSignal
 ) {
   try {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -30,6 +33,7 @@ export async function streamChat(
     const response = await fetch(`${BASE_URL}/chat/stream`, {
       method: 'POST',
       headers,
+      signal,
       body: JSON.stringify({ 
         query, 
         history, 
@@ -78,13 +82,15 @@ export async function streamChat(
 
         if (eventType === 'metadata') {
           const payload = JSON.parse(dataStr);
-          if (payload.conversation_id) {
-            onConversationCreated(payload.conversation_id);
+          const out = payload.output || payload;
+          if (out.conversation_id) {
+            onConversationCreated(out.conversation_id);
           }
         } else if (eventType === 'query_rewrite') {
           const payload = JSON.parse(dataStr);
-          if (payload.original !== payload.condensed) {
-            onStatus(`Уточнение запроса: ${payload.condensed}`);
+          const out = payload.output || payload;
+          if (out.original !== out.condensed) {
+            onStatus(`Уточнение запроса: ${out.condensed}`);
           } else {
             onStatus('Анализ запроса...');
           }
@@ -92,15 +98,31 @@ export async function streamChat(
           onStatus('Поиск в базе знаний...');
         } else if (eventType === 'citations') {
           onStatus('Генерация ответа...');
-          const citations: Citation[] = JSON.parse(dataStr);
+          const payload = JSON.parse(dataStr);
+          const citations: Citation[] = payload.output || payload;
           onCitations(citations);
-        } else if (eventType === 'message') {
+        } else if (eventType === 'message' || eventType === 'token') {
           onStatus(''); // Очищаем статус
           const payload = JSON.parse(dataStr);
-          onToken(payload.text || '');
+          onToken(payload.text_chunk || payload.text || '');
+        } else if (eventType === 'tool_start') {
+          const payload = JSON.parse(dataStr);
+          const out = payload.output || payload;
+          if (out.tool_name === 'python_sandbox') {
+             onStatus('✨ LLM запускает Python-скрипт...');
+          }
+          onToolStart(out);
+        } else if (eventType === 'tool_result') {
+          const payload = JSON.parse(dataStr);
+          const out = payload.output || payload;
+          if (out.tool_name === 'python_sandbox') {
+             onStatus(out.status === 'success' ? '✅ Скрипт выполнен' : '❌ Ошибка выполнения скрипта');
+             setTimeout(() => onStatus(''), 2000);
+          }
+          onToolResult(out);
         } else if (eventType === 'telemetry') {
-          const telemetryData = JSON.parse(dataStr);
-          onTelemetry(telemetryData);
+          const payload = JSON.parse(dataStr);
+          onTelemetry(payload.output || payload);
         } else if (eventType === 'error') {
           const payload = JSON.parse(dataStr);
           onError(payload.error || 'Unknown error');
@@ -117,6 +139,11 @@ export async function streamChat(
     onStatus('');
     onDone();
   } catch (err: any) {
+    if (err.name === 'AbortError') {
+      console.info('Chat stream aborted by client.');
+      onDone();
+      return;
+    }
     onError(err.message || 'Stream error');
   }
 }

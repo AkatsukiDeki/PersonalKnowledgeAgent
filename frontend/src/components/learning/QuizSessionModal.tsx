@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { subjectsApi, PracticeParams } from '../../api/subjects';
+import { learningApi } from '../../api/learning';
 import { X, RefreshCw, CheckCircle2, AlertCircle, Clock } from 'lucide-react';
 import clsx from 'clsx';
 
@@ -21,6 +22,7 @@ interface QuizSessionModalProps {
   topicName: string;
   isExam?: boolean;
   practiceParams?: PracticeParams;
+  adaptiveData?: any;
   onClose: () => void;
   onComplete: (score: number) => void;
 }
@@ -31,6 +33,7 @@ export const QuizSessionModal: React.FC<QuizSessionModalProps> = ({
   topicName,
   isExam = false,
   practiceParams,
+  adaptiveData,
   onClose,
   onComplete,
 }) => {
@@ -53,19 +56,24 @@ export const QuizSessionModal: React.FC<QuizSessionModalProps> = ({
     let isMounted = true;
     setLoading(true);
 
-    const fetcher = isExam 
-      ? subjectsApi.generateExam(subjectId)
-      : subjectsApi.generateQuiz(subjectId, practiceParams || {
-          node_id: topicId === 'all' ? undefined : topicId,
-          topic_title: topicName,
-          difficulty: 'medium',
-          count: 10,
-        });
+    let fetcher;
+    if (adaptiveData) {
+      fetcher = Promise.resolve(adaptiveData);
+    } else {
+      fetcher = isExam 
+        ? subjectsApi.generateExam(subjectId)
+        : subjectsApi.generateQuiz(subjectId, practiceParams || {
+            node_id: topicId === 'all' ? undefined : topicId,
+            topic_title: topicName,
+            difficulty: 'medium',
+            count: 10,
+          });
+    }
 
     fetcher
       .then((data) => {
         if (!isMounted) return;
-        const rawQuestions = data.questions || [];
+        const rawQuestions = data.questions || data || [];
 
         const normalized: NormalizedQuestion[] = rawQuestions.map((q: any, idx: number) => {
           let options: NormalizedOption[] = [];
@@ -137,10 +145,23 @@ export const QuizSessionModal: React.FC<QuizSessionModalProps> = ({
     if (!isExam) {
       setIsAnswerChecked(true);
       const currentQ = questions[currentIndex];
-      if (currentQ?.options[index]?.is_correct) {
+      const isCorrect = currentQ?.options[index]?.is_correct || false;
+      
+      if (isCorrect) {
         setCorrectCount((prev) => prev + 1);
       } else if (currentQ) {
         setFailedConcepts((prev) => [...prev, currentQ.question]);
+      }
+
+      // Запись попытки для SM-2
+      if (currentQ && topicId !== 'all' && topicId !== 'adaptive') {
+        learningApi.recordAttempt({
+          subject_id: subjectId,
+          topic_name: topicName,
+          is_correct: isCorrect,
+          response_time_ms: (30 - timeLeft) * 1000,
+          item_type: 'quiz'
+        }).catch(console.error);
       }
     }
   };

@@ -52,6 +52,12 @@ docker compose -f docker-compose.vps.yml up -d --build
 
 ## 🌌 Журнал обновлений (Changelog)
 
+### v1.9.0 — Fullstack Architecture Refactoring & Async Pipelines
+* **Backend Decoupling & Unit of Work (UoW)**: Полный рефакторинг работы с базой данных. Внедрен паттерн Unit of Work (`transactional` декоратор), изолирующий коммиты от бизнес-логики. Толстые роутеры разделены на тонкий транспортный слой и сервисный слой (`services/`).
+* **Async Media Pipelines (Arq + Redis)**: Монолитные блокирующие вызовы загрузки переведены на асинхронную очередь задач (`arq`). Бэкенд отвечает `202 Accepted` и запускает фоновые воркеры. Статус задач синхронизируется между Redis (быстрый поллинг) и PostgreSQL (персистентность).
+* **Bot Modularization (Aiogram 3.x)**: Монолитный бот распилен на стандартную архитектуру (core, handlers, middlewares, services). Внедрен асинхронный поллинг (`bot.edit_message_text`) прогресса обработки документов и аудио. Стейт бота переведен на RedisStorage.
+* **Frontend SSE Stability**: Внедрен `AbortController` в хук стриминга `useChatStream`, защищающий от race conditions и зависших SSE-соединений при быстрой смене диалогов. Настроен Code Splitting (`React.lazy`) тяжелых графовых компонентов, снизив первичный бандл с 1.97 МБ до 450 КБ.
+
 ### v1.8.0 — Video Vision, Slide OCR & Auto-Prompting
 * **Video Vision & Slide OCR (M3.4)**: Параллельный конвейер обработки видео. Извлечение уникальных кадров со сменой слайдов (через FFmpeg) и структурной дедупликацией (SSIM). Оптическое распознавание текста и кода на слайдах через `PaddleOCR`.
 * **Temporal Alignment**: Умная склейка текста со слайда и аудио-дорожки лектора по таймкодам. Позволяет искать в базе фрагменты, где код был показан на экране, но не произнесен вслух.

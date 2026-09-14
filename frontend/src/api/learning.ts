@@ -61,6 +61,26 @@ export const learningApi = {
       method: "POST",
       body: JSON.stringify(req)
     });
+  },
+
+  generateAdaptiveSession: async (data: AdaptiveSessionRequest) => {
+    return fetchApi("/learning/adaptive/session", {
+      method: "POST",
+      body: JSON.stringify(data)
+    });
+  },
+
+  recordAttempt: async (payload: RecordAttemptPayload) => {
+    return fetchApi("/learning/attempt", {
+      method: "POST",
+      body: JSON.stringify(payload)
+    });
+  },
+
+  getMasteryStats: async (subjectId: string) => {
+    return fetchApi(`/learning/subjects/${subjectId}/mastery`, {
+      method: "GET"
+    });
   }
 };
 
@@ -129,4 +149,19 @@ export interface StudyNoteResponse {
   citations: StudyCitation[];
   insufficient_evidence: boolean;
   evidence_warning?: string | null;
+}
+
+export interface AdaptiveSessionRequest {
+  subject_id: string;
+  mode?: 'quiz' | 'flashcards';
+  count?: number;
+}
+
+export interface RecordAttemptPayload {
+  subject_id: string;
+  topic_name: string;
+  is_correct: boolean;
+  node_id?: string;
+  response_time_ms?: number;
+  item_type?: string;
 }

@@ -31,6 +31,10 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
   const [showRetranscribeModal, setShowRetranscribeModal] = useState(false);
   const [retranscribeLoading, setRetranscribeLoading] = useState(false);
 
+  // Manual features
+  const [isGeneratingStructure, setIsGeneratingStructure] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+
   // Selection states
   const [selectionRect, setSelectionRect] = useState<DOMRect | null>(null);
   const [selectedText, setSelectedText] = useState('');
@@ -203,11 +207,59 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
     }
   };
 
+  const handleGenerateStructure = async () => {
+    try {
+      setIsGeneratingStructure(true);
+      setError(null);
+      await sourcesApi.generateStructure(sourceId);
+      await loadDetail();
+      setActiveTab('tasks');
+    } catch (err: any) {
+      setError(err.message || 'Generation failed');
+    } finally {
+      setIsGeneratingStructure(false);
+    }
+  };
+
+  const handleAddTask = async () => {
+    if (!newTaskTitle.trim() || !detail) return;
+    
+    const currentInsights = detail.meta_info?.insights || {};
+    const currentTasks = currentInsights.action_items || [];
+    const newTask = {
+      task: newTaskTitle.trim(),
+      assignee: null,
+      deadline: null,
+      context_quote: null
+    };
+    
+    const updatedMetaInfo = {
+      ...detail.meta_info,
+      insights: {
+        ...currentInsights,
+        action_items: [...currentTasks, newTask]
+      }
+    };
+    
+    setDetail({ ...detail, meta_info: updatedMetaInfo });
+    setNewTaskTitle('');
+    
+    try {
+      setSaving(true);
+      await sourcesApi.update(sourceId, editedContent, domain || undefined, updatedMetaInfo);
+      onSaved();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!detail) return;
     try {
       setSaving(true);
-      await sourcesApi.update(sourceId, editedContent, domain || undefined);
+      await sourcesApi.update(sourceId, editedContent, domain || undefined, detail.meta_info);
       onSaved();
       onClose();
     } catch (err: any) {
@@ -259,6 +311,17 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
             </div>
           </div>
           <div className="flex items-center gap-2">
+            {!detail?.meta_info?.insights && (
+              <button
+                onClick={handleGenerateStructure}
+                disabled={isGeneratingStructure}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-500 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-50"
+                title="Сгенерировать задачи и саммари через ИИ"
+              >
+                {isGeneratingStructure ? <Loader2 size={14} className="animate-spin" /> : <Sparkles size={14} />}
+                Generate Structure
+              </button>
+            )}
             {activeTab === 'content' && (
               <button
                 onClick={handleAIFix}
@@ -459,11 +522,11 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
                     {detail.meta_info.insights.summary}
                   </div>
                   
-                  {detail.meta_info.insights.key_topics?.length > 0 && (
+                  {(detail.meta_info?.insights?.key_topics ?? []).length > 0 && (
                     <div className="mt-6">
                       <h4 className="text-sm font-medium text-zinc-400 uppercase tracking-wider mb-3">Key Topics</h4>
                       <div className="flex flex-wrap gap-2">
-                        {detail.meta_info.insights.key_topics.map((topic: string, i: number) => (
+                        {(detail.meta_info.insights.key_topics ?? []).map((topic: string, i: number) => (
                           <span key={i} className="px-2 py-1 bg-indigo-500/10 text-indigo-300 border border-indigo-500/20 rounded-md text-xs">
                             {topic}
                           </span>
@@ -479,11 +542,31 @@ export function DocumentEditorModal({ sourceId, onClose, onSaved, onAskInChat }:
                   <h3 className="text-lg font-medium text-zinc-100 mb-4 flex items-center gap-2">
                     Action Items
                   </h3>
-                  {detail.meta_info.insights.action_items?.length === 0 ? (
+
+                  {/* Add Task Input */}
+                  <div className="mb-6 flex gap-2">
+                    <input
+                      type="text"
+                      value={newTaskTitle}
+                      onChange={e => setNewTaskTitle(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') handleAddTask(); }}
+                      placeholder="Добавить новую задачу..."
+                      className="flex-1 bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-2.5 text-sm text-zinc-200 focus:outline-none focus:ring-1 focus:ring-indigo-500/50"
+                    />
+                    <button
+                      onClick={handleAddTask}
+                      disabled={!newTaskTitle.trim() || saving}
+                      className="px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-xl transition-colors disabled:opacity-50 shrink-0"
+                    >
+                      Добавить
+                    </button>
+                  </div>
+
+                  {(detail.meta_info.insights.action_items ?? []).length === 0 ? (
                     <div className="text-sm text-zinc-500 italic">Нет выделенных задач.</div>
                   ) : (
                     <div className="space-y-3">
-                      {detail.meta_info.insights.action_items.map((item: any, i: number) => (
+                      {(detail.meta_info.insights.action_items ?? []).map((item: any, i: number) => (
                         <div key={i} className="p-4 rounded-xl border border-zinc-800/50 bg-zinc-900/50 group">
                           <div className="flex items-start gap-3">
                             <div className="mt-0.5 shrink-0">

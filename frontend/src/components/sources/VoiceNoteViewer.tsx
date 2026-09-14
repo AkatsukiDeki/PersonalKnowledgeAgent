@@ -46,6 +46,22 @@ export function VoiceNoteViewer({ source, sourceId }: VoiceNoteViewerProps) {
 
   const [languageMode, setLanguageMode] = useState<'orig' | 'ru'>('orig');
   const { isTranslating, translatedText, startTranslation } = useSourceTranslation();
+  const [isGeneratingStructure, setIsGeneratingStructure] = useState(false);
+
+  const handleGenerateStructure = async () => {
+    try {
+      setIsGeneratingStructure(true);
+      const res = await fetch(`/api/v1/sources/${sourceId}/generate-structure`, { method: 'POST' });
+      if (res.ok) {
+        // Just reload the page for simplicity to get new metadata, or we could update local state
+        window.location.reload();
+      }
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsGeneratingStructure(false);
+    }
+  };
 
   // Парсинг текста с таймкодами [MM:SS] в сегменты для караоке
   const parseTimestampedText = (text: string): TranscriptSegment[] => {
@@ -355,12 +371,25 @@ export function VoiceNoteViewer({ source, sourceId }: VoiceNoteViewerProps) {
         </div>
       ) : (
         <div className="flex-1 flex items-center justify-center border border-dashed border-white/10 rounded-lg bg-white/5 p-6">
-          <div className="text-center text-slate-400 flex flex-col items-center gap-2">
-            <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center animate-pulse">
-              <Lightbulb className="w-5 h-5 text-slate-500" />
+          <div className="text-center text-slate-400 flex flex-col items-center gap-4">
+            <div className="w-12 h-12 rounded-full bg-white/5 flex items-center justify-center">
+              <Lightbulb className="w-6 h-6 text-slate-500" />
             </div>
-            <p className="text-sm font-medium mt-2 text-slate-300">Генерация инсайтов...</p>
-            <p className="text-xs text-slate-500">Заметка структурируется ИИ</p>
+            <div>
+              <p className="text-sm font-medium text-slate-300">Структура не сгенерирована</p>
+              <p className="text-xs text-slate-500 mt-1">Вы можете сгенерировать саммари и задачи на основе источника</p>
+            </div>
+            <Button
+              disabled={isGeneratingStructure}
+              onClick={handleGenerateStructure}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 text-sm shadow-sm transition-all"
+            >
+              {isGeneratingStructure ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Генерация...</>
+              ) : (
+                "Сгенерировать структуру"
+              )}
+            </Button>
           </div>
         </div>
       )}

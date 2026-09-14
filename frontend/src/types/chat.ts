@@ -4,6 +4,7 @@ export interface LearningContext {
   subject_id?: string;
   topic_id?: string;
   subject_name?: string;
+  mode?: 'mentor' | 'examiner' | 'coder' | 'summary' | 'tutor';
 }
 
 export interface Citation {
@@ -24,11 +25,21 @@ export interface MessageTelemetry {
   total_ms?: number;
 }
 
+export interface ToolState {
+  id: string;
+  tool_name: string;
+  status: 'running' | 'success' | 'error';
+  script?: string;
+  stdout?: string;
+  stderr?: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   citations?: Citation[];
+  toolStates?: ToolState[];
   timestamp: string;
   isStreaming?: boolean;
   image_base64?: string;

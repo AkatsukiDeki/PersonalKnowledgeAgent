@@ -1,30 +1,32 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, Suspense } from 'react';
+import { FallbackLoader } from './providers/AppProviders';
 import { Sidebar, ViewType } from './components/layout/Sidebar';
 import { MemoryOrbit } from './components/layout/MemoryOrbit';
 import { ChatWorkspace } from './components/chat/ChatWorkspace';
-import { SourceUploader } from './components/sources/SourceUploader';
-import { SourceManager } from './components/sources/SourceManager';
-import { ConflictResolutionCenter } from './components/conflicts/ConflictResolutionCenter';
 import { OrbitContext } from './types/chat';
 import { SearchResult } from './api/search';
 
-import { InsightsWorkspace } from './pages/InsightsWorkspace';
-import { TranscriptsWorkspace } from './pages/TranscriptsWorkspace';
-import { TimelineWorkspace } from './pages/TimelineWorkspace';
-import { UniverseCanvas } from './components/universe/UniverseCanvas';
-import { LearningStudio } from './components/learning/LearningStudio';
-import { SemanticSearchModal } from './components/search/SemanticSearchModal';
-import { DocumentEditorModal } from './components/sources/DocumentEditorModal';
-import { SettingsModal } from './components/settings/SettingsModal';
 import { CommandPaletteModal } from './components/common/CommandPaletteModal';
 import { CommandItem } from './commands/types';
 
 import { Search, PanelRightOpen, Settings, X } from 'lucide-react';
 import { useLanguage } from './context/LanguageContext';
 import clsx from 'clsx';
-import { InspectorProvider } from './context/InspectorContext';
 import { EntityInspector } from './components/inspector/EntityInspector';
 import { FocusTimerWidget } from './components/focus/FocusTimerWidget';
+
+
+const SourceUploader = React.lazy(() => import('./components/sources/SourceUploader').then(m => ({ default: m.SourceUploader })));
+const SourceManager = React.lazy(() => import('./components/sources/SourceManager').then(m => ({ default: m.SourceManager })));
+const ConflictResolutionCenter = React.lazy(() => import('./components/conflicts/ConflictResolutionCenter').then(m => ({ default: m.ConflictResolutionCenter })));
+const InsightsWorkspace = React.lazy(() => import('./pages/InsightsWorkspace').then(m => ({ default: m.InsightsWorkspace })));
+const TranscriptsWorkspace = React.lazy(() => import('./pages/TranscriptsWorkspace').then(m => ({ default: m.TranscriptsWorkspace })));
+const TimelineWorkspace = React.lazy(() => import('./pages/TimelineWorkspace').then(m => ({ default: m.TimelineWorkspace })));
+const UniverseCanvas = React.lazy(() => import('./components/universe/UniverseCanvas').then(m => ({ default: m.UniverseCanvas })));
+const LearningStudio = React.lazy(() => import('./components/learning/LearningStudio').then(m => ({ default: m.LearningStudio })));
+const SemanticSearchModal = React.lazy(() => import('./components/search/SemanticSearchModal').then(m => ({ default: m.SemanticSearchModal })));
+const DocumentEditorModal = React.lazy(() => import('./components/sources/DocumentEditorModal').then(m => ({ default: m.DocumentEditorModal })));
+const SettingsModal = React.lazy(() => import('./components/settings/SettingsModal').then(m => ({ default: m.SettingsModal })));
 
 export function App() {
   const { t } = useLanguage();
@@ -154,8 +156,6 @@ export function App() {
   const showOrbit = activeView === 'chat' && orbitOpen;
 
   return (
-    <InspectorProvider>
-    {/* 1. Глубокий фон с изоляцией контекста */}
     <main className="h-[100dvh] w-screen bg-[#030303] text-slate-200 font-sans flex flex-col overflow-hidden relative isolate">
 
       {/* 2. Тот самый космический градиент на фоне всего приложения */}
@@ -250,11 +250,14 @@ export function App() {
             )}
 
             {activeView === 'universe' && (
-              <UniverseCanvas onOpenSubject={handleOpenSubjectFromUniverse} />
+              <Suspense fallback={<FallbackLoader />}>
+                <UniverseCanvas onOpenSubject={handleOpenSubjectFromUniverse} />
+              </Suspense>
             )}
 
             {/* Modals Layer: Workspaces rendered as Modals over Chat */}
             {['conflicts', 'insights', 'transcripts', 'timeline', 'learning'].includes(activeView) && (
+              <Suspense fallback={<FallbackLoader />}>
               <div 
                 className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 bg-black/60 backdrop-blur-md animate-fadeIn"
                 onClick={() => setActiveView('chat')}
@@ -280,6 +283,7 @@ export function App() {
                   </div>
                 </div>
               </div>
+              </Suspense>
             )}
           </div>
         </main>
@@ -309,6 +313,7 @@ export function App() {
       </div>
 
       {/* Модалки */}
+      <Suspense fallback={<FallbackLoader />}>
       <SourceUploader
         isOpen={isUploaderOpen}
         onClose={() => setIsUploaderOpen(false)}
@@ -408,8 +413,8 @@ export function App() {
 
       {/* Глобальный инспектор сущностей */}
       <EntityInspector />
+      </Suspense>
     </main>
-    </InspectorProvider>
   );
 }
 

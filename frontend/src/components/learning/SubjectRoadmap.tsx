@@ -10,9 +10,11 @@ import {
   BookOpen, 
   Layers, 
   MessageSquare,
-  RefreshCw 
+  RefreshCw,
+  BrainCircuit
 } from 'lucide-react';
 import clsx from 'clsx';
+import { learningApi } from '../../api/learning';
 
 interface SubjectRoadmapProps {
   subjectId: string;
@@ -23,6 +25,9 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
   const [roadmap, setRoadmap] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
+  const [masteries, setMasteries] = useState<Record<string, any>>({});
+  const [showRegenModal, setShowRegenModal] = useState(false);
+  const [regenPrompt, setRegenPrompt] = useState('');
 
   const [activePractice, setActivePractice] = useState<{
     type: 'quiz' | 'flashcard';
@@ -33,8 +38,21 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
   const loadRoadmap = async () => {
     try {
       setLoading(true);
-      const data = await subjectsApi.getRoadmap(subjectId);
-      setRoadmap(data);
+      const data = await subjectsApi.getSubject(subjectId);
+      if (data && data.roadmap) {
+        // Backend may return roadmap already unwrapped (content directly) or wrapped in .content
+        const content = data.roadmap.content || data.roadmap;
+        setRoadmap(content);
+      }
+      
+      const masteryStats = await learningApi.getMasteryStats(subjectId);
+      const masteryMap: Record<string, any> = {};
+      if (Array.isArray(masteryStats)) {
+        masteryStats.forEach((m: any) => {
+          masteryMap[m.topic_name] = m;
+        });
+      }
+      setMasteries(masteryMap);
     } catch (e) {
       console.error('Failed to load roadmap:', e);
     } finally {
@@ -50,9 +68,25 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
     try {
       setGenerating(true);
       const res = await subjectsApi.generateRoadmap(subjectId);
-      setRoadmap(res.roadmap);
+      const content = res.roadmap?.content || res.roadmap;
+      setRoadmap(content);
     } catch (e) {
       console.error('Failed to generate roadmap:', e);
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleRegenerate = async () => {
+    try {
+      setGenerating(true);
+      setShowRegenModal(false);
+      const res = await subjectsApi.generateRoadmap(subjectId, regenPrompt.trim() || undefined);
+      const content = res.roadmap?.content || res.roadmap;
+      setRoadmap(content);
+      setRegenPrompt('');
+    } catch (e) {
+      console.error('Ошибка перегенерации:', e);
     } finally {
       setGenerating(false);
     }
@@ -107,14 +141,25 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
           <h2 className="text-lg font-bold text-white tracking-tight">Дорожная карта</h2>
           <p className="text-xs text-zinc-400 mt-0.5">Пошаговый трек освоения тем предмета</p>
         </div>
-        <button
-          onClick={handleGenerate}
-          disabled={generating}
-          className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-medium text-zinc-300 hover:text-white transition-all disabled:opacity-50"
-        >
-          <RefreshCw size={13} className={clsx(generating && 'animate-spin')} />
-          <span>Пересобрать</span>
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleGenerate}
+            disabled={generating}
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-zinc-900 border border-zinc-800 hover:border-zinc-700 text-xs font-medium text-zinc-300 hover:text-white transition-all disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={clsx(generating && 'animate-spin')} />
+            <span>Обновить</span>
+          </button>
+
+          <button
+            onClick={() => setShowRegenModal(true)}
+            disabled={generating}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 border border-indigo-500/30 rounded-xl transition-all disabled:opacity-50"
+          >
+            <Sparkles size={13} className="text-indigo-400" />
+            <span>Пересобрать карту</span>
+          </button>
+        </div>
       </div>
 
       {/* Список модулей */}
@@ -137,7 +182,14 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
               {(module.topics || []).map((topic: any, tIdx: number) => {
                 const topicId = topic.id || topic.topic_id || `t_${mIdx}_${tIdx}`;
                 const status = topic.status || 'not_started';
-
+                const mastery = masteries[topic.title || topicId];
+                const masteryLevel = mastery ? Math.round(mastery.mastery_level * 100) : null;
+                // SM-2 бейдж: если срок повторения истёк
+                const isDueForReview = (() => {
+                  if (!mastery?.next_review_due) return false;
+                  return new Date(mastery.next_review_due) <= new Date();
+                })();
+                
                 return (
                   <div
                     key={topicId}
@@ -157,11 +209,26 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
                         {status === 'in_progress' && <Clock size={16} className="text-amber-400" />}
                         {status === 'not_started' && <Circle size={16} className="text-zinc-600" />}
                       </div>
-                      <div className="min-w-0">
+                      <div className="min-w-0 flex flex-col sm:flex-row sm:items-center gap-2">
                         <h4 className="text-xs md:text-sm font-medium text-zinc-100 truncate">
                           {topic.title}
                         </h4>
-                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 block mt-0.5">
+                        {masteryLevel !== null && (
+                          <div className="flex items-center gap-1 text-[10px] uppercase font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-1.5 py-0.5 rounded w-fit shrink-0">
+                            <BrainCircuit size={10} />
+                            Mastery: {masteryLevel}%
+                          </div>
+                        )}
+                        {isDueForReview && (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 text-[10px] font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-md shrink-0"
+                            title="Интервал SM-2 подошёл к концу: пора повторить тему"
+                          >
+                            <Clock className="w-3 h-3 text-amber-400" />
+                            Повторить
+                          </span>
+                        )}
+                        <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500 block">
                           {status === 'completed' ? 'Освоено' : status === 'in_progress' ? 'В процессе' : 'В очереди'}
                         </span>
                       </div>
@@ -239,6 +306,39 @@ export const SubjectRoadmap: React.FC<SubjectRoadmapProps> = ({ subjectId, onOpe
           }}
         />
       )}
+
+      {/* Модальное окно пересборки карты */}
+      {showRegenModal && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-zinc-950 border border-zinc-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <h3 className="text-base font-semibold text-zinc-100">Пересобрать дорожную карту</h3>
+            <p className="text-xs text-zinc-400">
+              Укажите, что изменить или на чём сделать акцент. Например: «меньше теории, больше практических задач». Оставьте пустым для случайного альтернативного плана.
+            </p>
+            <textarea
+              value={regenPrompt}
+              onChange={(e) => setRegenPrompt(e.target.value)}
+              placeholder="Пожелания к новой структуре..."
+              className="w-full h-24 bg-zinc-900 border border-zinc-800 rounded-xl p-3 text-sm text-zinc-200 placeholder-zinc-500 focus:outline-none focus:border-indigo-500 resize-none"
+            />
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => { setShowRegenModal(false); setRegenPrompt(''); }}
+                className="px-3.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                Отмена
+              </button>
+              <button
+                onClick={handleRegenerate}
+                className="px-4 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors"
+              >
+                Сгенерировать заново
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+

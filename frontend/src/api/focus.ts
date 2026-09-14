@@ -4,6 +4,7 @@ export interface FocusSessionStart {
   session_type: string;
   target_duration_min: number;
   subject_id?: string;
+  task_id?: string;
   task_name?: string;
 }
 

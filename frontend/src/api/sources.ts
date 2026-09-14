@@ -197,16 +197,17 @@ export const sourcesApi = {
   updateContent: async (
     id: string,
     raw_content: string,
-    domain?: string
+    domain?: string,
+    meta_info?: Record<string, any>
   ): Promise<SourceItem> => {
     return fetchApi<SourceItem>(`/sources/${id}`, {
       method: 'PUT',
-      body: JSON.stringify({ raw_content, domain }),
+      body: JSON.stringify({ raw_content, domain, meta_info }),
     });
   },
 
-  update: async (id: string, content: string, domain?: string): Promise<SourceItem> => {
-    return sourcesApi.updateContent(id, content, domain);
+  update: async (id: string, content: string, domain?: string, meta_info?: Record<string, any>): Promise<SourceItem> => {
+    return sourcesApi.updateContent(id, content, domain, meta_info);
   },
 
   deleteSource: async (id: string): Promise<void> => {
@@ -226,6 +227,12 @@ export const sourcesApi = {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ text }),
+    });
+  },
+
+  generateStructure: async (sourceId: string): Promise<any> => {
+    return fetchApi(`/sources/${sourceId}/generate-structure`, {
+      method: 'POST',
     });
   },
 

@@ -18,6 +18,11 @@ export async function fetchApi<T>(endpoint: string, options: RequestInit = {}): 
     headers.set('X-API-Key', apiKey);
   }
 
+  const tmaToken = localStorage.getItem('tma_token');
+  if (tmaToken) {
+    headers.set('Authorization', `Bearer ${tmaToken}`);
+  }
+
   const cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
   const url = endpoint.startsWith('http') ? endpoint : `${BASE_URL}${cleanEndpoint}`;
 

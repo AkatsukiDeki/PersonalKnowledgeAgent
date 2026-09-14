@@ -137,10 +137,12 @@ export const subjectsApi = {
     return subject.roadmap || null;
   },
 
-  generateRoadmap: async (subjectId: string): Promise<{ status: string; roadmap: any }> => {
+  generateRoadmap: async (subjectId: string, promptAdjustment?: string): Promise<{ status: string; roadmap: any }> => {
     return fetchApi<{ status: string; roadmap: any }>(`/subjects/${subjectId}/roadmap/generate`, {
       method: 'POST',
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        prompt_adjustment: promptAdjustment || undefined,
+      }),
     });
   },
 
