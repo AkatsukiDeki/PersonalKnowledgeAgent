@@ -32,10 +32,10 @@ T = TypeVar("T", bound=BaseModel)
 def _sanitize_model_name(model_name: Optional[str]) -> str:
     """Автоматически заменяет устаревшие версии моделей Google на актуальные."""
     if not model_name or not model_name.strip():
-        return "gemini-3.6-flash"
+        return getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
     m = model_name.strip().lower()
-    if "1.5" in m or m == "gemini-1.5-flash":
-        return "gemini-3.6-flash"
+    if "1.5" in m or m == "gemini-1.5-flash" or "3.6" in m:
+        return getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
     return model_name.strip()
 
 
@@ -43,7 +43,7 @@ class ModelManager:
     """Диспетчер LLM: Local-First с контролируемой деградацией или Cloud-First при пакетной обработке."""
 
     def __init__(self):
-        self.fast_model = _sanitize_model_name(getattr(settings, "FAST_LLM_MODEL", "gemini-3.6-flash"))
+        self.fast_model = _sanitize_model_name(getattr(settings, "FAST_LLM_MODEL", getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")))
         self.reasoning_model = _sanitize_model_name(getattr(settings, "REASONING_LLM_MODEL", "gemini-2.0-pro"))
         self.ollama_client = OllamaClient()  # Инициализация Ollama клиента
         self._cloud_client = None

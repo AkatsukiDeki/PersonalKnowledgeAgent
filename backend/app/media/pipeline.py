@@ -210,7 +210,7 @@ async def run_media_ingestion_job(
                                 from google import genai
                                 client = genai.Client(api_key=gemini_key)
                                 response = await client.aio.models.generate_content(
-                                    model="gemini-3.6-flash",
+                                    model=getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
                                     contents=prompt
                                 )
                                 structured_text = response.text
@@ -515,7 +515,7 @@ async def run_retranscribe_job(
                                 from google import genai
                                 client = genai.Client(api_key=gemini_key)
                                 response = await client.aio.models.generate_content(
-                                    model="gemini-3.6-flash",
+                                    model=getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
                                     contents=prompt
                                 )
                                 structured_text = response.text

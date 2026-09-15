@@ -87,7 +87,7 @@ class OllamaClient:
     def __init__(self):
         self.base_url = settings.OLLAMA_BASE_URL.rstrip("/")
         self.default_model = getattr(settings, "OLLAMA_QA_MODEL", "qwen2.5:3b")
-        self.timeout = httpx.Timeout(300.0, connect=10.0)
+        self.timeout = httpx.Timeout(60.0, connect=10.0)
 
     async def generate(
             self,

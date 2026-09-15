@@ -895,8 +895,8 @@ async def generate_structure_manually(
 def _get_cloud_models_pool() -> List[str]:
     """Формирует список моделей Google GenAI с безусловным приоритетом актуальной версии."""
     return [
-        "gemini-3.6-flash",
-        getattr(settings, "FAST_LLM_MODEL", "gemini-3.6-flash"),
+        getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+        getattr(settings, "FAST_LLM_MODEL", getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")),
         "gemini-2.5-flash",
     ]
 
