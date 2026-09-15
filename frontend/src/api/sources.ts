@@ -40,6 +40,21 @@ export interface SourceItem {
   claims_count: number;
 }
 
+export interface TaskResponse {
+  task_id: string;
+  status: string;
+  message?: string;
+}
+
+export interface TaskStatusResponse {
+  task_id: string;
+  status: string;
+  progress?: number;
+  step?: string;
+  error?: string;
+  result?: SourceItem;
+}
+
 export interface SourceDetail extends SourceItem {
   chunks: SourceChunkSimple[];
   claims: SourceClaimSimple[];
@@ -111,7 +126,7 @@ export const sourcesApi = {
     folder?: string,
     domain?: string,
     importance: string = 'normal'
-  ): Promise<SourceItem> => {
+  ): Promise<TaskResponse | SourceItem> => {
     const formData = new FormData();
     formData.append('file', file);
     if (title) formData.append('title', title);
@@ -119,27 +134,31 @@ export const sourcesApi = {
     if (domain && domain.trim()) formData.append('domain', domain.trim());
     formData.append('importance', importance);
 
-    return fetchApi<SourceItem>('/sources/upload', {
+    return fetchApi<any>('/sources/upload', {
       method: 'POST',
       body: formData,
     });
   },
 
-  upload: async (file: File, domain?: string, folder?: string): Promise<SourceItem> => {
+  upload: async (file: File, domain?: string, folder?: string): Promise<TaskResponse | SourceItem> => {
     return sourcesApi.uploadFile(file, undefined, folder, domain, 'normal');
   },
 
-  uploadMedia: async (file: File, profile: string = 'speech', subject_id?: string, media_type?: string): Promise<SourceItem> => {
+  uploadMedia: async (file: File, profile: string = 'speech', subject_id?: string, media_type?: string): Promise<TaskResponse | SourceItem> => {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('profile', profile);
     if (subject_id) formData.append('subject_id', subject_id);
     if (media_type) formData.append('media_type', media_type);
 
-    return fetchApi<SourceItem>('/media/upload', {
+    return fetchApi<any>('/media/upload', {
       method: 'POST',
       body: formData,
     });
+  },
+
+  getTaskStatus: async (taskId: string): Promise<TaskStatusResponse> => {
+    return fetchApi<TaskStatusResponse>(`/sources/tasks/${taskId}`);
   },
 
   retranscribe: async (sourceId: string, options?: { language?: string; initial_prompt?: string }): Promise<any> => {

@@ -9,11 +9,13 @@ interface Props {
 }
 
 export function MemoryOrbit({ isOpen, onClose, context }: Props) {
-  if (!isOpen) return null;
-
   const decisions = context?.decisions || [];
   const evidences = context?.evidences || [];
   const insights = context?.insights || [];
+
+  const hasContent = decisions.length > 0 || evidences.length > 0 || insights.length > 0;
+
+  if (!isOpen || !hasContent) return null;
 
   return (
     <>

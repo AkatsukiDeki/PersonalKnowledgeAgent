@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
+import { CodeSandbox } from './CodeSandbox';
 import { Message } from '../../types/chat';
 import { Bot, User, X, Copy, Check } from 'lucide-react';
 import { ProvenanceTree } from './ProvenanceTree';
@@ -86,7 +89,34 @@ export function MessageView({ message }: Props) {
           </div>
         ) : (
           <div className="prose-deep-space pr-6">
-            <ReactMarkdown>{message.content}</ReactMarkdown>
+            <ReactMarkdown
+              remarkPlugins={[remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              components={{
+                code({node, inline, className, children, ...props}: any) {
+                  const match = /language-(\w+)/.exec(className || '');
+                  const isPython = match && match[1] === 'python';
+                  
+                  if (!inline && isPython) {
+                    return <CodeSandbox code={String(children).replace(/\n$/, '')} />;
+                  }
+                  
+                  return !inline ? (
+                    <div className="bg-black/20 p-4 rounded-xl overflow-x-auto text-sm font-mono border border-white/5 my-4">
+                      <code className={className} {...props}>
+                        {children}
+                      </code>
+                    </div>
+                  ) : (
+                    <code className="bg-white/10 px-1.5 py-0.5 rounded-md text-[0.9em] font-mono text-indigo-200" {...props}>
+                      {children}
+                    </code>
+                  );
+                }
+              }}
+            >
+              {message.content}
+            </ReactMarkdown>
           </div>
         )}
 

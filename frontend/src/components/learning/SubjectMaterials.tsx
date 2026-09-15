@@ -81,10 +81,11 @@ export const SubjectMaterials: React.FC<SubjectMaterialsProps> = ({ subjectId })
     try {
       setUploading(true);
       const newSource = await sourcesApi.uploadFile(file);
-      await subjectsApi.attachSource(subjectId, newSource.id);
+      const newSourceId = 'id' in newSource ? newSource.id : newSource.task_id;
+      await subjectsApi.attachSource(subjectId, newSourceId);
 
-      setAllSources(prev => [newSource, ...prev]);
-      setAttachedSourceIds(prev => new Set(prev).add(newSource.id));
+      setAllSources(prev => [newSource as unknown as SourceItem, ...prev]);
+      setAttachedSourceIds(prev => new Set(prev).add(newSourceId));
     } catch (err) {
       console.error('Failed to upload file:', err);
     } finally {

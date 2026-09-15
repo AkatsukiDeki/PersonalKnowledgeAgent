@@ -3,6 +3,7 @@ import { sourcesApi } from '../../api/sources';
 import { chatImportApi, ImportPreviewResponse } from '../../api/chat_import';
 import { X, UploadCloud, CheckCircle2, MessageSquare, AlertCircle, Clock, FileText, Upload, Loader2 } from 'lucide-react';
 import { DomainInput } from './DomainInput';
+import { useTaskPolling } from '../../hooks/useTaskPolling';
 
 interface Props {
   isOpen: boolean;
@@ -22,7 +23,32 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
   const [batchProgress, setBatchProgress] = useState<string | null>(null);
   const [batchError, setBatchError] = useState<string | null>(null);
   const [mediaType, setMediaType] = useState<string>('');
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [currentFileIndex, setCurrentFileIndex] = useState<number>(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const { status: taskStatus, progress: taskProgress, step: taskStep } = useTaskPolling({
+    taskId: currentTaskId,
+    onSuccess: (result) => {
+      const nextIndex = currentFileIndex + 1;
+      if (nextIndex < batchFiles.length) {
+        setCurrentFileIndex(nextIndex);
+        processFile(nextIndex);
+      } else {
+        setBatchProgress(null);
+        setIsBatchUploading(false);
+        setCurrentTaskId(null);
+        handleClose();
+        if (onSuccess) onSuccess();
+      }
+    },
+    onError: (err) => {
+      setBatchError(err);
+      setIsBatchUploading(false);
+      setBatchProgress(null);
+      setCurrentTaskId(null);
+    }
+  });
 
   // Manual State
   const [title, setTitle] = useState('');
@@ -94,12 +120,47 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
     setPreviewData(null);
     setSelectedFile(null);
     setChatError(null);
+    setChatError(null);
     setBatchFiles([]);
     setBatchProgress(null);
     setBatchError(null);
+    setCurrentTaskId(null);
     onClose();
     if (jobStatus === 'completed' && onSuccess) {
       onSuccess();
+    }
+  };
+
+  const processFile = async (index: number) => {
+    const f = batchFiles[index];
+    setBatchProgress(`Uploading ${index + 1} of ${batchFiles.length}: ${f.name}`);
+    try {
+      const finalDomain = domain.trim();
+      let res;
+      if (f.type.startsWith('audio/') || f.type.startsWith('video/') || f.name.endsWith('.m4a') || f.name.endsWith('.mp3')) {
+        res = await sourcesApi.uploadMedia(f, 'speech', undefined, mediaType || undefined);
+      } else {
+        res = await sourcesApi.upload(f, finalDomain || undefined, '');
+      }
+      
+      if (res && 'task_id' in res) {
+        setCurrentTaskId(res.task_id);
+      } else {
+        const nextIndex = index + 1;
+        if (nextIndex < batchFiles.length) {
+          setCurrentFileIndex(nextIndex);
+          processFile(nextIndex);
+        } else {
+          setBatchProgress(null);
+          setIsBatchUploading(false);
+          handleClose();
+          if (onSuccess) onSuccess();
+        }
+      }
+    } catch (err: any) {
+      setBatchError(err.message || 'Error uploading file');
+      setIsBatchUploading(false);
+      setBatchProgress(null);
     }
   };
 
@@ -107,34 +168,16 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
     if (batchFiles.length === 0) return;
     setIsBatchUploading(true);
     setBatchError(null);
-    try {
-      const finalDomain = domain.trim();
-      let count = 0;
-      for (const f of batchFiles) {
-        setBatchProgress(`Uploading ${count + 1} of ${batchFiles.length}: ${f.name}`);
-        if (f.type.startsWith('audio/') || f.type.startsWith('video/') || f.name.endsWith('.m4a') || f.name.endsWith('.mp3')) {
-          await sourcesApi.uploadMedia(f, 'speech', undefined, mediaType || undefined);
-        } else {
-          await sourcesApi.upload(f, finalDomain || undefined, '');
-        }
-        count++;
-      }
-
-      if (finalDomain) {
-        localStorage.setItem('pka_last_domain', finalDomain);
-      } else {
-        localStorage.removeItem('pka_last_domain');
-      }
-
-      setBatchProgress(null);
-      setIsBatchUploading(false);
-      handleClose();
-      if (onSuccess) onSuccess();
-    } catch (err: any) {
-      setBatchError(err.message || 'Error uploading files');
-      setIsBatchUploading(false);
-      setBatchProgress(null);
+    setCurrentFileIndex(0);
+    
+    const finalDomain = domain.trim();
+    if (finalDomain) {
+      localStorage.setItem('pka_last_domain', finalDomain);
+    } else {
+      localStorage.removeItem('pka_last_domain');
     }
+    
+    processFile(0);
   };
 
   const handleManualSubmit = async (e: React.FormEvent) => {
@@ -341,9 +384,22 @@ export function SourceUploader({ isOpen, onClose, onSuccess }: Props) {
                 </button>
               </div>
 
-              {batchProgress && (
-                <div className="mt-2 text-xs text-indigo-400 font-mono text-center">
-                  {batchProgress}
+              {isBatchUploading && currentTaskId && (
+                <div className="mt-4 flex flex-col gap-2 p-3 bg-zinc-950 rounded-lg border border-zinc-800">
+                  <div className="flex justify-between text-xs text-zinc-400">
+                    <span>{batchProgress}</span>
+                    <span>{Math.round(taskProgress)}%</span>
+                  </div>
+                  <div className="w-full bg-zinc-800 rounded-full h-1.5 overflow-hidden">
+                    <div 
+                      className="bg-indigo-500 h-full transition-all duration-300"
+                      style={{ width: `${taskProgress}%` }}
+                    />
+                  </div>
+                  <div className="text-xs text-indigo-400 mt-1 flex items-center gap-2">
+                    <Loader2 size={12} className="animate-spin" />
+                    {taskStep || 'Processing...'}
+                  </div>
                 </div>
               )}
             </div>

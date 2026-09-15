@@ -42,30 +42,6 @@ export interface BridgeContextResponse {
   evidence_sufficient: boolean;
 }
 
-export interface GalaxyGraphNode {
-  id: string;
-  name: string;
-  type: 'technology' | 'concept' | 'pattern' | 'tool' | 'person' | string;
-  description: string;
-  size: number;
-  connection_count: number;
-  created_at: string | null;
-}
-
-export interface GalaxyGraphEdge {
-  id: string;
-  source: string;
-  target: string;
-  relation: 'depends_on' | 'implements' | 'uses' | 'relates_to' | 'conflicts_with' | string;
-  weight: number;
-  source_chunk_id: string | null;
-  created_at: string | null;
-}
-
-export interface GalaxyGraphResponse {
-  nodes: GalaxyGraphNode[];
-  edges: GalaxyGraphEdge[];
-}
 
 export interface GraphEntityRelation {
   id: string;
@@ -131,8 +107,4 @@ export const graphApi = {
     });
     return fetchApi(`/graph/bridge-context?domain_a=${encodeURIComponent(domainA)}&domain_b=${encodeURIComponent(domainB)}`);
   },
-
-  getGalaxyUniverse: (): Promise<GalaxyGraphResponse> => {
-    return fetchApi('/graph/galaxy-universe');
-  }
 };

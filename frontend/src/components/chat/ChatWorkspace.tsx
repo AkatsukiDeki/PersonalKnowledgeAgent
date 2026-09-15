@@ -439,10 +439,12 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
     try {
       if (file.type.startsWith('audio/') || file.type.startsWith('video/')) {
         const source = await sourcesApi.uploadMedia(file, mediaProfile);
-        setAttachedFiles((prev) => [...prev, { id: source.id, name: file.name, status: source.status }]);
+        const id = 'id' in source ? source.id : source.task_id;
+        setAttachedFiles((prev) => [...prev, { id, name: file.name, status: source.status }]);
       } else {
         const source = await sourcesApi.upload(file);
-        setAttachedFiles((prev) => [...prev, { id: source.id, name: file.name, status: source.status }]);
+        const id = 'id' in source ? source.id : source.task_id;
+        setAttachedFiles((prev) => [...prev, { id, name: file.name, status: source.status }]);
       }
     } catch (err) {
       console.error('Failed to upload file', err);

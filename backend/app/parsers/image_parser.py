@@ -2,11 +2,23 @@
 
 import asyncio
 import logging
+import concurrent.futures
 from typing import Dict, Any
 
 from ..core.llm import model_manager
 
 logger = logging.getLogger(__name__)
+
+def run_async_safe(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, coro).result()
+    return asyncio.run(coro)
 
 VISION_PROMPT = """You are an expert document and diagram parser for a personal knowledge base.
 Analyze the provided image and extract its information in clean, structured Markdown:
@@ -34,27 +46,23 @@ def parse_image(file_bytes: bytes, filename: str) -> str:
         mime_type = "image/heic"
         
     try:
-        loop = asyncio.get_running_loop()
-    except RuntimeError:
-        loop = None
-
-    if loop and loop.is_running():
-        # If we are already in an async context, we cannot block with run().
-        # Normally parse_file is called in a thread pool (from fastapi UploadFile).
-        import nest_asyncio
-        nest_asyncio.apply()
-        text = asyncio.run(model_manager.generate_vision(
-            prompt=VISION_PROMPT,
-            image_bytes=file_bytes,
-            mime_type=mime_type,
-            allow_cloud_fallback=True
-        ))
-    else:
-        text = asyncio.run(model_manager.generate_vision(
-            prompt=VISION_PROMPT,
-            image_bytes=file_bytes,
-            mime_type=mime_type,
-            allow_cloud_fallback=True
-        ))
+        from ..media.vlm_service import VLMService
+        vlm = VLMService()
         
-    return text
+        text = run_async_safe(vlm.extract_markdown_from_image(file_bytes, mime_type))
+            
+        if text:
+            return text
+            
+        # Fallback to older logic if VLM failed
+        text = run_async_safe(model_manager.generate_vision(
+            prompt=VISION_PROMPT,
+            image_bytes=file_bytes,
+            mime_type=mime_type,
+            allow_cloud_fallback=True
+        ))
+            
+        return text or ""
+    except Exception as e:
+        logger.error(f"[ImageParser] Failed to parse image: {e}")
+        return ""

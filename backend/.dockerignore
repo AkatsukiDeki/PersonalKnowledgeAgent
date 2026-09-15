@@ -1,5 +1,39 @@
-venv/
+# Python / Cache
 __pycache__/
-.env
-.git
-*.log
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environments
+venv/
+.venv/
+env/
+
+# IDE / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Media & Weights Cache
+uploads/
+models_cache/
+*.mp3
+*.mp4
+*.wav
+*.bin
+*.pt
+
+# Node / Frontend artifacts
+node_modules/
+dist/
+build/

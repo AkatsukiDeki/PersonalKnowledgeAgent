@@ -120,7 +120,7 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
   const [rootStars, setRootStars] = useState<StarSystem[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [viewMode, setViewMode] = useState<'galaxy' | 'timeline' | 'galaxy4d'>('galaxy4d');
+  const [viewMode, setViewMode] = useState<'galaxy' | 'timeline'>('galaxy');
   const [isSpotlightOpen, setIsSpotlightOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<{ min: number; max: number }>({ min: 0, max: 1 });
   const [cutoffTimestamp, setCutoffTimestamp] = useState<number>(Date.now());
@@ -238,106 +238,6 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
     const loadUniverseData = async () => {
       try {
         setLoading(true);
-
-        if (viewMode === 'galaxy4d') {
-          const graphRes = await graphApi.getGalaxyUniverse();
-
-          const timestamps: number[] = [];
-          (graphRes.nodes || []).forEach((n) => {
-            if (n.created_at) timestamps.push(new Date(n.created_at).getTime());
-          });
-          (graphRes.edges || []).forEach((e: any) => {
-            if (e?.created_at) timestamps.push(new Date(e.created_at).getTime());
-          });
-
-          const minTime = timestamps.length > 0 ? Math.min(...timestamps) : Date.now() - 30 * 24 * 60 * 60 * 1000;
-          const maxTime = timestamps.length > 0 ? Math.max(...timestamps, Date.now()) : Date.now();
-          const calcTimelineX = (ts: number) => {
-            const normalized = (ts - minTime) / Math.max(maxTime - minTime, 1);
-            return (normalized - 0.5) * 1400;
-          };
-
-          const typeGroups: Record<string, any[]> = {};
-          (graphRes.nodes || []).forEach((node) => {
-            const t = node.type || 'concept';
-            if (!typeGroups[t]) typeGroups[t] = [];
-            typeGroups[t].push(node);
-          });
-
-          const types = Object.keys(typeGroups);
-          const baseRadius = 250;
-          const newConstellations: Constellation[] = types.map((type, idx) => {
-            const clusterNodes = typeGroups[type];
-            const orbitRadius = baseRadius + idx * 180;
-            const angleStep = (2 * Math.PI) / Math.max(clusterNodes.length, 1);
-            const laneY = -220 + idx * 140;
-
-            const stars: StarSystem[] = clusterNodes.map((node, nIdx) => {
-              const angle = nIdx * angleStep;
-              const ts = node.created_at ? new Date(node.created_at).getTime() : minTime;
-
-              return {
-                id: String(node.id),
-                title: formatLabel(node.name),
-                type: 'graph_node',
-                localRadius: 0,
-                angle: angle,
-                driftSpeed: 0.001 + (idx % 3) * 0.0005,
-                size: node.size || 12,
-                color: '#38bdf8',
-                planets: [],
-                timestamp: ts,
-                timelineX: calcTimelineX(ts),
-                timelineY: laneY,
-                meta: {
-                  raw_title: node.name,
-                  description: node.description,
-                  connection_count: node.connection_count,
-                  type: node.type,
-                },
-              };
-            });
-
-            return {
-              id: `cluster-${type}`,
-              title: type.toUpperCase(),
-              color: '#38bdf8',
-              orbitRadius,
-              angle: (idx * (Math.PI * 2)) / Math.max(types.length, 1),
-              driftSpeed: 0.0002,
-              stars,
-              laneY,
-            };
-          });
-
-          const extractedEdges: CausalEdge[] = (graphRes.edges || [])
-            .map((e: any) => {
-              const from = e?.fromId || e?.from || e?.source;
-              const to = e?.toId || e?.to || e?.target;
-              if (!from || !to) return null;
-              return {
-                fromId: String(from),
-                toId: String(to),
-                type: e?.relation || 'relates_to',
-              };
-            })
-            .filter((e): e is CausalEdge => e !== null);
-
-          if (isMounted) {
-            setConstellations(newConstellations);
-            setRootStars([]);
-            particlesRef.current = [];
-            edgesRef.current = extractedEdges;
-            setAvailableDomains(types.sort());
-
-            if (timestamps.length > 0) {
-              setTimeRange({ min: minTime, max: maxTime });
-              setCutoffTimestamp(maxTime);
-            }
-            setLoading(false);
-          }
-          return;
-        }
 
         const [subjectsRes, conversationsRes, claimsRes, sourcesRes] = await Promise.allSettled([
           subjectsApi.getSubjects(),
@@ -1707,21 +1607,19 @@ export const UniverseCanvas: React.FC<UniverseCanvasProps> = ({
 
         <button
           onClick={() => {
-            const nextMode = viewMode === 'galaxy' ? 'timeline' : viewMode === 'timeline' ? 'galaxy4d' : 'galaxy';
+            const nextMode = viewMode === 'galaxy' ? 'timeline' : 'galaxy';
             setViewMode(nextMode);
             resetCamera();
           }}
           className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition-all shrink-0 ${
             viewMode === 'timeline'
               ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
-              : viewMode === 'galaxy4d'
-              ? 'bg-purple-600/20 text-purple-300 border border-purple-500/30'
               : 'text-zinc-300 hover:text-white hover:bg-zinc-800/60'
           }`}
           title="Сменить проекцию Вселенной"
         >
-          {viewMode === 'timeline' ? <Clock size={13} /> : viewMode === 'galaxy4d' ? <Orbit size={13} className="text-purple-400" /> : <Orbit size={13} />}
-          <span>{viewMode === 'timeline' ? 'Timeline' : viewMode === 'galaxy4d' ? 'Galaxy 4D (Graph)' : 'Galaxy (Structure)'}</span>
+          {viewMode === 'timeline' ? <Clock size={13} /> : <Orbit size={13} />}
+          <span>{viewMode === 'timeline' ? 'Timeline' : 'Galaxy (Structure)'}</span>
         </button>
 
         <div className="h-4 w-[1px] bg-zinc-800 shrink-0" />

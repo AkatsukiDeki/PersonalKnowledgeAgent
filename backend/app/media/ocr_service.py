@@ -2,8 +2,21 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Any
 import cv2
+import asyncio
+import concurrent.futures
 
 logger = logging.getLogger(__name__)
+
+def run_async_safe(coro):
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            return pool.submit(asyncio.run, coro).result()
+    return asyncio.run(coro)
 
 
 class SlideOCRService:
@@ -16,13 +29,30 @@ class SlideOCRService:
             lang=lang,
             show_log=False
         )
+        try:
+            from .vlm_service import VLMService
+            self.vlm = VLMService()
+        except ImportError:
+            self.vlm = None
 
     def extract_text_from_image(
-        self, image_path: str, min_confidence: float = 0.65
+        self, image_path: str, min_confidence: float = 0.65, use_vlm: bool = False
     ) -> str:
         if not Path(image_path).exists():
             logger.error(f"[OCRService] Image path does not exist: {image_path}")
             return ""
+
+        if use_vlm and self.vlm:
+            try:
+                with open(image_path, "rb") as f:
+                    image_bytes = f.read()
+                
+                vlm_text = run_async_safe(self.vlm.extract_markdown_from_image(image_bytes))
+                if vlm_text:
+                    logger.info(f"[OCRService] VLM successfully extracted text for {image_path}")
+                    return vlm_text
+            except Exception as e:
+                logger.warning(f"[OCRService] VLM extraction failed for {image_path}, falling back to PaddleOCR: {e}")
 
         try:
             # Ограничение разрешения для ускорения детекции на CPU
@@ -62,14 +92,14 @@ class SlideOCRService:
             return ""
 
     def process_slides_batch(
-        self, slides: List[Dict[str, Any]]
+        self, slides: List[Dict[str, Any]], use_vlm: bool = False
     ) -> List[Dict[str, Any]]:
         logger.info(f"[OCRService] Processing OCR for {len(slides)} slides...")
         enriched_slides = []
 
         for slide in slides:
             image_path = slide.get("image_path", "")
-            text = self.extract_text_from_image(image_path)
+            text = self.extract_text_from_image(image_path, use_vlm=use_vlm)
             enriched_slides.append({
                 **slide,
                 "extracted_text": text

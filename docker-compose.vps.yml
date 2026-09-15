@@ -100,33 +100,6 @@ services:
     volumes:
       - pka_backend_uploads:/app/uploads
 
-  worker_knowledge:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: pka_vps_worker_knowledge
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-pka_user}:${POSTGRES_PASSWORD:-pka_secret_password}@db:5432/${POSTGRES_DB:-pka_db}
-      REDIS_URL: redis://redis:6379/0
-      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL}
-      OLLAMA_QA_MODEL: ${OLLAMA_QA_MODEL:-qwen2.5:3b}
-      LLM_ROUTING_BACKEND: ${LLM_ROUTING_BACKEND:-local}
-      EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-ollama}
-      FLAGS_use_mkldnn: "0"
-    command: ["arq", "app.tasks.worker.KnowledgeWorkerSettings"]
-    depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    networks:
-      - pka_internal
-    volumes:
-      - pka_backend_uploads:/app/uploads
-
   frontend:
     build:
       context: ./frontend
