@@ -3,16 +3,17 @@ type TranslationKey = string;
 export const translations: Record<string, Record<string, Record<string, string>>> = {
   ru: {
     nav: {
-      dialogs: "Диалог",
-      insights: "Инсайты",
-      transcripts: "Расшифровки",
-      universe: "Вселенная памяти",
-      contradictions: "Противоречия",
-      timeline: "Таймлайн",
-      learning: "Обучение",
-      sources: "Источники памяти",
+      dialogs: "Терминал ИИ",
+      insights: "Аналитика Паттернов",
+      transcripts: "Спектр Сигналов",
+      universe: "Нейросеть Знаний",
+      contradictions: "Коллизии",
+      timeline: "Хронология",
+      learning: "Модули Обучения",
+      sources: "База Знаний",
       addSource: "Добавить источник",
-      agentMemory: "ПАМЯТЬ АГЕНТА"
+      agentMemory: "ЯДРО СИСТЕМЫ",
+      playlists: "Аудио-Очередь"
     },
     insights: {
       title: "Доска инсайтов (L3)",

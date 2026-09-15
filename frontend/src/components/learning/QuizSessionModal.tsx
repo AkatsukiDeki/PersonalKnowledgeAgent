@@ -89,7 +89,7 @@ export const QuizSessionModal: React.FC<QuizSessionModalProps> = ({
 
           return {
             id: q.id || `q_${idx}`,
-            question: q.question || 'Вопрос без текста',
+            question: q.prompt || q.question || q.text || q.question_text || 'Вопрос без текста',
             options,
             explanation: q.explanation || 'Объяснение отсутствует.',
           };

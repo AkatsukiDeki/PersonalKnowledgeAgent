@@ -1,21 +1,22 @@
 import React, { useState, useEffect } from 'react';
 import {
-  MessageSquare,
+  SquareTerminal,
   Plus,
   Database,
-  Clock,
-  Sparkles,
-  ShieldAlert,
-  Globe,
+  History,
+  Cpu,
+  Binary,
+  Orbit,
   PanelLeftClose,
   PanelLeftOpen,
-  GraduationCap,
-  Headphones
+  BookOpen,
+  Activity,
+  Layers
 } from 'lucide-react';
 import { conflictsApi } from '../../api/conflicts';
 import { useLanguage } from '../../context/LanguageContext';
 
-export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts';
+export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts' | 'playlists';
 
 interface Props {
   onOpenUploader: () => void;
@@ -62,13 +63,14 @@ export function Sidebar({
   }, []);
 
   const navItems: NavItem[] = [
-    { id: 'chat', icon: <MessageSquare size={16} strokeWidth={1.5} />, label: t('nav.dialogs'), activeColor: 'text-indigo-400' },
-    { id: 'insights', icon: <Sparkles size={16} strokeWidth={1.5} />, label: t('nav.insights'), activeColor: 'text-fuchsia-400' },
-    { id: 'transcripts', icon: <Headphones size={16} strokeWidth={1.5} />, label: t('nav.transcripts'), activeColor: 'text-indigo-400' },
-    { id: 'universe', icon: <Globe size={16} strokeWidth={1.5} />, label: t('nav.universe'), activeColor: 'text-indigo-400' },
-    { id: 'conflicts', icon: <ShieldAlert size={16} strokeWidth={1.5} />, label: t('nav.contradictions'), activeColor: 'text-amber-400', badge: unresolvedCount },
-    { id: 'timeline', icon: <Clock size={16} strokeWidth={1.5} />, label: t('nav.timeline'), activeColor: 'text-emerald-400' },
-    { id: 'learning', icon: <GraduationCap size={16} strokeWidth={1.5} />, label: t('nav.learning'), activeColor: 'text-indigo-400' },
+    { id: 'chat', icon: <SquareTerminal size={16} strokeWidth={1.5} />, label: t('nav.dialogs'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'insights', icon: <Cpu size={16} strokeWidth={1.5} />, label: t('nav.insights'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'transcripts', icon: <Activity size={16} strokeWidth={1.5} />, label: t('nav.transcripts'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'playlists', icon: <Layers size={16} strokeWidth={1.5} />, label: t('nav.playlists'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'universe', icon: <Orbit size={16} strokeWidth={1.5} />, label: t('nav.universe'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'conflicts', icon: <Binary size={16} strokeWidth={1.5} />, label: t('nav.contradictions'), activeColor: 'text-amber-400 hud-glow-cyan', badge: unresolvedCount },
+    { id: 'timeline', icon: <History size={16} strokeWidth={1.5} />, label: t('nav.timeline'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'learning', icon: <BookOpen size={16} strokeWidth={1.5} />, label: t('nav.learning'), activeColor: 'text-indigo-400 hud-glow-cyan' },
   ];
 
   return (
@@ -82,7 +84,7 @@ export function Sidebar({
       )}
       
       <aside
-        className={`fixed top-0 left-0 h-full bg-[#0a0a0a]/90 backdrop-blur-xl border-r border-white/5 flex flex-col justify-between shrink-0 transition-transform duration-300 ease-out z-50 text-slate-200 w-56 ${
+        className={`fixed top-0 left-0 h-full bg-[#030712] border-r border-[#1e293b] flex flex-col justify-between shrink-0 transition-transform duration-300 ease-out z-50 text-[#e2e8f0] w-56 ${
           isOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -128,14 +130,21 @@ export function Sidebar({
                 <button
                   key={item.id}
                   onClick={() => onChangeView(item.id)}
-                  className={`relative flex items-center gap-3 rounded-xl text-xs font-medium w-full text-left transition-all duration-150 px-3 py-2.5 ${
-                    isActive
-                      ? `bg-white/[0.08] text-white shadow-sm border border-white/5`
-                      : 'text-white/50 hover:text-white/90 hover:bg-white/[0.04]'
-                  }`}
+                  className={`
+                    group w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm transition-all relative
+                    ${isActive 
+                      ? `bg-white/[0.04] text-white ${item.activeColor}` 
+                      : 'text-white/50 hover:text-white/80 hover:bg-white/[0.02]'
+                    }
+                  `}
                 >
-                  <span className={isActive ? item.activeColor : 'text-white/40'}>{item.icon}</span>
-                  <span className="truncate font-light">{item.label}</span>
+                  {isActive && (
+                    <div className="absolute left-0 top-1.5 bottom-1.5 w-[3px] bg-cyan-400 rounded-r-sm hud-glow-cyan" />
+                  )}
+                  <div className="flex items-center gap-3">
+                    <span className={isActive ? item.activeColor : 'text-white/40'}>{item.icon}</span>
+                    <span className="truncate font-light">{item.label}</span>
+                  </div>
                   {item.badge && item.badge > 0 ? (
                     <span className="ml-auto bg-amber-500/20 border border-amber-500/30 text-amber-300 font-mono text-[10px] px-1.5 py-0.5 rounded-md font-medium">
                       {item.badge}
