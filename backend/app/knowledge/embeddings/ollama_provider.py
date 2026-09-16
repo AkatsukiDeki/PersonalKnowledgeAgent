@@ -66,13 +66,20 @@ class OllamaEmbeddingProvider(BaseEmbeddingProvider):
             # Fallback to zero vector to avoid breaking the pipeline, or raise
             return [0.0] * self._dimension
 
+    CONCURRENCY_LIMIT = 4
+
     async def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # Limit concurrency if needed, but Ollama handles queueing internally.
-        # We will use gather to send them all.
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            tasks = [self._call_ollama(client, text) for text in texts]
-            results = await asyncio.gather(*tasks)
-        return list(results)
+        if not texts:
+            return []
+            
+        semaphore = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            async def _call_safe(text: str) -> List[float]:
+                async with semaphore:
+                    return await self._call_ollama(client, text)
+                    
+            return await asyncio.gather(*[_call_safe(t) for t in texts])
 
     async def embed_query(self, text: str) -> List[float]:
         async with httpx.AsyncClient(timeout=30.0) as client:

@@ -4,7 +4,7 @@ import os
 from datetime import datetime, timezone
 from arq.connections import RedisSettings
 from arq.cron import cron
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from .core.config import settings
 from .db.session import async_session_factory
@@ -218,17 +218,12 @@ async def _safe_reindex(ctx, source_id: uuid.UUID):
             if not source:
                 return
 
-            old_claims_stmt = select(Claim).where(Claim.source_id == source_id, Claim.is_active == True)
-            old_claims = (await db.execute(old_claims_stmt)).scalars().all()
-            for claim in old_claims:
-                claim.is_active = False
-            await db.flush()
-
-            old_chunks_stmt = select(Chunk).where(Chunk.source_id == source_id, Chunk.is_active == True)
-            old_chunks = (await db.execute(old_chunks_stmt)).scalars().all()
-            for chunk in old_chunks:
-                chunk.is_active = False
-            await db.flush()
+            await db.execute(
+                update(Claim).where(Claim.source_id == source_id, Claim.is_active == True).values(is_active=False)
+            )
+            await db.execute(
+                update(Chunk).where(Chunk.source_id == source_id, Chunk.is_active == True).values(is_active=False)
+            )
 
             await db.commit()
         except Exception as e:

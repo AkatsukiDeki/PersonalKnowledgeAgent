@@ -77,28 +77,31 @@ async def process_source_chunks_bg(ctx, source_id: uuid.UUID):
             raw_chunks: Sequence[str] = await loop.run_in_executor(None, create_chunks, source_content, 2500, 250)
 
             provider = get_embedding_provider()
-            embeddings = await provider.embed_documents(list(raw_chunks)) if raw_chunks else []
+            raw_chunks_list = list(raw_chunks)
+            total_chunks = len(raw_chunks_list)
+            DB_BATCH_SIZE = 64
 
-            db_chunks = []
-            for idx, (text_chunk, embedding_vector) in enumerate(zip(raw_chunks, embeddings)):
-                
-                if len(embedding_vector) != settings.EMBEDDING_DIMENSION:
-                    raise ValueError(f"Model dimension mismatch! Expected {settings.EMBEDDING_DIMENSION}, got {len(embedding_vector)}")
+            for i in range(0, total_chunks, DB_BATCH_SIZE):
+                batch_texts = raw_chunks_list[i:i + DB_BATCH_SIZE]
+                batch_embeddings = await provider.embed_documents(batch_texts)
 
-                db_chunk = Chunk(
-                    source_id=source.id,
-                    chunk_index=idx,
-                    text_content=text_chunk,
-                    embedding=embedding_vector,
-                    version=source_version,
-                    is_active=True
-                )
-                db_chunks.append(db_chunk)
+                db_chunks = []
+                for offset, (text, emb) in enumerate(zip(batch_texts, batch_embeddings)):
+                    if len(emb) != settings.EMBEDDING_DIMENSION:
+                        raise ValueError(f"Model dimension mismatch! Expected {settings.EMBEDDING_DIMENSION}, got {len(emb)}")
 
-            if db_chunks:
-                db.add_all(db_chunks)
+                    db_chunks.append(Chunk(
+                        source_id=source.id,
+                        chunk_index=i + offset,
+                        text_content=text,
+                        embedding=emb,
+                        version=source_version,
+                        is_active=True
+                    ))
 
-            await db.commit()
+                if db_chunks:
+                    db.add_all(db_chunks)
+                    await db.commit()
             await resolve_granular_error("chunking", source_id=source_id)
 
             # --- Phase 3A: Document Concept Extraction ---

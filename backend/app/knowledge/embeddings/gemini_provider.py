@@ -66,10 +66,23 @@ class GeminiEmbeddingProvider(BaseEmbeddingProvider):
         return await asyncio.to_thread(_call_api)
 
 
+    BATCH_SIZE = 32
+    CONCURRENCY_LIMIT = 3
+
     async def embed_documents(self, texts: List[str]) -> List[List[float]]:
-        # Gemini handles batching natively up to a certain size, you might need to chunk `texts`
-        # if the list is huge, but we'll assume it's chunked reasonably beforehand.
-        return await self._embed_batch_with_retry(texts, types.TaskType.RETRIEVAL_DOCUMENT)
+        if not texts:
+            return []
+        
+        semaphore = asyncio.Semaphore(self.CONCURRENCY_LIMIT)
+        
+        async def _embed_chunk(batch: List[str]) -> List[List[float]]:
+            async with semaphore:
+                return await self._embed_batch_with_retry(batch, types.TaskType.RETRIEVAL_DOCUMENT)
+
+        batches = [texts[i:i + self.BATCH_SIZE] for i in range(0, len(texts), self.BATCH_SIZE)]
+        results = await asyncio.gather(*[_embed_chunk(b) for b in batches])
+        
+        return [vec for batch_res in results for vec in batch_res]
 
     async def embed_query(self, text: str) -> List[float]:
         results = await self._embed_batch_with_retry([text], types.TaskType.RETRIEVAL_QUERY)
