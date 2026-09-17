@@ -4,6 +4,8 @@ import { VoiceNoteViewer } from './VoiceNoteViewer';
 import { Source } from '../../types/source';
 import { CustomMediaControls } from './CustomMediaControls';
 import { useSourceTranslation } from '../../hooks/useSourceTranslation';
+import { AddToPlaylistMenu } from './AddToPlaylistMenu';
+import { usePlayer } from '../../context/PlayerContext';
 
 interface TranscriptSegment {
   start: number;
@@ -24,6 +26,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ sourceId, source, meta
   const [langMode, setLangMode] = useState<'orig' | 'ru'>('orig');
 
   const { isTranslating, translatedText, startTranslation } = useSourceTranslation();
+  const { pause: pauseGlobalPlayer } = usePlayer();
 
   const mediaType = metaInfo?.media?.media_type || 'audio';
   const rawSegments: TranscriptSegment[] = metaInfo?.transcript_segments || metaInfo?.media?.transcript_segments || [];
@@ -52,6 +55,7 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ sourceId, source, meta
     const media = mediaRef.current;
     if (media) {
       media.currentTime = time;
+      pauseGlobalPlayer();
       media.play().catch(e => console.warn('Autoplay prevented:', e));
     }
   };
@@ -128,9 +132,12 @@ export const MediaViewer: React.FC<MediaViewerProps> = ({ sourceId, source, meta
 
         <div className="w-full max-w-2xl flex flex-col gap-2">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-              Транскрипт & Таймкоды
-            </span>
+            <div className="flex items-center gap-4">
+              <span className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
+                Транскрипт & Таймкоды
+              </span>
+              <AddToPlaylistMenu sourceId={sourceId} />
+            </div>
             <div className="flex items-center bg-zinc-900 p-0.5 rounded-lg border border-zinc-800 text-xs">
               <button
                 type="button"

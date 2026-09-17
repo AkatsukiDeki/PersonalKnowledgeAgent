@@ -25,6 +25,8 @@ from .media import router as media_router
 from .focus import router as focus_router
 from .auth import router as auth_router
 from .tasks import router as tasks_router
+from .endpoints import playlists
+from .endpoints.kinetics import router as kinetics_router
 
 api_router = APIRouter()
 
@@ -50,4 +52,6 @@ api_router.include_router(sandbox.router, prefix="/sandbox", tags=["sandbox"])
 api_router.include_router(media_router)
 api_router.include_router(focus_router)
 api_router.include_router(auth_router)
-api_router.include_router(tasks_router, prefix="/tasks", tags=["Tasks"])
+api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
+api_router.include_router(playlists.router, prefix="/playlists", tags=["playlists"])
+api_router.include_router(kinetics_router, prefix="/kinetics", tags=["kinetics"])

@@ -13,7 +13,8 @@ export const translations: Record<string, Record<string, Record<string, string>>
       sources: "База Знаний",
       addSource: "Добавить источник",
       agentMemory: "ЯДРО СИСТЕМЫ",
-      playlists: "Аудио-Очередь"
+      playlists: "Аудио-Очередь",
+      kinetics: "Кинетика"
     },
     insights: {
       title: "Доска инсайтов (L3)",

@@ -7,7 +7,7 @@ class CopilotRequest(BaseModel):
     suffix: Optional[str] = Field(default="", description="Текст после курсора")
     last_assistant_message: Optional[str] = Field(
         default=None, 
-        max_length=300, 
+        max_length=4000, 
         description="Краткий контекст предыдущего ответа"
     )
 

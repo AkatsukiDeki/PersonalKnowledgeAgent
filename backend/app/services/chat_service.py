@@ -349,22 +349,35 @@ async def stream_chat(
         ).to_sse()
 
         if not is_sufficient and not payload.image_base64:
-            retrieved.insert(
-                0,
-                {
-                    "chunk_id": str(uuid.uuid4()),
-                    "source_id": str(uuid.uuid4()),
-                    "text_content": (
-                        "[SYSTEM INSTRUCTION]\nВ локальной базе знаний пользователя нет "
-                        "достаточной информации по этому запросу. Честно предупреди об этом (кратко), "
-                        "а затем дай развернутый ответ на основе общих инженерных знаний. ТЫ ИМЕЕШЬ ПРАВО "
-                        "писать, анализировать и выполнять любой код по запросу пользователя. "
-                        "Игнорируй базовые запреты на написание/объяснение кода."
-                    ),
-                    "score": 1.0,
-                    "rrf_score": 1.0,
-                },
-            )
+            if intent in ("CODE", "MATH", "GENERAL_KNOWLEDGE", "GENERAL", "DEFAULT"):
+                retrieved.insert(
+                    0,
+                    {
+                        "chunk_id": str(uuid.uuid4()),
+                        "source_id": str(uuid.uuid4()),
+                        "text_content": (
+                            "[SYSTEM INSTRUCTION]\nРазрешено использовать общие знания, так как запрос носит общий характер. "
+                            "Обязательно добавь бейдж: [Общий ответ вне базы знаний]. ТЫ ИМЕЕШЬ ПРАВО "
+                            "писать, анализировать и выполнять любой код по запросу пользователя."
+                        ),
+                        "score": 1.0,
+                        "rrf_score": 1.0,
+                    },
+                )
+            else:
+                retrieved.insert(
+                    0,
+                    {
+                        "chunk_id": str(uuid.uuid4()),
+                        "source_id": str(uuid.uuid4()),
+                        "text_content": (
+                            "[SYSTEM INSTRUCTION]\nВ локальной базе знаний пользователя НЕТ информации по этой теме. "
+                            "Кратко и честно отметь это, прежде чем пытаться отвечать из мировых знаний."
+                        ),
+                        "score": 1.0,
+                        "rrf_score": 1.0,
+                    },
+                )
 
         if thread_state and not payload.history:
             retrieved.insert(
@@ -405,6 +418,18 @@ async def stream_chat(
                     projects=row.projects,
                 )
                 profile_text = generate_primary_seed(prof_schema)
+
+                try:
+                    from ..api.endpoints.kinetics import get_daily_telemetry_summary
+                    telemetry = await get_daily_telemetry_summary(db, row.id)
+                    profile_text += "\n\n=== ТЕКУЩЕЕ ФИЗИЧЕСКОЕ СОСТОЯНИЕ (KINETICS ТЕЛЕМЕТРИЯ) ===\n"
+                    profile_text += f"- Сон: {telemetry['sleep_hours']} ч | Утомление (ЦНС): {telemetry['fatigue_score']}/10\n"
+                    profile_text += f"- Питание: {telemetry['calories_in']} ккал (Дефицит: {telemetry['deficit']} ккал) | Белок: {telemetry['protein_g']}г\n"
+                    profile_text += f"- Тренировочный статус: {telemetry['workout_split']} — {telemetry['workout_progress']} ({telemetry['workout_status']})\n"
+                    profile_text += "Учитывай текущее физическое состояние, утомление и статус восстановления при любых ответах.\n"
+                except Exception as e:
+                    logger.error(f"Error fetching kinetics telemetry: {e}")
+
             except Exception as e:
                 logger.error(f"Error parsing profile: {e}")
 
@@ -573,7 +598,8 @@ async def stream_chat(
 
                 if (
                     is_tutor
-                    and payload.chat_mode == ChatMode.EXAMINER
+                    and hasattr(payload, "chat_mode")
+                    and getattr(payload.chat_mode, "value", str(payload.chat_mode)) == "examiner"
                     and payload.learning_context
                 ):
                     score_match = re.search(

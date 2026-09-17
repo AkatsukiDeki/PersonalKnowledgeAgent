@@ -34,7 +34,7 @@ export function useCopilot({ debounceMs = 350, lastAssistantMessage }: UseCopilo
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             prefix,
-            last_assistant_message: lastAssistantMessage,
+            last_assistant_message: lastAssistantMessage ? lastAssistantMessage.slice(0, 500) : undefined,
           }),
           signal: abortControllerRef.current.signal,
         });

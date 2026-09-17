@@ -14,6 +14,41 @@ from ..core.config import settings
 from ..core.llm import tenacity_retry_llm, tenacity_retry_reasoning_llm, model_manager
 from .prompts import get_rag_system_instruction, QUERY_REWRITE_PROMPT, build_rag_prompt
 from ..core.ollama_client import OllamaClient
+from dataclasses import dataclass, field
+import json
+
+@dataclass
+class FakeFunctionCall:
+    name: str
+    args: dict[str, Any]
+
+@dataclass
+class FakeChunk:
+    text: str | None = None
+    function_calls: list[FakeFunctionCall] = field(default_factory=list)
+
+EXECUTE_CODE_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "execute_code",
+        "description": "Execute code in a sandbox (sql, python, cpp, bash, math) and return output.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "language": {
+                    "type": "string",
+                    "enum": ["sql", "python", "cpp", "bash", "math"],
+                    "description": "Target runtime environment",
+                },
+                "code": {
+                    "type": "string",
+                    "description": "Clean executable code without markdown tags",
+                },
+            },
+            "required": ["language", "code"],
+        },
+    },
+}
 
 _client = None
 
@@ -95,28 +130,66 @@ import base64
 def _to_gemini_contents(messages: list) -> list:
     contents = []
     for msg in messages:
-        if msg.get("role") == "system":
+        # 1. Если это уже готовый объект types.Content
+        if isinstance(msg, types.Content):
+            contents.append(msg)
             continue
-        role = "model" if msg.get("role") == "assistant" else "user"
-        
-        parts = []
-        if "content" in msg and msg["content"]:
-            parts.append(types.Part.from_text(msg["content"]))
-            
-        if "images" in msg and isinstance(msg["images"], list):
-            for img_b64 in msg["images"]:
-                try:
-                    # Remove base64 prefix if it exists
-                    if img_b64.startswith("data:image"):
-                        img_b64 = img_b64.split(",", 1)[-1]
-                    img_bytes = base64.b64decode(img_b64)
-                    # For simplicity, assuming JPEG/PNG. Gemini usually sniffs it or we can pass a generic image type
-                    parts.append(types.Part.from_bytes(data=img_bytes, mime_type="image/jpeg"))
-                except Exception as e:
-                    logger.error(f"Failed to decode base64 image: {e}")
-                    
-        if parts:
-            contents.append(types.Content(role=role, parts=parts))
+
+        # 2. Если это Pydantic-схема
+        if hasattr(msg, "model_dump"):
+            data = msg.model_dump()
+        elif hasattr(msg, "dict"):
+            data = msg.dict()
+        elif isinstance(msg, dict):
+            data = msg
+        else:
+            # Неизвестный объект — оборачиваем строковое представление как user
+            contents.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=str(msg))]
+                )
+            )
+            continue
+
+        role = data.get("role", "user")
+        if role == "assistant":
+            role = "model"
+
+        raw_content = data.get("content") or data.get("parts") or ""
+
+        # Если контент — простая строка
+        if isinstance(raw_content, str):
+            parts = [types.Part.from_text(text=raw_content)]
+        elif isinstance(raw_content, list):
+            parts = []
+            for item in raw_content:
+                if isinstance(item, types.Part):
+                    parts.append(item)
+                elif isinstance(item, str):
+                    parts.append(types.Part.from_text(text=item))
+                elif isinstance(item, dict):
+                    if "text" in item:
+                        parts.append(types.Part.from_text(text=item["text"]))
+                    elif "function_call" in item:
+                        parts.append(
+                            types.Part.from_function_call(
+                                name=item["function_call"]["name"],
+                                args=item["function_call"]["args"],
+                            )
+                        )
+                    elif "function_response" in item:
+                        parts.append(
+                            types.Part.from_function_response(
+                                name=item["function_response"]["name"],
+                                response=item["function_response"]["response"],
+                            )
+                        )
+        else:
+            parts = [types.Part.from_text(text=str(raw_content))]
+
+        contents.append(types.Content(role=role, parts=parts))
+
     return contents
 
 
@@ -175,27 +248,94 @@ async def generate_rag_response(query: str, retrieved_chunks: List[Dict[str, Any
 
 
 @tenacity_retry_reasoning_llm
-async def _do_stream(messages: list, system_instruction: str, target_model: str = "qwen2.5:3b"):
+async def _do_stream(messages: list, system_instruction: str, target_model: str = "qwen2.5:3b", tools: list = None):
     is_gemini_model = "gemini" in target_model.lower()
     has_valid_key = settings.GEMINI_API_KEY and settings.GEMINI_API_KEY not in ("your_gemini_api_key_here", "dummy")
     
     if not is_gemini_model or not has_valid_key or settings.REASONING_PROVIDER == "ollama":
+        dict_msgs = []
+        for m in messages:
+            if hasattr(m, "role") and hasattr(m, "parts"):
+                # google.genai types.Content
+                text_parts = []
+                tool_calls = []
+                has_function_resp = False
+                for p in m.parts:
+                    if p.text:
+                        text_parts.append(p.text)
+                    elif getattr(p, "function_call", None):
+                        tool_calls.append({
+                            "function": {
+                                "name": p.function_call.name,
+                                "arguments": p.function_call.args
+                            }
+                        })
+                    elif getattr(p, "function_response", None):
+                        has_function_resp = True
+                        dict_msgs.append({
+                            "role": "tool",
+                            "name": p.function_response.name,
+                            "content": json.dumps(p.function_response.response)
+                        })
+                
+                if not has_function_resp:
+                    msg_dict = {"role": m.role, "content": "\\n".join(text_parts)}
+                    if tool_calls:
+                        msg_dict["tool_calls"] = tool_calls
+                    dict_msgs.append(msg_dict)
+            elif isinstance(m, dict):
+                dict_msgs.append(m)
+            else:
+                dict_msgs.append({"role": "user", "content": str(m)})
+
         local_model = target_model if not is_gemini_model else settings.OLLAMA_QA_MODEL
         ollama = OllamaClient()
         
         async def ollama_stream():
-            async for chunk in ollama.stream_chat(messages=messages, model=local_model):
-                yield type('FakeChunk', (), {'text': chunk})()
+            ollama_tools = [EXECUTE_CODE_SCHEMA] if tools else None
+            async for chunk in ollama.stream_chat(messages=dict_msgs, model=local_model, tools=ollama_tools):
+                if isinstance(chunk, dict) and "tool_calls" in chunk:
+                    fcs = []
+                    for tc in chunk["tool_calls"]:
+                        args = tc.get("function", {}).get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {}
+                        fcs.append(FakeFunctionCall(name=tc.get("function", {}).get("name", ""), args=args))
+                    
+                    text_val = chunk.get("content")
+                    if not text_val:
+                        text_val = None
+                    yield FakeChunk(text=text_val, function_calls=fcs)
+                elif isinstance(chunk, str) and chunk:
+                    yield FakeChunk(text=chunk)
                 
         return ollama_stream()
 
+    if tools:
+        anti_hallucination_tool_prompt = (
+            "\n\nТы обязан использовать инструмент execute_code для любых вычислений, запуска кода, "
+            "SQL-запросов и генерации случайных данных. "
+            "КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО писать фразы 'Предположим, результат:', 'Вывод программы:' "
+            "или имитировать выполнение кода в тексте без реального вызова функции execute_code."
+        )
+        system_instruction = f"{system_instruction}{anti_hallucination_tool_prompt}"
+        
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=0.1,
+    )
+    if tools:
+        config.tools = tools
+
+    contents = messages if messages and isinstance(messages[0], types.Content) else _to_gemini_contents(messages)
+
     return await get_client().aio.models.generate_content_stream(
         model=target_model if "gemini" in target_model else model_manager.get_model('reasoning'),
-        contents=_to_gemini_contents(messages),
-        config=types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.1,
-        ),
+        contents=contents,
+        config=config,
     )
 
 
@@ -212,15 +352,46 @@ flowchart TD
 """
 
 SANDBOX_PROMPT = """
---- ВЫПОЛНЕНИЕ КОДА (SANDBOX) ---
-У тебя есть доступ к защищенной песочнице для выполнения Python-кода.
-Если тебе нужно выполнить точные математические расчеты, алгоритмы, обработку данных, анализ или симуляции, используй специальный блок кода:
-```python sandbox
-# твой код
-print("Result")
-```
-Код будет немедленно выполнен в изолированном окружении, и результат будет доступен пользователю. Обязательно используй `print()` для вывода результатов. Не используй этот блок для простых примеров кода, только когда действительно требуется выполнение.
+# ПРАВИЛА ВЫБОРА СРЕДЫ ВЫПОЛНЕНИЯ (POLYGLOT EXECUTION)
+1. Определяй целевой язык задачи строго по интенту пользователя:
+   - Если задача сформулирована как SQL-запрос (DDL/DML/SELECT) -> вызывай инструмент execute_code с language='sql'. ЗАПРЕЩЕНО оборачивать SQL в скрипты на Python/sqlite3, если пользователь явно не попросил "напиши скрипт на Python для работы с БД".
+   - Если задача математическая (уравнение, интеграл, производная) -> вызывай инструмент execute_code с language='math' (SymPy) или используй LaTeX. Не пиши скрипт вычислений без просьбы.
+   - Если задача системная (Linux, терминал, файлы) -> вызывай инструмент execute_code с language='bash'.
+   - Если задача алгоритмическая на C++/C#/Python -> вызывай инструмент execute_code с соответствующим language ('cpp', 'csharp', 'python').
+
+2. ПРАВИЛО ЧИСТОТЫ КОДА:
+   - Вызывай инструмент execute_code только для одного целевого языка за раз.
+   - Никаких вспомогательных "обвязок" на других языках, если их прямо не запрашивали.
+   - Код должен быть сразу готов к запуску в соответствующей песочнице (sql -> aiosqlite, python/cpp/bash -> Piston).
 """
+
+execute_code_tool = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="execute_code",
+            description=(
+                "Executes code in an isolated backend sandbox and returns stdout/stderr. "
+                "Use 'sql' for relational database queries, 'python' for general computing/data analysis, "
+                "'cpp' for C++ algorithms, 'bash' for Linux commands, and 'math' for symbolic equations."
+            ),
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "language": types.Schema(
+                        type=types.Type.STRING,
+                        enum=["python", "sql", "cpp", "bash", "math"],
+                        description="Target runtime environment. Match strictly to the problem domain.",
+                    ),
+                    "code": types.Schema(
+                        type=types.Type.STRING,
+                        description="Clean, executable code. Do NOT wrap in markdown backticks.",
+                    ),
+                },
+                required=["language", "code"],
+            ),
+        )
+    ]
+)
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -257,93 +428,120 @@ async def stream_rag_response_sse(
 ) -> AsyncGenerator[Any, None]:
     """Потоковая генерация типизированных SSE-событий на базе чанков."""
     from ..schemas.chat_events import SSEEnvelope, SSEEventData
+    from app.services.sandbox_service import PolyglotSandbox
 
     context_blocks = [
-        f"--- Чанк {i + 1} ---\n{chunk['text_content']}"
+        f"--- Чанк {i + 1} ---\\n{chunk['text_content']}"
         for i, chunk in enumerate(retrieved_chunks)
     ]
-    context_text = "\n\n".join(context_blocks)
+    context_text = "\\n\\n".join(context_blocks)
 
     base_instruction = get_rag_system_instruction(user_profile)
     if role_preset and role_preset in ROLE_PRESETS:
-        base_instruction += f"\n\n--- ВЫБРАННАЯ РОЛЬ ТЬЮТОРА: {role_preset.upper()} ---\n{ROLE_PRESETS[role_preset]}"
+        base_instruction += f"\\n\\n--- ВЫБРАННАЯ РОЛЬ ТЬЮТОРА: {role_preset.upper()} ---\\n{ROLE_PRESETS[role_preset]}"
     elif mode == "learning_tutor":
-        base_instruction += f"\n\n--- СОКРАТОВСКИЙ ТЬЮТОР ---\n{ROLE_PRESETS['socrates']}"
+        base_instruction += f"\\n\\n--- СОКРАТОВСКИЙ ТЬЮТОР ---\\n{ROLE_PRESETS['socrates']}"
 
     active_system_prompt = f"{base_instruction}{MERMAID_PROMPT}{SANDBOX_PROMPT}{PKA_JAILBREAK}"
-    messages = build_chat_messages(active_system_prompt, history, query, context_text)
+    raw_messages = build_chat_messages(active_system_prompt, history, query, context_text)
+    
+    contents = _to_gemini_contents(raw_messages)
+
+    mermaid_keywords = ("flowchart ", "graph ", "sequenceDiagram", "gantt", "classDiagram", "stateDiagram", "pie title", "erDiagram")
 
     try:
-        response_stream = await _do_stream(messages, system_instruction=active_system_prompt, target_model=target_model)
+        MAX_TOOL_STEPS = 5
+        step = 0
         
-        buffer = ""
-        in_code_block = False
-        in_injected_mermaid = False
-        in_sandbox_block = False
-        sandbox_code = []
-        mermaid_keywords = ("flowchart ", "graph ", "sequenceDiagram", "gantt", "classDiagram", "stateDiagram", "pie title", "erDiagram")
-
-        from ..sandbox.runner import sandbox_runner
-
-        async for chunk in response_stream:
-            if chunk.text:
-                buffer += chunk.text
-                
-                while "\n" in buffer:
-                    line, buffer = buffer.split("\n", 1)
+        while step < MAX_TOOL_STEPS:
+            step += 1
+            try:
+                response_stream = await _do_stream(contents, system_instruction=active_system_prompt, target_model=target_model, tools=[execute_code_tool])
+            except Exception as api_err:
+                logger.warning(f"Error calling target_model {target_model}: {api_err}")
+                if "gemini" in target_model.lower():
+                    yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\\n\\n> [!WARNING]\\n> Сбой облачного API (Gemini). Автоматическое переключение на локальную модель (Ollama)...\\n\\n"))
+                    target_model = getattr(settings, "OLLAMA_QA_MODEL", "qwen2.5:3b")
+                    step -= 1  # Retry the current step with Ollama
+                    continue
+                else:
+                    raise api_err
                     
-                    if "```" in line:
-                        if not in_code_block:
-                            # Start of a code block
-                            in_code_block = True
-                            if "python sandbox" in line.lower() or "python execute" in line.lower():
-                                in_sandbox_block = True
-                                sandbox_code = []
-                                yield SSEEnvelope(event="tool_start", data=SSEEventData(output={"tool_name": "python_sandbox", "status": "running"}))
-                        else:
-                            # End of a code block
-                            in_code_block = False
-                            if in_injected_mermaid:
-                                in_injected_mermaid = False
-                            if in_sandbox_block:
-                                in_sandbox_block = False
-                                # Execute the collected code
-                                code_str = "\n".join(sandbox_code)
-                                is_success, output_str = await sandbox_runner.run_python(code_str)
-                                
-                                result_md = f"\n\n**Результат выполнения (Sandbox):**\n```\n{output_str}\n```\n"
-                                yield SSEEnvelope(event="tool_result", data=SSEEventData(output={"tool_name": "python_sandbox", "status": "success" if is_success else "error"}))
-                                yield SSEEnvelope(event="token", data=SSEEventData(text_chunk=result_md))
+            has_tool_call = False
+            model_parts = []
+            func_resp_part = None
+            
+            buffer = ""
+            full_model_text = ""
+            in_code_block = False
+            in_injected_mermaid = False
+
+            async for chunk in response_stream:
+                if chunk.function_calls:
+                    for fc in chunk.function_calls:
+                        model_parts.append(types.Part.from_function_call(name=fc.name, args=fc.args))
+                        if fc.name == "execute_code":
+                            has_tool_call = True
+                            lang = fc.args.get("language", "python")
+                            code = fc.args.get("code", "")
                             
-                    stripped = line.strip()
-                    if not in_code_block and any(stripped.startswith(kw) for kw in mermaid_keywords):
-                        yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\n```mermaid\n"))
-                        in_code_block = True
-                        in_injected_mermaid = True
+                            yield SSEEnvelope(event="tool_start", data=SSEEventData(output={"tool": "execute_code", "input": {"language": lang, "code": code}}))
+                            
+                            sandbox_result = await PolyglotSandbox.execute(language=lang, code=code)
+                            
+                            tool_out = {
+                                "stdout": sandbox_result.get("stdout", ""),
+                                "stderr": sandbox_result.get("stderr", ""),
+                                "exit_code": sandbox_result.get("exit_code", 0)
+                            }
+                            
+                            yield SSEEnvelope(event="tool_result", data=SSEEventData(output=tool_out))
+                            
+                            func_resp_part = types.Part.from_function_response(
+                                name="execute_code",
+                                response={"result": tool_out}
+                            )
+                
+                if chunk.text:
+                    full_model_text += chunk.text
+                    buffer += chunk.text
+                    
+                    while "\\n" in buffer:
+                        line, buffer = buffer.split("\\n", 1)
                         
-                    yield SSEEnvelope(event="token", data=SSEEventData(text_chunk=line + "\n"))
-                    if in_sandbox_block and "```" not in line:
-                        sandbox_code.append(line)
-        
-        if buffer:
-            stripped = buffer.strip()
-            if not in_code_block and any(stripped.startswith(kw) for kw in mermaid_keywords):
-                yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\n```mermaid\n"))
-                in_injected_mermaid = True
-            yield SSEEnvelope(event="token", data=SSEEventData(text_chunk=buffer))
-            if in_sandbox_block and "```" not in buffer:
-                sandbox_code.append(buffer)
+                        if "```" in line:
+                            in_code_block = not in_code_block
+                            if not in_code_block and in_injected_mermaid:
+                                in_injected_mermaid = False
+                                
+                        stripped = line.strip()
+                        if not in_code_block and any(stripped.startswith(kw) for kw in mermaid_keywords):
+                            yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\\n```mermaid\\n"))
+                            in_code_block = True
+                            in_injected_mermaid = True
+                            
+                        yield SSEEnvelope(event="token", data=SSEEventData(text_chunk=line + "\\n"))
             
-        if in_injected_mermaid:
-            yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\n```\n"))
-            
-        if in_sandbox_block:
-            # Code block didn't close properly, but execute anyway
-            code_str = "\n".join(sandbox_code)
-            is_success, output_str = await sandbox_runner.run_python(code_str)
-            result_md = f"\n\n**Результат выполнения (Sandbox):**\n```\n{output_str}\n```\n"
-            yield SSEEnvelope(event="tool_result", data=SSEEventData(output={"tool_name": "python_sandbox", "status": "success" if is_success else "error"}))
-            yield SSEEnvelope(event="token", data=SSEEventData(text_chunk=result_md))
+            if buffer:
+                stripped = buffer.strip()
+                if not in_code_block and any(stripped.startswith(kw) for kw in mermaid_keywords):
+                    yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\\n```mermaid\\n"))
+                    in_injected_mermaid = True
+                yield SSEEnvelope(event="token", data=SSEEventData(text_chunk=buffer))
+                
+            if in_injected_mermaid:
+                yield SSEEnvelope(event="token", data=SSEEventData(text_chunk="\\n```\\n"))
+                
+            if full_model_text:
+                model_parts.insert(0, types.Part.from_text(text=full_model_text))
+                
+            if model_parts:
+                contents.append(types.Content(role="model", parts=model_parts))
+                
+            if has_tool_call and func_resp_part:
+                contents.append(types.Content(role="user", parts=[func_resp_part]))
+            else:
+                break
 
         yield SSEEnvelope(event="done", data=SSEEventData())
 

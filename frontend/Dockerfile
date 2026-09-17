@@ -4,7 +4,7 @@ WORKDIR /app
 ARG VITE_API_URL
 ENV VITE_API_URL=$VITE_API_URL
 COPY package*.json ./
-RUN npm ci
+RUN npm config set fetch-retries 5 && npm config set fetch-retry-mintimeout 20000 && npm ci
 COPY . .
 RUN npm run build
 

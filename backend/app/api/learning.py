@@ -268,7 +268,10 @@ async def generate_adaptive_session(
 ):
   from datetime import datetime, timezone
   from sqlalchemy.sql import func
-  from ..db.models import Source, subject_sources
+  from ..db.models import Source, subject_sources, Subject
+
+  subject = await db.get(Subject, request.subject_id)
+  subject_title = subject.title if subject else "Выбранная дисциплина"
 
   now = datetime.now(timezone.utc)
 
@@ -318,8 +321,8 @@ async def generate_adaptive_session(
   )[:15000]
 
   adaptive_instruction = (
-      f"ВАЖНО: Это адаптивная сессия. Удели особое внимание следующим темам: {focus_topics_str}. "
-      f"Генерируй вопросы/карточки именно по этим концептам."
+      f"ВАЖНО: Это адаптивная сессия по предмету «{subject_title}». Удели особое внимание следующим темам: {focus_topics_str}. "
+      f"Генерируй вопросы/карточки именно по этим концептам, основываясь на переданных материалах (sources/chunks)."
   )
 
   try:

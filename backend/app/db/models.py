@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pgvector.sqlalchemy import Vector
 from ..core.config import settings
-from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime, text, UniqueConstraint, Enum as SQLEnum
+from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime, Date, text, UniqueConstraint, Enum as SQLEnum
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID, ARRAY
 from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
@@ -702,23 +702,166 @@ class ConceptMastery(Base):
             "subject_id", "topic_name", name="uq_subject_topic_mastery"
         ),
     )
+class LearningAttempt(Base, TimestampedUUIDMixin):
+    __tablename__ = 'learning_attempts'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=True)
+    concept_id = Column(PG_UUID(as_uuid=True), ForeignKey('concepts.id', ondelete='SET NULL'), nullable=True)
+    success = Column(Boolean, default=False)
+    score = Column(Float, default=0.0)
+    item_type = Column(String(50), default="quiz")  # 'quiz', 'flashcard', 'sandbox_code'
+
+class Playlist(Base, TimestampedUUIDMixin):
+    __tablename__ = 'playlists'
+
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    last_played_item_id = Column(PG_UUID(as_uuid=True), ForeignKey('playlist_items.id', ondelete='SET NULL'), nullable=True)
+
+    items = relationship("PlaylistItem", back_populates="playlist", cascade="all, delete-orphan", foreign_keys="PlaylistItem.playlist_id")
 
 
-class LearningAttempt(Base):
-    __tablename__ = "learning_attempts"
+class PlaylistItem(Base, TimestampedUUIDMixin):
+    __tablename__ = 'playlist_items'
 
-    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    subject_id = Column(
-        PG_UUID(as_uuid=True),
-        ForeignKey("subjects.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
+    playlist_id = Column(PG_UUID(as_uuid=True), ForeignKey('playlists.id', ondelete='CASCADE'), nullable=False)
+    source_id = Column(PG_UUID(as_uuid=True), ForeignKey('sources.id', ondelete='CASCADE'), nullable=False)
+    order_index = Column(Integer, default=0, nullable=False)
+
+    playlist = relationship("Playlist", back_populates="items", foreign_keys=[playlist_id])
+    source = relationship("Source")
+
+
+# --- МОДУЛЬ КИНЕТИКИ ---
+
+class BiometricsLog(Base, TimestampedUUIDMixin):
+    __tablename__ = 'biometrics_logs'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
+    timestamp = Column(DateTime(timezone=True), default=datetime.utcnow, nullable=True)
+    
+    # Вес и состав
+    weight = Column(Float, nullable=True)
+    weight_kg = Column(Float, nullable=True)
+    body_fat_percentage = Column(Float, nullable=True)
+    body_fat_pct = Column(Float, nullable=True)
+    fat_mass_kg = Column(Float, nullable=True)
+    skeletal_muscle_kg = Column(Float, nullable=True)
+    muscle_kg = Column(Float, nullable=True)
+    water_l = Column(Float, nullable=True)
+    protein_kg = Column(Float, nullable=True)
+    protein_g = Column(Integer, nullable=True)
+    minerals_kg = Column(Float, nullable=True)
+    visceral_fat_level = Column(Integer, nullable=True)
+    visceral_fat = Column(Integer, nullable=True)
+    bmr_kcal = Column(Integer, nullable=True)
+    bmr = Column(Integer, nullable=True)
+    bmi = Column(Float, nullable=True)
+
+    # Энергобаланс и восстановление
+    calories_in = Column(Integer, default=0, nullable=True)
+    tdee = Column(Integer, default=0, nullable=True)
+    sleep_hours = Column(Float, default=8.0, nullable=True)
+    fatigue_score = Column(Integer, default=0, nullable=True)
+    notes = Column(Text, nullable=True)
+
+    # InBody сегменты
+    segment_data = Column(JSONB, default=dict, nullable=True)
+    segment_fat_pct = Column(JSONB, default=dict, nullable=True)
+
+
+class WorkoutPlan(Base, TimestampedUUIDMixin):
+    __tablename__ = 'workout_plans'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
+    target_split = Column(String(150), nullable=True)
+    location = Column(String(50), default='Дом', nullable=True)
+    split_day = Column(String(150), nullable=True)
+    ai_rationale = Column(Text, nullable=True)
+    status = Column(String(50), default='planned', nullable=True)
+
+    exercises = relationship("WorkoutExercise", back_populates="plan", cascade="all, delete-orphan", lazy="selectin")
+
+
+class WorkoutExercise(Base, TimestampedUUIDMixin):
+    __tablename__ = 'workout_exercises'
+
+    plan_id = Column(PG_UUID(as_uuid=True), ForeignKey('workout_plans.id', ondelete='CASCADE'), nullable=True)
+    workout_id = Column(PG_UUID(as_uuid=True), nullable=True)
+    exercise_name = Column(String(255), nullable=False)
+    exercise_type = Column(String(50), default='bodyweight', nullable=True)
+    sets = Column(Integer, default=3, nullable=True)
+    reps_or_duration = Column(String(100), default='10-12', nullable=True)
+    rpe = Column(Integer, nullable=True)
+    rpe_target = Column(Integer, nullable=True)
+    target_muscle_groups = Column(ARRAY(Text), default=list, nullable=True)
+    is_completed = Column(Boolean, default=False, nullable=True)
+    order_index = Column(Integer, default=0, nullable=True)
+
+    plan = relationship("WorkoutPlan", back_populates="exercises")
+
+class AthleteProfile(Base, TimestampedUUIDMixin):
+    __tablename__ = 'athlete_profiles'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), unique=True, nullable=False)
+    age = Column(Integer, default=22)
+    gender = Column(String(20), default="Мужской")
+    height_cm = Column(Float, default=181.0)
+    target_fat_pct = Column(Float, default=15.0)
+    target_weight_kg = Column(Float, default=85.0)
+
+    goals = Column(ARRAY(Text), default=lambda: ["Похудение"])
+    lagging_muscles = Column(ARRAY(Text), default=lambda: ["Грудь", "Спина", "Ноги"])
+    training_experience = Column(String(50), default="Средний")
+    last_break = Column(String(50), default="Более года")
+
+    workout_frequency = Column(Integer, default=6)
+    duration_min = Column(Integer, default=90)
+    preferred_time = Column(String(20), default="16:30")
+    schedule_days = Column(ARRAY(Text), default=lambda: ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб"])
+    restrictions = Column(Text, default="Исключить беговое кардио, акцент на fullbody, делить: дом (калистеника) вт/чт, зал пн/ср/пт/сб")
+
+    strength_bench = Column(Float, default=100.0)
+    strength_squat = Column(Float, default=120.0)
+    strength_deadlift = Column(Float, default=120.0)
+    pullups_reps = Column(Integer, default=10)
+
+    mobility_squat = Column(Integer, default=5)
+    mobility_shoulder = Column(Integer, default=5)
+    mobility_bend = Column(Integer, default=5)
+
+
+class TrainingLog(Base, TimestampedUUIDMixin):
+    __tablename__ = 'training_logs'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
+    log_date = Column(Date, default=func.current_date())
+    rpe_overall = Column(Integer, default=7)
+    energy_level = Column(Integer, default=7)
+    notes = Column(Text, nullable=True)
+    lessons_learned = Column(Text, nullable=True)
+
+
+class TrainingResearch(Base, TimestampedUUIDMixin):
+    __tablename__ = 'training_researches'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
+    title = Column(String(500), nullable=False)
+    source_url = Column(String(1000), nullable=True)
+    pmid = Column(String(50), nullable=True, index=True)
+    abstract = Column(Text, nullable=True)
+    key_takeaways = Column(Text, nullable=False)
+    tags = Column(ARRAY(String), default=list)
+    applied_to_protocol = Column(Boolean, default=False)
+
+    embedding = mapped_column(Vector(settings.EMBEDDING_DIMENSION), nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_training_researches_embedding_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"}
+        ),
     )
-    node_id = Column(String, nullable=True)
-    topic_name = Column(String, nullable=False)
-    is_correct = Column(Boolean, nullable=False)
-    response_time_ms = Column(Integer, nullable=True)
-    item_type = Column(
-        String, default="quiz"
-    )  # 'quiz', 'flashcard', 'sandbox_code'
-    created_at = Column(DateTime(timezone=True), server_default=func.now())

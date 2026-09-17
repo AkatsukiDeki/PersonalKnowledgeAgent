@@ -11,12 +11,13 @@ import {
   PanelLeftOpen,
   BookOpen,
   Activity,
-  Layers
+  Layers,
+  HeartPulse
 } from 'lucide-react';
 import { conflictsApi } from '../../api/conflicts';
 import { useLanguage } from '../../context/LanguageContext';
 
-export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts' | 'playlists';
+export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts' | 'playlists' | 'kinetics';
 
 interface Props {
   onOpenUploader: () => void;
@@ -71,6 +72,7 @@ export function Sidebar({
     { id: 'conflicts', icon: <Binary size={16} strokeWidth={1.5} />, label: t('nav.contradictions'), activeColor: 'text-amber-400 hud-glow-cyan', badge: unresolvedCount },
     { id: 'timeline', icon: <History size={16} strokeWidth={1.5} />, label: t('nav.timeline'), activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'learning', icon: <BookOpen size={16} strokeWidth={1.5} />, label: t('nav.learning'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'kinetics', icon: <HeartPulse size={16} strokeWidth={1.5} />, label: t('nav.kinetics'), activeColor: 'text-cyan-400 hud-glow-cyan' },
   ];
 
   return (

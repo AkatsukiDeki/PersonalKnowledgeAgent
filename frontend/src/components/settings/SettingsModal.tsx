@@ -38,7 +38,7 @@ export function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
 
   const models = [
     { id: 'gemini-3.5-flash-lite', label: 'Gemini 3.5 Flash Lite (Fast)' },
-    { id: 'gemini-3.6-flash', label: 'Gemini 3.6 Flash (Reasoning)' },
+    { id: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash (Reasoning)' },
     { id: 'qwen2.5:7b', label: 'Qwen 2.5 7B (Local Ollama)' }
   ];
 

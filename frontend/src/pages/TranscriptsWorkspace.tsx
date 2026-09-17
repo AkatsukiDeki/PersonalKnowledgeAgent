@@ -3,6 +3,7 @@ import { Headphones, Search, Plus, Loader2, PlayCircle, AlertCircle, FileText, C
 import { SourceItem, sourcesApi } from '../api/sources';
 import { DocumentEditorModal } from '../components/sources/DocumentEditorModal';
 import { SourceUploader } from '../components/sources/SourceUploader';
+import { AddToPlaylistMenu } from '../components/sources/AddToPlaylistMenu';
 import { useLanguage } from '../context/LanguageContext';
 
 const STATUS_ICONS: Record<string, React.ReactNode> = {
@@ -121,6 +122,9 @@ export function TranscriptsWorkspace() {
                     <span className="flex items-center gap-1" title="Chunks">
                       <FileText size={12} /> {source.chunks_count}
                     </span>
+                    <div onClick={e => e.stopPropagation()}>
+                      <AddToPlaylistMenu sourceId={source.id} />
+                    </div>
                   </div>
                 </div>
               </div>

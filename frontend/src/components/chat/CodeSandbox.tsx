@@ -1,144 +1,56 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState } from 'react';
 import { Play, Loader2, Code2, AlertTriangle } from 'lucide-react';
-import PyodideWorker from '../../workers/pyodide.worker.ts?worker';
-
-// Global singleton for Pyodide worker
-class PyodideManager {
-  private static instance: PyodideManager;
-  private worker: Worker | null = null;
-  private isInitializing = false;
-  private isReady = false;
-  private initPromise: Promise<void> | null = null;
-
-  // Track run handlers
-  private runHandlers: Map<string, {
-    onStdout: (text: string) => void;
-    onStderr: (text: string) => void;
-    onDone: () => void;
-    onError: (error: string) => void;
-  }> = new Map();
-
-  private constructor() {}
-
-  static getInstance() {
-    if (!PyodideManager.instance) {
-      PyodideManager.instance = new PyodideManager();
-    }
-    return PyodideManager.instance;
-  }
-
-  async init(): Promise<void> {
-    if (this.isReady) return;
-    if (this.initPromise) return this.initPromise;
-
-    this.isInitializing = true;
-    this.worker = new PyodideWorker();
-    
-    this.initPromise = new Promise((resolve, reject) => {
-      const id = 'init';
-      const handler = (e: MessageEvent) => {
-        if (e.data.id === id) {
-          if (e.data.type === 'INIT_DONE') {
-            this.isReady = true;
-            this.isInitializing = false;
-            this.worker?.removeEventListener('message', handler);
-            resolve();
-          } else if (e.data.type === 'INIT_ERROR') {
-            this.isInitializing = false;
-            this.worker?.removeEventListener('message', handler);
-            reject(new Error(e.data.error));
-          }
-        }
-      };
-      
-      this.worker?.addEventListener('message', handler);
-      
-      // We need a persistent listener for runs
-      this.worker?.addEventListener('message', this.handleWorkerMessage.bind(this));
-      
-      this.worker?.postMessage({ id, type: 'INIT' });
-    });
-
-    return this.initPromise;
-  }
-
-  private handleWorkerMessage(e: MessageEvent) {
-    const { id, type, text, error } = e.data;
-    const handler = this.runHandlers.get(id);
-    if (!handler) return;
-
-    if (type === 'STDOUT') {
-      handler.onStdout(text);
-    } else if (type === 'STDERR') {
-      handler.onStderr(text);
-    } else if (type === 'RUN_DONE') {
-      handler.onDone();
-      this.runHandlers.delete(id);
-    } else if (type === 'ERROR') {
-      handler.onError(error);
-      this.runHandlers.delete(id);
-    }
-  }
-
-  async runCode(
-    code: string, 
-    handlers: {
-      onStdout: (text: string) => void;
-      onStderr: (text: string) => void;
-    }
-  ): Promise<void> {
-    if (!this.isReady) {
-      await this.init();
-    }
-
-    return new Promise((resolve, reject) => {
-      const id = Math.random().toString(36).substring(7);
-      
-      this.runHandlers.set(id, {
-        onStdout: handlers.onStdout,
-        onStderr: handlers.onStderr,
-        onDone: resolve,
-        onError: (err) => reject(new Error(err)),
-      });
-
-      this.worker?.postMessage({ id, type: 'RUN', code });
-    });
-  }
-}
 
 interface CodeSandboxProps {
   code: string;
+  language?: string;
 }
 
-export function CodeSandbox({ code }: CodeSandboxProps) {
-  const [status, setStatus] = useState<'idle' | 'initializing' | 'running' | 'success' | 'error'>('idle');
+export function CodeSandbox({ code, language = 'python' }: CodeSandboxProps) {
+  const [status, setStatus] = useState<'idle' | 'running' | 'success' | 'error'>('idle');
   const [output, setOutput] = useState<{ type: 'stdout' | 'stderr', text: string }[]>([]);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   const handleRun = async () => {
     setOutput([]);
     setErrorMsg(null);
-    setStatus('initializing');
+    setStatus('running');
+
+    // Отсекаем артефакты генерации модели
+    const cleanCode = code
+      .replace(/\*\*Результат выполнения[\s\S]*?\*\*/gi, '')
+      .trim();
 
     try {
-      const manager = PyodideManager.getInstance();
-      
-      // Force status update during long load
-      setTimeout(() => {
-        if (status === 'initializing') {
-          // Status keeps showing initializing
-        }
-      }, 100);
-
-      await manager.init();
-      
-      setStatus('running');
-
-      await manager.runCode(code, {
-        onStdout: (text) => setOutput((prev) => [...prev, { type: 'stdout', text }]),
-        onStderr: (text) => setOutput((prev) => [...prev, { type: 'stderr', text }]),
+      const res = await fetch('/api/v1/sandbox/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          language: language,
+          code: cleanCode
+        })
       });
 
+      if (!res.ok) {
+        throw new Error(`Execution error: ${res.statusText}`);
+      }
+
+      const data = await res.json();
+      
+      const newOutput = [];
+      if (data.stdout) {
+        newOutput.push({ type: 'stdout' as const, text: data.stdout });
+      }
+      if (data.stderr) {
+        newOutput.push({ type: 'stderr' as const, text: data.stderr });
+      }
+      
+      setOutput(newOutput);
+      
+      if (data.exit_code !== 0 && !data.stderr) {
+         setErrorMsg(`Process exited with code ${data.exit_code}`);
+      }
+      
       setStatus('success');
     } catch (err: any) {
       setErrorMsg(err.message || 'Unknown error occurred');
@@ -152,18 +64,18 @@ export function CodeSandbox({ code }: CodeSandboxProps) {
       <div className="flex items-center justify-between px-4 py-2 bg-white/5 border-b border-white/5">
         <div className="flex items-center gap-2">
           <Code2 size={14} className="text-indigo-400" />
-          <span className="text-xs font-mono text-white/70">python</span>
+          <span className="text-xs font-mono text-white/70">{language}</span>
         </div>
         
         <button
           onClick={handleRun}
-          disabled={status === 'initializing' || status === 'running'}
+          disabled={status === 'running'}
           className="flex items-center gap-1.5 px-3 py-1 rounded bg-indigo-500/20 hover:bg-indigo-500/30 text-indigo-300 transition-colors disabled:opacity-50 text-xs font-medium"
         >
-          {(status === 'initializing' || status === 'running') ? (
+          {status === 'running' ? (
             <>
               <Loader2 size={12} className="animate-spin" />
-              {status === 'initializing' ? 'Loading Runtime...' : 'Running...'}
+              Running...
             </>
           ) : (
             <>
@@ -181,10 +93,10 @@ export function CodeSandbox({ code }: CodeSandboxProps) {
 
       {/* Terminal Output Area */}
       {(output.length > 0 || errorMsg) && (
-        <div className="border-t border-white/10 bg-black/60 p-4 font-mono text-xs">
+        <div className="border-t border-white/10 bg-black/60 p-4 font-mono text-xs overflow-x-auto">
           <div className="text-white/40 mb-2 select-none uppercase tracking-widest text-[10px]">Terminal Output</div>
           
-          <div className="space-y-1">
+          <div className="space-y-1 whitespace-pre-wrap">
             {output.map((line, idx) => (
               <div 
                 key={idx} 

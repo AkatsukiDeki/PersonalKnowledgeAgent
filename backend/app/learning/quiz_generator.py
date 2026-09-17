@@ -14,8 +14,9 @@ class QuizGenerator:
     async def generate(self, request: GenerateQuizRequest, context: Dict[str, Any]) -> QuizPayload:
         claims = context.get("claims", [])
         chunks = context.get("chunks", [])
+        sources = context.get("sources", [])
 
-        if not claims and not chunks:
+        if not claims and not chunks and not sources:
             # Fallback if context is empty
             topic_title = (
                 getattr(request, "topic_title", None)
@@ -30,6 +31,8 @@ class QuizGenerator:
                 context_summary_parts.append("\n".join([f"- [Claim ID: {c.id}]: {c.content}" for c in claims[:20]]))
             if chunks:
                 context_summary_parts.append("\n".join([f"- [Chunk ID: {ch.id}]: {ch.text_content[:300]}..." for ch in chunks[:15]]))
+            if sources and not claims and not chunks:
+                context_summary_parts.append("\n".join([f"- [Source: {s.title or s.id}]: {str(s.content or s.raw_content)[:1000]}..." for s in sources[:5]]))
             context_summary = "\n\n".join(context_summary_parts)
 
         system_prompt = (

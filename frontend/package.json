@@ -9,6 +9,9 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@telegram-apps/sdk-react": "^3.3.9",
     "@twa-dev/sdk": "^8.0.2",
     "@types/d3-force": "^3.0.10",

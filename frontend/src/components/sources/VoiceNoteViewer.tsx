@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Play, Pause, CheckSquare, Lightbulb, HelpCircle, FileText, CheckCircle2, Languages, Loader2 } from 'lucide-react';
 import { Source } from '@/types/source';
 import { useSourceTranslation } from '../../hooks/useSourceTranslation';
+import { AddToPlaylistMenu } from './AddToPlaylistMenu';
+import { usePlayer } from '../../context/PlayerContext';
 
 const Card = ({ children, className = '' }: any) => <div className={`rounded-xl border bg-black/20 ${className}`}>{children}</div>;
 const CardHeader = ({ children, className = '' }: any) => <div className={`px-4 py-3 border-b ${className}`}>{children}</div>;
@@ -36,6 +38,8 @@ export function VoiceNoteViewer({ source, sourceId }: VoiceNoteViewerProps) {
   const [duration, setDuration] = useState(0);
   const audioRef = useRef<HTMLAudioElement>(null);
   const [copied, setCopied] = useState(false);
+  
+  const { pause: pauseGlobalPlayer, currentSourceId: globalSourceId } = usePlayer();
 
   const mediaMeta = source.meta_info?.media;
   const structuredNote = mediaMeta?.structured_note;
@@ -133,6 +137,7 @@ export function VoiceNoteViewer({ source, sourceId }: VoiceNoteViewerProps) {
       if (isPlaying) {
         audioRef.current.pause();
       } else {
+        pauseGlobalPlayer(); // Mute global player to avoid echo
         audioRef.current.play();
       }
     }
@@ -183,6 +188,10 @@ export function VoiceNoteViewer({ source, sourceId }: VoiceNoteViewerProps) {
       <div className="flex-1 flex flex-col gap-4">
         <Card className="border-white/10 shadow-sm bg-black/40">
           <CardContent className="p-4 flex flex-col gap-3">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-xs text-slate-500 font-mono tracking-wider uppercase">Voice Note</span>
+              <AddToPlaylistMenu sourceId={sourceId} />
+            </div>
             <div className="flex items-center gap-4">
               <Button onClick={togglePlay} className="h-10 w-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex-shrink-0">
                 {isPlaying ? <Pause className="h-5 w-5" /> : <Play className="h-5 w-5 ml-0.5" />}

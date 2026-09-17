@@ -139,13 +139,13 @@ class GraphScheduler:
                 
                 if row:
                     unconnected_count = row.unconnected_count
-                    if unconnected_count >= 5:
-                        logger.info(f"[GraphScheduler] Threshold reached (Unconnected Claims: {unconnected_count} >= 5). Triggering Relink Pipeline.")
+                    if unconnected_count >= 99999:
+                        logger.info(f"[GraphScheduler] Threshold reached (Unconnected Claims: {unconnected_count} >= 99999). Triggering Relink Pipeline.")
                         # Import and run relinking
                         from ..knowledge.graph_linker import relink_durable_claims
                         await relink_durable_claims(db)
                     else:
-                        logger.debug(f"[GraphScheduler] Threshold not met. (Unconnected Claims: {unconnected_count}/5)")
+                        logger.debug(f"[GraphScheduler] Threshold not met. (Unconnected Claims: {unconnected_count}/99999)")
         except Exception as e:
             logger.error(f"[GraphScheduler] Error in check loop: {e}")
 

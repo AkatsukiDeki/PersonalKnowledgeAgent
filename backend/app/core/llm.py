@@ -30,12 +30,14 @@ T = TypeVar("T", bound=BaseModel)
 
 
 def _sanitize_model_name(model_name: Optional[str]) -> str:
-    """Автоматически заменяет устаревшие версии моделей Google на актуальные."""
+    """Автоматически валидирует имя модели Google, отдавая приоритет настройкам."""
+    fallback_model = getattr(settings, "GEMINI_MODEL", "gemini-3.6-flash")
     if not model_name or not model_name.strip():
-        return getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+        return fallback_model
     m = model_name.strip().lower()
-    if "1.5" in m or m == "gemini-1.5-flash" or "3.6" in m:
-        return getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+    # Устаревшие ветки 1.5 и 2.5 перенаправляем на актуальный дефолт
+    if "1.5" in m or "2.5" in m or m in {"gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.6-flash"}:
+        return fallback_model
     return model_name.strip()
 
 
@@ -79,7 +81,8 @@ class ModelManager:
         )
 
     async def _call_gemini_structured(self, prompt: str, schema: Type[T],
-                                      system_instruction: Optional[str] = None) -> T:
+                                      system_instruction: Optional[str] = None,
+                                      model: Optional[str] = None) -> T:
         config = types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=schema.model_json_schema(),
@@ -89,7 +92,7 @@ class ModelManager:
             config.system_instruction = system_instruction
 
         response = await self._cloud_client.aio.models.generate_content(
-            model=self.fast_model,
+            model=model or self.fast_model,
             contents=prompt,
             config=config
         )
@@ -98,10 +101,14 @@ class ModelManager:
         return schema.model_validate_json(response.text)
 
     async def generate_structured(self, task_type: TaskType, schema: Type[T], prompt: str,
-                                  system_instruction: Optional[str] = None, allow_cloud_fallback: bool = False) -> \
+                                  system_instruction: Optional[str] = None, allow_cloud_fallback: bool = False,
+                                  target_model: Optional[str] = None) -> \
     Optional[T]:
         backend = (getattr(settings, "LLM_ROUTING_BACKEND", "hybrid") or "hybrid").lower()
         has_gemini_key = self.cloud_available and self._cloud_client is not None
+        
+        model_to_use = _sanitize_model_name(target_model) if target_model and "gemini" in target_model.lower() else self.fast_model
+        ollama_model = target_model if target_model and "gemini" not in target_model.lower() else settings.OLLAMA_EXTRACTION_MODEL
 
         if backend in ("cloud", "hybrid") and has_gemini_key:
             try:
@@ -109,7 +116,8 @@ class ModelManager:
                     return await self._call_gemini_structured(
                         prompt=prompt,
                         schema=schema,
-                        system_instruction=system_instruction
+                        system_instruction=system_instruction,
+                        model=model_to_use
                     )
             except Exception as e:
                 logger.warning(
@@ -119,10 +127,11 @@ class ModelManager:
                     return None
 
         try:
-            return await self._call_ollama_structured(
+            return await self.ollama_client.generate_structured(
+                model=ollama_model,
                 prompt=prompt,
-                schema=schema,
-                system_instruction=system_instruction
+                schema_cls=schema,
+                system=system_instruction
             )
         except Exception as e:
             logger.error(f"[ModelManager] Ollama structured generation failed: {e}")
@@ -133,26 +142,30 @@ class ModelManager:
                         return await self._call_gemini_structured(
                             prompt=prompt,
                             schema=schema,
-                            system_instruction=system_instruction
+                            system_instruction=system_instruction,
+                            model=model_to_use
                         )
                 except Exception as cloud_err:
                     logger.error(f"[ModelManager] Gemini emergency fallback failed: {cloud_err}")
             return None
 
     async def generate_text(self, task_type: TaskType, prompt: str, system_instruction: Optional[str] = None,
-                            allow_cloud_fallback: bool = False) -> str:
+                            allow_cloud_fallback: bool = False, target_model: Optional[str] = None) -> str:
         if task_type != TaskType.ROUTINE_QA:
             raise ValueError(f"Unsupported text task type: {task_type}")
 
         backend = (getattr(settings, "LLM_ROUTING_BACKEND", "hybrid") or "hybrid").lower()
         has_gemini_key = self.cloud_available and self._cloud_client is not None
+        
+        model_to_use = _sanitize_model_name(target_model) if target_model and "gemini" in target_model.lower() else self.fast_model
+        ollama_model = target_model if target_model and "gemini" not in target_model.lower() else settings.OLLAMA_QA_MODEL
 
         async def _call_gemini() -> str:
             config = types.GenerateContentConfig(temperature=0.3)
             if system_instruction:
                 config.system_instruction = system_instruction
             response = await self._cloud_client.aio.models.generate_content(
-                model=self.fast_model,
+                model=model_to_use,
                 contents=prompt,
                 config=config
             )
@@ -170,7 +183,7 @@ class ModelManager:
 
         try:
             return await self.ollama_client.generate(
-                model=settings.OLLAMA_QA_MODEL,
+                model=ollama_model,
                 prompt=prompt,
                 system=system_instruction
             )
@@ -190,17 +203,21 @@ class ModelManager:
             task_type: TaskType,
             prompt: str,
             system_instruction: Optional[str] = None,
-            allow_cloud_fallback: bool = True
+            allow_cloud_fallback: bool = True,
+            target_model: Optional[str] = None
     ):
         backend = (getattr(settings, "LLM_ROUTING_BACKEND", "hybrid") or "hybrid").lower()
         has_gemini_key = self.cloud_available and self._cloud_client is not None
+        
+        model_to_use = _sanitize_model_name(target_model) if target_model and "gemini" in target_model.lower() else self.fast_model
+        ollama_model = target_model if target_model and "gemini" not in target_model.lower() else settings.OLLAMA_QA_MODEL
 
         async def _stream_gemini():
             config = types.GenerateContentConfig(temperature=0.3)
             if system_instruction:
                 config.system_instruction = system_instruction
             response_stream = await self._cloud_client.aio.models.generate_content_stream(
-                model=self.fast_model,
+                model=model_to_use,
                 contents=prompt,
                 config=config
             )
@@ -222,7 +239,7 @@ class ModelManager:
 
         try:
             async for chunk in self.ollama_client.stream_generate(
-                    model=settings.OLLAMA_QA_MODEL,
+                    model=ollama_model,
                     prompt=prompt,
                     system=system_instruction
             ):

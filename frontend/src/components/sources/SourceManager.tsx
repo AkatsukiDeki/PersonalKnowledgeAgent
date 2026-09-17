@@ -4,6 +4,8 @@ import { Source } from '../../types/source';
 import { DocumentEditorModal } from './DocumentEditorModal';
 import { ObsidianImportModal } from '../connectors/ObsidianImportModal';
 import { FolderTree } from './FolderTree';
+import { AddToPlaylistMenu } from './AddToPlaylistMenu';
+import { usePlayer } from '../../context/PlayerContext';
 import {
   X, Database, Trash2, Loader2, RefreshCw, Upload, Search,
   FileText, FileSpreadsheet, FileType, FileCode, FileJson,
@@ -94,6 +96,8 @@ export function SourceManager({ isOpen, onClose }: Props) {
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  
+  const { currentSourceId, activePlaylist, nextTrack, clearPlayer } = usePlayer();
 
   // Folder tree
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
@@ -235,6 +239,10 @@ export function SourceManager({ isOpen, onClose }: Props) {
         next.delete(id);
         return next;
       });
+      if (currentSourceId === id) {
+        if (activePlaylist) nextTrack();
+        else clearPlayer();
+      }
       await loadSources();
     } catch (err: any) {
       alert(`Delete error: ${err.message}`);
@@ -250,6 +258,10 @@ export function SourceManager({ isOpen, onClose }: Props) {
     try {
       for (const id of selectedIds) {
         await sourcesApi.delete(id);
+        if (currentSourceId === id) {
+          if (activePlaylist) nextTrack();
+          else clearPlayer();
+        }
       }
       setSelectedIds(new Set());
       await loadSources();
@@ -532,6 +544,10 @@ export function SourceManager({ isOpen, onClose }: Props) {
                             >
                               <Eye size={14} />
                             </button>
+                            {/* Add to Playlist if media */}
+                            {['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'voice_note', 'audio', 'video'].includes(src.file_type || src.source_type || '') && (
+                              <AddToPlaylistMenu sourceId={src.id} />
+                            )}
                             {/* Move to folder */}
                             <div className="relative">
                               <button

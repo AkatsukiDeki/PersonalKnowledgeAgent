@@ -27,13 +27,11 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
-async def warmup_models():
-    """Прогрев моделей в Ollama и фиксация в RAM."""
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        # 1. Прогрев эмбеддингов (bge-m3)
-        try:
-            logger.info("Warming up Ollama embedding model...")
-            resp_emb = await client.post(
+async def _warmup_ollama_bg():
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            logger.info("Warming up Ollama embedding model in background...")
+            await client.post(
                 f"{settings.OLLAMA_BASE_URL}/api/embeddings",
                 json={
                     "model": settings.OLLAMA_EMBEDDING_MODEL,
@@ -41,38 +39,29 @@ async def warmup_models():
                     "keep_alive": "24h"
                 }
             )
-            resp_emb.raise_for_status()
             logger.info("Ollama embedding model ready.")
-        except Exception as e:
-            logger.warning(f"Failed to warmup embedding model: {e}")
-
-        # 2. Прогрев генеративной QA-модели (qwen2.5:3b)
-        try:
-            logger.info(f"Warming up Ollama QA model ({settings.OLLAMA_QA_MODEL})...")
-            resp_qa = await client.post(
+            
+            logger.info(f"Warming up Ollama QA model ({settings.OLLAMA_QA_MODEL}) in background...")
+            await client.post(
                 f"{settings.OLLAMA_BASE_URL}/api/generate",
                 json={
                     "model": settings.OLLAMA_QA_MODEL,
                     "prompt": "ping",
                     "stream": False,
                     "keep_alive": "24h",
-                    "options": {
-                        "num_predict": 1,
-                        "num_ctx": 2048
-                    }
+                    "options": {"num_predict": 1, "num_ctx": 2048}
                 }
             )
-            resp_qa.raise_for_status()
-            logger.info("Ollama QA model successfully pinned in RAM.")
-        except Exception as e:
-            logger.warning(f"Failed to warmup QA model: {e}")
+            logger.info("Ollama QA model ready.")
+    except Exception as e:
+        logger.warning(f"Background warmup skipped/failed: {e}")
 
 
 async def warmup_loop():
     """Периодический пинг раз в 15 минут для предотвращения выгрузки ОС."""
     while True:
         await asyncio.sleep(900)
-        await warmup_models()
+        await _warmup_ollama_bg()
 
 
 @asynccontextmanager
@@ -81,7 +70,7 @@ async def lifespan(app: FastAPI):
     await init_database()
 
     # Асинхронный прогрев без блокировки старта HTTP-сервера
-    asyncio.create_task(warmup_models())
+    asyncio.create_task(_warmup_ollama_bg())
     warmup_task = asyncio.create_task(warmup_loop())
 
     await scheduler.start()

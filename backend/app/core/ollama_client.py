@@ -237,6 +237,7 @@ class OllamaClient:
             messages: list[ChatMessage],
             model: Optional[str] = None,
             temperature: float = 0.2,
+            tools: Optional[list] = None,
     ):
         target_model = model or self.default_model
 
@@ -246,7 +247,7 @@ class OllamaClient:
         
         for msg in messages:
             role = msg.get("role", "user").lower()
-            if role not in ("system", "user", "assistant"):
+            if role not in ("system", "user", "assistant", "tool"):
                 role = "user"
 
             content = msg.get("content", "")
@@ -255,6 +256,9 @@ class OllamaClient:
                 has_system = True
 
             clean_msg = {"role": role, "content": content}
+
+            if "tool_calls" in msg:
+                clean_msg["tool_calls"] = msg["tool_calls"]
 
             if "images" in msg and isinstance(msg["images"], list):
                 clean_images = []
@@ -280,6 +284,8 @@ class OllamaClient:
             "keep_alive": "24h",
             "options": options
         }
+        if tools:
+            payload["tools"] = tools
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
@@ -289,8 +295,12 @@ class OllamaClient:
                         if line:
                             try:
                                 data = json.loads(line)
-                                if "message" in data and "content" in data["message"]:
-                                    yield data["message"]["content"]
+                                if "message" in data:
+                                    message_data = data["message"]
+                                    if "tool_calls" in message_data and message_data["tool_calls"]:
+                                        yield message_data
+                                    elif "content" in message_data and message_data["content"]:
+                                        yield message_data["content"]
                             except json.JSONDecodeError:
                                 pass
             except Exception as e:

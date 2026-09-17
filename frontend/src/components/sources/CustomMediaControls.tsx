@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Pause, Volume2, VolumeX } from 'lucide-react';
+import { usePlayer } from '../../context/PlayerContext';
 
 interface CustomMediaControlsProps {
   mediaRef: React.RefObject<HTMLMediaElement>;
@@ -10,6 +11,7 @@ export const CustomMediaControls: React.FC<CustomMediaControlsProps> = ({ mediaR
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [muted, setMuted] = useState(false);
+  const { pause: pauseGlobalPlayer } = usePlayer();
 
   useEffect(() => {
     const el = mediaRef.current;
@@ -44,7 +46,10 @@ export const CustomMediaControls: React.FC<CustomMediaControlsProps> = ({ mediaR
   const togglePlay = () => {
     if (mediaRef.current) {
       if (isPlaying) mediaRef.current.pause();
-      else mediaRef.current.play();
+      else {
+        pauseGlobalPlayer();
+        mediaRef.current.play();
+      }
     }
   };
 

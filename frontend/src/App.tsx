@@ -5,6 +5,8 @@ import { MemoryOrbit } from './components/layout/MemoryOrbit';
 import { ChatWorkspace } from './components/chat/ChatWorkspace';
 import { OrbitContext } from './types/chat';
 import { SearchResult } from './api/search';
+import { PlayerProvider } from './context/PlayerContext';
+import { GlobalAudioPlayer } from './components/layout/GlobalAudioPlayer';
 
 import { CommandPaletteModal } from './components/common/CommandPaletteModal';
 import { CommandItem } from './commands/types';
@@ -22,6 +24,8 @@ const ConflictResolutionCenter = React.lazy(() => import('./components/conflicts
 const InsightsWorkspace = React.lazy(() => import('./pages/InsightsWorkspace').then(m => ({ default: m.InsightsWorkspace })));
 const TranscriptsWorkspace = React.lazy(() => import('./pages/TranscriptsWorkspace').then(m => ({ default: m.TranscriptsWorkspace })));
 const TimelineWorkspace = React.lazy(() => import('./pages/TimelineWorkspace').then(m => ({ default: m.TimelineWorkspace })));
+const PlaylistsWorkspace = React.lazy(() => import('./pages/PlaylistsWorkspace').then(m => ({ default: m.PlaylistsWorkspace })));
+const KineticsWorkspace = React.lazy(() => import('./pages/KineticsWorkspace').then(m => ({ default: m.KineticsWorkspace })));
 const UniverseCanvas = React.lazy(() => import('./components/universe/UniverseCanvas').then(m => ({ default: m.UniverseCanvas })));
 const LearningStudio = React.lazy(() => import('./components/learning/LearningStudio').then(m => ({ default: m.LearningStudio })));
 const SemanticSearchModal = React.lazy(() => import('./components/search/SemanticSearchModal').then(m => ({ default: m.SemanticSearchModal })));
@@ -96,7 +100,7 @@ export function App() {
       }
       if (e.key === 'Escape') {
         setActiveView(prev => {
-          if (['transcripts', 'insights', 'conflicts', 'timeline', 'learning'].includes(prev)) {
+          if (['transcripts', 'insights', 'conflicts', 'timeline', 'learning', 'playlists'].includes(prev)) {
             return 'chat';
           }
           return prev;
@@ -156,6 +160,7 @@ export function App() {
   const showOrbit = activeView === 'chat' && orbitOpen;
 
   return (
+    <PlayerProvider>
     <main className="h-[100dvh] w-screen bg-[#030303] text-slate-200 font-sans flex flex-col overflow-hidden relative isolate">
 
       {/* 2. Тот самый космический градиент на фоне всего приложения */}
@@ -256,7 +261,7 @@ export function App() {
             )}
 
             {/* Modals Layer: Workspaces rendered as Modals over Chat */}
-            {['conflicts', 'insights', 'transcripts', 'timeline', 'learning'].includes(activeView) && (
+            {['conflicts', 'insights', 'transcripts', 'timeline', 'learning', 'playlists', 'kinetics'].includes(activeView) && (
               <Suspense fallback={<FallbackLoader />}>
               <div 
                 className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 bg-black/60 backdrop-blur-md animate-fadeIn"
@@ -277,9 +282,11 @@ export function App() {
                     {activeView === 'insights' && <InsightsWorkspace />}
                     {activeView === 'transcripts' && <TranscriptsWorkspace />}
                     {activeView === 'timeline' && <TimelineWorkspace />}
+                    {activeView === 'playlists' && <PlaylistsWorkspace />}
                     {activeView === 'learning' && (
                       <LearningStudio />
                     )}
+                    {activeView === 'kinetics' && <KineticsWorkspace />}
                   </div>
                 </div>
               </div>
@@ -414,7 +421,10 @@ export function App() {
       {/* Глобальный инспектор сущностей */}
       <EntityInspector />
       </Suspense>
+
+      <GlobalAudioPlayer />
     </main>
+    </PlayerProvider>
   );
 }
 
