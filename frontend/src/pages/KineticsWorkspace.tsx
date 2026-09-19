@@ -101,14 +101,7 @@ export const KineticsWorkspace: React.FC<KineticsWorkspaceProps> = ({ onClose })
 
   const handleApplySwap = async (exerciseId: string, alt: any) => {
     try {
-      const updated = await kineticsApi.swapExercise(exerciseId, {
-        exercise_name: alt.exercise_name,
-        exercise_type: alt.exercise_type,
-        sets: alt.sets,
-        reps_or_duration: alt.reps_or_duration,
-        rpe_target: alt.rpe_target,
-        target_muscle_groups: alt.target_muscle_groups
-      });
+      const updated = await kineticsApi.swapExercise(exerciseId, alt.exercise_name, 'alternative');
 
       if (currentPlan) {
         setCurrentPlan({
@@ -368,7 +361,13 @@ export const KineticsWorkspace: React.FC<KineticsWorkspaceProps> = ({ onClose })
                         if (!currentPlan) return;
                         const name = prompt('Название нового упражнения:');
                         if (name) {
-                          const added = await kineticsApi.addExercise(currentPlan.id, name);
+                          const added = await kineticsApi.addExercise(currentPlan.id, {
+                            exercise_name: name,
+                            sets: 3,
+                            reps_or_duration: '10-12',
+                            rpe_target: 7,
+                            target_muscle_groups: []
+                          });
                           setCurrentPlan({
                             ...currentPlan,
                             exercises: [...currentPlan.exercises, added]

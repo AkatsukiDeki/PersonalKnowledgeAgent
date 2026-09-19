@@ -282,20 +282,13 @@ export const kineticsApi = {
     await fetch(`${API_BASE}/exercises/${id}`, { method: 'DELETE' });
   },
 
-  addExercise: async (planId: string, name: string): Promise<WorkoutExercise> => {
-    const res = await fetch(`${API_BASE}/exercises`, {
+  addExercise: async (planId: string, data: { exercise_name: string; sets: number; reps_or_duration: string; rpe_target: number; target_muscle_groups: string[] }): Promise<WorkoutExercise> => {
+    const res = await fetch(`${API_BASE}/workouts/${planId}/exercises`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        plan_id: planId,
-        exercise_name: name,
-        exercise_type: 'hypertrophy',
-        sets: 3,
-        reps_or_duration: '10-12',
-        rpe_target: 7,
-        target_muscle_groups: ['дополнительно']
-      })
+      body: JSON.stringify(data)
     });
+    if (!res.ok) throw new Error('Ошибка добавления упражнения');
     return res.json();
   },
 
@@ -333,19 +326,13 @@ export const kineticsApi = {
 
   swapExercise: async (
     exerciseId: string,
-    payload: {
-      exercise_name: string;
-      exercise_type: string;
-      sets: number;
-      reps_or_duration: string;
-      rpe_target: number;
-      target_muscle_groups: string[];
-    }
+    newExerciseName: string,
+    reason?: string
   ): Promise<WorkoutExercise> => {
     const res = await fetch(`/api/v1/kinetics/exercises/${exerciseId}/swap`, {
-      method: 'PATCH',
+      method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
+      body: JSON.stringify({ new_exercise_name: newExerciseName, reason })
     });
     if (!res.ok) throw new Error('Ошибка замены упражнения');
     return res.json();
@@ -506,6 +493,8 @@ export const kineticsApi = {
   
   deleteWorkoutSet: async (setId: string): Promise<void> => {
     await fetch(`${API_BASE}/workout-sets/${setId}`, { method: 'DELETE' });
-  }
+  },
 };
+
+
 

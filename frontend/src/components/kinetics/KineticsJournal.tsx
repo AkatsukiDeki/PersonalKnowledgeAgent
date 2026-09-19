@@ -1,40 +1,67 @@
-import React, { useState } from 'react';
-import { BookOpen, Bookmark, Link2, Plus, CheckCircle, Brain, Calendar } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { BookOpen, Bookmark, Link2, Plus, Brain, Calendar, Trash2 } from 'lucide-react';
 
 export const KineticsJournal: React.FC = () => {
   const [activeSubTab, setActiveSubTab] = useState<'debrief' | 'research'>('debrief');
+  const [isSaving, setIsSaving] = useState(false);
 
-  // Локальные логи дня
-  const [logs, setLogs] = useState([
-    {
-      id: '1',
-      date: '17.09.2026',
-      rpe: 7,
-      energy: 8,
-      notes: 'Степпер в пульсовой зоне 2 зашел отлично, колени спокойны. На калистенике уменьшил паузы между сетами до 45 сек.',
-      lessons: 'Изометрия шеи на предплечьях дает лучший контроль, чем динамические сгибания.'
-    }
-  ]);
+  // Логи дня — загружаются из бэкенда
+  const [logs, setLogs] = useState<{
+    id: string;
+    date: string;
+    rpe: number;
+    energy: number;
+    notes: string;
+    lessons: string;
+  }[]>([]);
 
-  // База исследований
-  const [researches, setResearches] = useState([
-    {
-      id: '1',
-      title: 'Влияние темпа эксцентрической фазы на гипертрофию при дефиците калорий',
-      source: 'Schoenfeld et al., 2023 (Sports Med)',
-      url: 'https://pubmed.ncbi.nlm.nih.gov',
-      takeaway: 'Пауза 2-3 секунды в точке максимального растяжения дает аналогичный механический стимул при снижении рабочего веса на 20%, защищая суставы.',
-      tags: ['Гипертрофия', 'RPE', 'Декомпрессия']
-    },
-    {
-      id: '2',
-      title: 'Сравнение осевой нагрузки: Приседания со штангой vs Жим ногами под углом 45°',
-      source: 'Journal of Strength and Conditioning Research',
-      url: 'https://pubmed.ncbi.nlm.nih.gov',
-      takeaway: 'Жим ногами с высокой постановкой стоп активирует ягодицы и квадрицепс на 92% от приседа, снижая пиковое давление на L5-S1 в 3.8 раза.',
-      tags: ['Биомеханика', 'Позвоночник']
-    }
-  ]);
+  // Загрузка из бэкенда при монтировании
+  useEffect(() => {
+    fetch('/api/v1/kinetics/journal/logs', { credentials: 'include' })
+      .then(res => (res.ok ? res.json() : []))
+      .then((data: any[]) => {
+        if (Array.isArray(data) && data.length > 0) {
+          setLogs(data.map(item => ({
+            id: String(item.id),
+            date: new Date(item.log_date || item.created_at).toLocaleDateString('ru-RU'),
+            rpe: item.rpe_overall ?? 7,
+            energy: item.energy_level ?? 8,
+            notes: item.notes || '',
+            lessons: item.lessons_learned || ''
+          })));
+        }
+      })
+      .catch(err => console.error('Ошибка загрузки логов дневника:', err));
+  }, []);
+
+  // База исследований — загружаются из бэкенда
+  const [researches, setResearches] = useState<{
+    id: string;
+    title: string;
+    source: string;
+    url: string;
+    takeaway: string;
+    tags: string[];
+  }[]>([]);
+
+  // Загрузка исследований из бэкенда при монтировании
+  useEffect(() => {
+    fetch('/api/v1/kinetics/journal/researches', { credentials: 'include' })
+      .then(res => (res.ok ? res.json() : []))
+      .then((data: any[]) => {
+        if (Array.isArray(data)) {
+          setResearches(data.map(r => ({
+            id: String(r.id),
+            title: r.title || 'Без названия',
+            source: r.source_url || 'PubMed',
+            url: r.source_url || '',
+            takeaway: r.key_takeaways || '',
+            tags: Array.isArray(r.tags) ? r.tags : ['Исследование']
+          })));
+        }
+      })
+      .catch(err => console.error('Ошибка загрузки исследований:', err));
+  }, []);
 
   // Стейты форм
   const [newLogNotes, setNewLogNotes] = useState('');
@@ -42,6 +69,74 @@ export const KineticsJournal: React.FC = () => {
   const [newResTitle, setNewResTitle] = useState('');
   const [newResSource, setNewResSource] = useState('');
   const [newResTakeaway, setNewResTakeaway] = useState('');
+
+  const handleSaveLog = async () => {
+    if (!newLogNotes.trim()) return;
+    setIsSaving(true);
+    const payload = {
+      rpe_overall: 7,
+      energy_level: 8,
+      notes: newLogNotes,
+      lessons_learned: newLogLessons
+    };
+    try {
+      const res = await fetch('/api/v1/kinetics/journal/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(payload)
+      });
+      if (res.ok) {
+        const saved = await res.json();
+        const newEntry = {
+          id: String(saved.id || Date.now()),
+          date: new Date(saved.log_date || saved.created_at || Date.now()).toLocaleDateString('ru-RU'),
+          rpe: saved.rpe_overall ?? 7,
+          energy: saved.energy_level ?? 8,
+          notes: saved.notes || newLogNotes,
+          lessons: saved.lessons_learned || newLogLessons
+        };
+        setLogs(prev => [newEntry, ...prev]);
+      } else {
+        // Фолбэк: добавить локально с реальной датой
+        setLogs(prev => [{
+          id: Date.now().toString(),
+          date: new Date().toLocaleDateString('ru-RU'),
+          rpe: 7,
+          energy: 8,
+          notes: newLogNotes,
+          lessons: newLogLessons
+        }, ...prev]);
+      }
+    } catch {
+      setLogs(prev => [{
+        id: Date.now().toString(),
+        date: new Date().toLocaleDateString('ru-RU'),
+        rpe: 7,
+        energy: 8,
+        notes: newLogNotes,
+        lessons: newLogLessons
+      }, ...prev]);
+    } finally {
+      setNewLogNotes('');
+      setNewLogLessons('');
+      setIsSaving(false);
+    }
+  };
+
+  const handleDeleteResearch = async (id: string) => {
+    try {
+      const res = await fetch(`/api/v1/kinetics/journal/researches/${id}`, {
+        method: 'DELETE',
+        credentials: 'include'
+      });
+      if (res.ok) {
+        setResearches(prev => prev.filter(r => r.id !== id));
+      }
+    } catch (err) {
+      console.error('Ошибка удаления исследования:', err);
+    }
+  };
 
   return (
     <div className="h-full w-full bg-[#030712] border border-cyan-950/80 rounded-xl p-5 flex flex-col gap-4 font-mono text-slate-200 overflow-y-auto custom-scrollbar">
@@ -109,25 +204,11 @@ export const KineticsJournal: React.FC = () => {
             </div>
 
             <button
-              onClick={() => {
-                if (!newLogNotes.trim()) return;
-                setLogs([
-                  {
-                    id: Date.now().toString(),
-                    date: '17.09.2026',
-                    rpe: 7,
-                    energy: 8,
-                    notes: newLogNotes,
-                    lessons: newLogLessons
-                  },
-                  ...logs
-                ]);
-                setNewLogNotes('');
-                setNewLogLessons('');
-              }}
-              className="mt-auto py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded text-xs font-bold transition-all shadow-[0_0_12px_rgba(6,182,212,0.2)]"
+              onClick={handleSaveLog}
+              disabled={isSaving}
+              className="mt-auto py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded text-xs font-bold transition-all shadow-[0_0_12px_rgba(6,182,212,0.2)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              Зафиксировать в журнал
+              {isSaving ? 'Сохранение...' : 'Зафиксировать в журнал'}
             </button>
           </div>
 
@@ -256,13 +337,22 @@ export const KineticsJournal: React.FC = () => {
             {researches.map((res) => (
               <div key={res.id} className="bg-[#090d16] border border-slate-800 rounded-xl p-4 flex flex-col gap-2">
                 <div className="flex justify-between items-start">
-                  <div className="text-xs font-bold text-slate-100">{res.title}</div>
-                  <div className="flex gap-1.5">
-                    {res.tags.map((t, idx) => (
-                      <span key={idx} className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                        {t}
-                      </span>
-                    ))}
+                  <div className="text-xs font-bold text-slate-100 flex-1 pr-2">{res.title}</div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <div className="flex gap-1.5 flex-wrap">
+                      {res.tags.map((t, idx) => (
+                        <span key={idx} className="text-[9px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => handleDeleteResearch(res.id)}
+                      className="p-1 hover:bg-rose-500/20 text-slate-600 hover:text-rose-400 rounded transition-colors"
+                      title="Удалить исследование"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
 

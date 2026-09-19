@@ -984,6 +984,24 @@ async def get_researches(
     return (await db.execute(stmt)).scalars().all()
 
 
+@router.delete("/journal/researches/{research_id}")
+async def delete_research(
+        research_id: UUID,
+        db: AsyncSession = Depends(get_db),
+        user: UserProfile = Depends(get_current_user)
+):
+    stmt = select(TrainingResearch).where(
+        TrainingResearch.id == research_id,
+        TrainingResearch.user_id == user.id
+    )
+    research = (await db.execute(stmt)).scalar_one_or_none()
+    if not research:
+        raise HTTPException(status_code=404, detail="Исследование не найдено")
+    await db.delete(research)
+    await db.commit()
+    return {"status": "ok"}
+
+
 @router.get("/analytics/correlation")
 async def get_analytics_correlation(
         weeks: int = 8,
@@ -1477,30 +1495,27 @@ async def get_overload_analytics(
 ):
     from collections import defaultdict
     import datetime
+    import re as _re
 
     # Get latest user weight
     stmt_bw = select(kinetics_models.BiometricsLog).where(kinetics_models.BiometricsLog.user_id == current_user.id).order_by(kinetics_models.BiometricsLog.timestamp.desc()).limit(1)
     res_bw = await db.execute(stmt_bw)
     bw_log = res_bw.scalar_one_or_none()
-    user_bw = bw_log.weight_kg if bw_log and bw_log.weight_kg else 80.0 # fallback
+    user_bw = bw_log.weight_kg if bw_log and bw_log.weight_kg else 80.0  # fallback
 
-    # Get all plans and sets
+    # Get ALL plans (not just 'completed') — count any actually-performed sets
     stmt = select(WorkoutPlan).where(
-        WorkoutPlan.user_id == current_user.id,
-        WorkoutPlan.status == 'completed'
+        WorkoutPlan.user_id == current_user.id
     ).options(
         selectinload(WorkoutPlan.exercises).selectinload(WorkoutExercise.workout_sets)
     ).order_by(WorkoutPlan.created_at.asc())
-    
+
     res = await db.execute(stmt)
     plans = res.scalars().all()
 
-    # 1RM Calculation
-    # Dictionary: { "exercise_name": { "date_str": max_1rm } }
+    # 1RM Calculation: { "exercise_name": { "date_str": max_1rm } }
     one_rm_raw = defaultdict(lambda: defaultdict(float))
-    
-    # Tonnage calculation
-    # Dictionary: { "week_start": { "muscle_group": tonnage } }
+    # Tonnage:        { "week_start":     { "muscle_group": tonnage } }
     tonnage_raw = defaultdict(lambda: defaultdict(float))
 
     for plan in plans:
@@ -1508,37 +1523,52 @@ async def get_overload_analytics(
             continue
         dt = plan.created_at
         date_str = dt.date().isoformat()
-        # ISO calendar week start
         week_start = (dt - datetime.timedelta(days=dt.weekday())).strftime("%Y-%m-%d")
 
         for ex in plan.exercises:
             ex_name_clean = ex.exercise_name.strip()
-            
             day_max_1rm = 0.0
             day_tonnage = 0.0
 
-            for s in ex.workout_sets:
-                if not s.is_completed:
-                    continue
-                
-                # Tonnage
-                if s.set_type.name in ['NORMAL', 'DROP', 'FAILURE', 'N', 'D', 'F']:
-                    day_tonnage += (s.weight_kg if s.weight_kg > 0 else user_bw) * s.reps
+            if ex.workout_sets:
+                # Path 1: detailed sets exist
+                for s in ex.workout_sets:
+                    if not s.is_completed:
+                        continue
 
-                # 1RM Epley formula (only reps 1-12)
-                if s.set_type.name in ['NORMAL', 'DROP', 'FAILURE', 'N', 'D', 'F']:
-                    if 1 <= s.reps <= 12:
-                        w = s.weight_kg if s.weight_kg > 0 else user_bw
-                        rm = w * (1.0 + s.reps / 30.0)
+                    st_name = getattr(s.set_type, 'name', str(s.set_type)) if s.set_type else 'NORMAL'
+                    if st_name not in ['NORMAL', 'DROP', 'DROPSET', 'FAILURE', 'N', 'D', 'F']:
+                        continue
+
+                    reps = s.reps or 0
+                    w = (s.weight_kg if (s.weight_kg and s.weight_kg > 0) else user_bw)
+                    if reps > 0:
+                        day_tonnage += w * reps
+                    if 1 <= reps <= 12:
+                        rm = w * (1.0 + reps / 30.0)
                         if rm > day_max_1rm:
                             day_max_1rm = rm
-            
-            if day_max_1rm > 0:
-                if day_max_1rm > one_rm_raw[ex_name_clean][date_str]:
-                    one_rm_raw[ex_name_clean][date_str] = day_max_1rm
-            
+            else:
+                # Path 2: no detailed sets — fallback to exercise-level is_completed
+                is_done = getattr(ex, 'is_completed', False)
+                if is_done:
+                    reps_match = _re.search(r'\d+', ex.reps_or_duration or '10')
+                    reps = int(reps_match.group(0)) if reps_match else 10
+                    sets_count = ex.sets or 3
+                    w = user_bw
+                    day_tonnage += w * reps * sets_count
+                    if 1 <= reps <= 12:
+                        day_max_1rm = w * (1.0 + reps / 30.0)
+
+            if day_max_1rm > 0 and day_max_1rm > one_rm_raw[ex_name_clean][date_str]:
+                one_rm_raw[ex_name_clean][date_str] = day_max_1rm
+
             if day_tonnage > 0:
-                m_group = ex.target_muscle_groups[0] if ex.target_muscle_groups else plan.target_split or 'General'
+                m_group = (
+                    ex.target_muscle_groups[0]
+                    if (ex.target_muscle_groups and len(ex.target_muscle_groups) > 0)
+                    else (plan.target_split or 'General')
+                )
                 tonnage_raw[week_start][m_group] += day_tonnage
 
     # Top 5 exercises by frequency

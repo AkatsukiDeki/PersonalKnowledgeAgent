@@ -65,8 +65,8 @@ export const OverloadCharts: React.FC = () => {
         </div>
 
         {rmHistory.length > 1 ? (
-          <div className="relative w-full h-48">
-            <svg viewBox="0 0 400 150" className="w-full h-full overflow-visible" preserveAspectRatio="none">
+          <div className="relative w-full h-44 px-2">
+            <svg viewBox="0 0 400 120" className="w-full h-full overflow-visible">
               <defs>
                 <linearGradient id="lineGrad" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="#06b6d4" stopOpacity="0.5" />
@@ -80,52 +80,54 @@ export const OverloadCharts: React.FC = () => {
                   </feMerge>
                 </filter>
               </defs>
-              
-              {/* Grid */}
-              <line x1="0" y1="25" x2="400" y2="25" stroke="#1e293b" strokeWidth="1" strokeDasharray="4 4" />
-              <line x1="0" y1="75" x2="400" y2="75" stroke="#1e293b" strokeWidth="1" strokeDasharray="4 4" />
-              <line x1="0" y1="125" x2="400" y2="125" stroke="#1e293b" strokeWidth="1" strokeDasharray="4 4" />
 
-              {/* Data path */}
+              {/* Сетка */}
+              <line x1="10" y1="10" x2="390" y2="10" stroke="#1e293b" strokeWidth="1" strokeDasharray="4 4" />
+              <line x1="10" y1="45" x2="390" y2="45" stroke="#1e293b" strokeWidth="1" strokeDasharray="4 4" />
+              <line x1="10" y1="80" x2="390" y2="80" stroke="#1e293b" strokeWidth="1" strokeDasharray="4 4" />
+
+              {/* Траектория 1RM */}
               <path
                 d={`M ${rmHistory.map((h, i) => {
-                  const x = (i / (rmHistory.length - 1)) * 400;
-                  const y = 150 - ((h.one_rm_kg - minRm) / (maxRm - minRm)) * 150;
+                  const x = 20 + (i / (rmHistory.length - 1)) * 360;
+                  const range = maxRm - minRm || 1;
+                  const y = 85 - ((h.one_rm_kg - minRm) / range) * 72;
                   return `${x},${y}`;
                 }).join(' L ')}`}
                 fill="none"
                 stroke="#06b6d4"
-                strokeWidth="3"
+                strokeWidth="2.5"
                 filter="url(#glow)"
               />
 
-              {/* Points & Labels */}
+              {/* Точки и подписи */}
               {rmHistory.map((h, i) => {
-                const x = (i / (rmHistory.length - 1)) * 400;
-                const y = 150 - ((h.one_rm_kg - minRm) / (maxRm - minRm)) * 150;
+                const x = 20 + (i / (rmHistory.length - 1)) * 360;
+                const range = maxRm - minRm || 1;
+                const y = 85 - ((h.one_rm_kg - minRm) / range) * 72;
                 return (
                   <g key={i}>
                     <circle cx={x} cy={y} r="4" fill="#030712" stroke="#06b6d4" strokeWidth="2" />
-                    <text x={x} y={y - 10} fill="#cbd5e1" fontSize="10" textAnchor="middle" fontWeight="bold">
+                    <text x={x} y={y - 8} fill="#38bdf8" fontSize="10" textAnchor="middle" fontWeight="bold">
                       {h.one_rm_kg.toFixed(1)}
                     </text>
-                    {/* Date label on X axis for first and last, or selectively */}
-                    {(i === 0 || i === rmHistory.length - 1) && (
-                      <text x={x} y={165} fill="#64748b" fontSize="9" textAnchor={i === 0 ? "start" : "end"}>
-                        {new Date(h.date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
-                      </text>
-                    )}
+                    <text x={x} y={110} fill="#64748b" fontSize="9" textAnchor="middle">
+                      {new Date(h.date).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
+                    </text>
                   </g>
                 );
               })}
             </svg>
           </div>
         ) : (
-          <div className="text-slate-500 text-xs italic">Недостаточно данных для графика (нужно хотя бы 2 тренировки)</div>
+          <div className="text-slate-500 text-xs italic py-6 text-center">
+            Недостаточно данных для графика (нужно хотя бы 2 тренировки)
+          </div>
         )}
       </div>
 
       {/* Weekly Tonnage Bar Chart */}
+
       <div className="bg-[#030712] border border-slate-800 rounded-xl p-4 shadow-xl">
         <div className="flex items-center gap-2 mb-6">
           <BarChart3 className="w-5 h-5 text-indigo-400" />
