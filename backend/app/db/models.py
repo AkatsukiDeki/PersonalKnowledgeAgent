@@ -1,5 +1,6 @@
 import uuid
 import enum
+import sqlalchemy
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 from pgvector.sqlalchemy import Vector
@@ -794,6 +795,7 @@ class WorkoutExercise(Base, TimestampedUUIDMixin):
     reps_or_duration = Column(String(100), default='10-12', nullable=True)
     rpe = Column(Integer, nullable=True)
     rpe_target = Column(Integer, nullable=True)
+    workout_sets = relationship("WorkoutSet", back_populates="exercise", cascade="all, delete-orphan", lazy="selectin")
     target_muscle_groups = Column(ARRAY(Text), default=list, nullable=True)
     is_completed = Column(Boolean, default=False, nullable=True)
     order_index = Column(Integer, default=0, nullable=True)
@@ -846,8 +848,26 @@ class TrainingResearch(Base, TimestampedUUIDMixin):
     __tablename__ = 'training_researches'
 
     user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
-    title = Column(String(500), nullable=False)
     source_url = Column(String(1000), nullable=True)
+
+class KineticsChatLog(Base, TimestampedUUIDMixin):
+    __tablename__ = 'kinetics_chat_logs'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
+    module = Column(String(50), nullable=False) # 'coach' or 'nutrition'
+    role = Column(String(50), nullable=False) # 'user' or 'assistant'
+    message = Column(Text, nullable=False)
+    log_date = Column(Date, default=func.current_date(), index=True)
+
+class KineticsInsight(Base, TimestampedUUIDMixin):
+    __tablename__ = 'kinetics_insights'
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=False)
+    period_start = Column(Date, nullable=False)
+    period_end = Column(Date, nullable=False)
+    insight_text = Column(Text, nullable=False)
+    module = Column(String(50), nullable=False)
+
     pmid = Column(String(50), nullable=True, index=True)
     abstract = Column(Text, nullable=True)
     key_takeaways = Column(Text, nullable=False)
@@ -864,4 +884,57 @@ class TrainingResearch(Base, TimestampedUUIDMixin):
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"}
         ),
+    )
+
+
+class KineticsNutritionMeal(Base):
+    __tablename__ = "kinetics_nutrition_meals"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False)
+    meal_date = Column(Date, nullable=False)  # YYYY-MM-DD
+    time_str = Column(String(10), default="12:00")
+    name = Column(String(255), nullable=False)
+    weight_g = Column(Float, default=200.0)
+    calories = Column(Float, nullable=False)
+    protein = Column(Float, default=0.0)
+    fat = Column(Float, default=0.0)
+    carbs = Column(Float, default=0.0)
+    ingredients = Column(JSONB, default=list)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_nutrition_user_date", "user_id", "meal_date"),
+    )
+
+import enum
+class SetType(str, enum.Enum):
+    WARMUP = "W"
+    NORMAL = "N"
+    DROPSET = "D"
+    FAILURE = "F"
+
+class WorkoutSet(Base):
+    __tablename__ = "kinetics_workout_sets"
+
+    id = Column(PG_UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    exercise_id = Column(
+        PG_UUID(as_uuid=True), 
+        ForeignKey("workout_exercises.id", ondelete="CASCADE"), 
+        nullable=False, 
+        index=True
+    )
+    set_number = Column(Integer, nullable=False)
+    set_type = Column(sqlalchemy.Enum(SetType), default=SetType.NORMAL)
+    weight_kg = Column(Float, default=0.0)
+    reps = Column(Integer, default=0)
+    rpe = Column(Float, nullable=True)
+    is_completed = Column(Boolean, default=False)
+    previous_weight_kg = Column(Float, nullable=True)
+    previous_reps = Column(Integer, nullable=True)
+
+    exercise = relationship("WorkoutExercise", back_populates="workout_sets")
+
+    __table_args__ = (
+        Index("ix_sets_exercise_order", "exercise_id", "set_number"),
     )

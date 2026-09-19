@@ -1,5 +1,30 @@
 const API_BASE = '/api/v1/kinetics';
 
+
+export interface NutritionMeal {
+  id: string;
+  user_id: string;
+  meal_date: string;
+  time_str: string;
+  name: string;
+  weight_g: number;
+  calories: number;
+  protein: number;
+  fat: number;
+  carbs: number;
+  ingredients: any[];
+  created_at: string;
+}
+
+export interface DailyNutritionSummary {
+  date: string;
+  total_calories: number;
+  total_protein: number;
+  total_fat: number;
+  total_carbs: number;
+  meals: NutritionMeal[];
+}
+
 export interface SegmentData {
   muscle_kg: number;
   muscle_pct: number;
@@ -7,6 +32,28 @@ export interface SegmentData {
   fat_pct: number;
 }
 
+export interface BiometricsCreate {
+  weight_kg?: number;
+  sleep_hours?: number;
+  fatigue_score?: number;
+  notes?: string;
+}
+export interface RecoveryDataPoint {
+  date: string;
+  tonnage_kg: number;
+  calories: number;
+  protein_g: number;
+  sleep_hours: number;
+  fatigue_score: number;
+  recovery_score: number;
+}
+export interface RecoveryAnalyticsResponse {
+  timeline: RecoveryDataPoint[];
+  average_sleep: number;
+  average_calories: number;
+  total_tonnage: number;
+  current_recovery_score: number;
+}
 export interface BiometricsLog {
   id: string;
   weight?: number;
@@ -36,6 +83,7 @@ export interface BiometricsLog {
 export interface ScannedMealData {
   name: string;
   portion_weight_g: number;
+  weight_g?: number;
   calories: number;
   protein: number;
   fat: number;
@@ -48,6 +96,15 @@ export interface WorkoutGenerateParams {
   location: 'Дом' | 'Зал';
   split_day: string;
   target_split?: string;
+}
+
+export interface WorkoutPlanSettingsPayload {
+  plan_id?: string;
+  location?: string;
+  target_split?: string;
+  split_day?: string;
+  restrictions?: string;
+  goals?: string;
 }
 
 export interface AthleteProfileData {
@@ -75,6 +132,37 @@ export interface AthleteProfileData {
   mobility_bend: number;
 }
 
+
+export interface OneRMDataPoint {
+  date: string;
+  one_rm_kg: number;
+}
+export interface ExerciseOneRM {
+  exercise_name: string;
+  history: OneRMDataPoint[];
+}
+export interface TonnageDataPoint {
+  week_start: string;
+  muscle_group: string;
+  tonnage_kg: number;
+}
+export interface OverloadAnalyticsResponse {
+  one_rm_top_exercises: ExerciseOneRM[];
+  weekly_tonnage: TonnageDataPoint[];
+}
+export interface WorkoutSet {
+  id: string;
+  exercise_id: string;
+  set_number: number;
+  set_type: 'W' | 'N' | 'D' | 'F';
+  weight_kg: number;
+  reps: number;
+  rpe?: number;
+  is_completed: boolean;
+  previous_weight_kg?: number;
+  previous_reps?: number;
+}
+
 export interface WorkoutExercise {
   id: string;
   exercise_name: string;
@@ -85,15 +173,28 @@ export interface WorkoutExercise {
   rpe_target: number;
   is_completed: boolean;
   order_index: number;
+  workout_sets?: WorkoutSet[];
+}
+
+export interface MesocycleSettingsPayload {
+  start_date: string; // YYYY-MM-DD
+  days_of_week: number[];
+  target_split: string;
+  location: string;
+  include_deload: boolean;
+  weeks_count: number;
 }
 
 export interface WorkoutPlan {
   id: string;
   target_split: string;
+  split_type?: string;
+  location?: string;
   ai_rationale: string;
   status: 'planned' | 'in_progress' | 'completed';
   exercises: WorkoutExercise[];
   created_at: string;
+  scheduled_date?: string;
 }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
@@ -250,6 +351,38 @@ export const kineticsApi = {
     return res.json();
   },
 
+  getChatHistory: async (module: 'coach' | 'nutrition'): Promise<any[]> => {
+    const res = await fetch(`/api/v1/kinetics/chat/${module}`);
+    if (!res.ok) throw new Error('Ошибка загрузки истории чата');
+    return res.json();
+  },
+
+  summarizeChat: async (module: 'coach' | 'nutrition'): Promise<any> => {
+    const res = await fetch(`/api/v1/kinetics/chat/${module}/summarize`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Ошибка суммаризации чата');
+    return res.json();
+  },
+
+  
+  getDailyNutrition: async (date: string): Promise<DailyNutritionSummary> => {
+    return request<DailyNutritionSummary>(`${API_BASE}/nutrition/daily?date=${date}`);
+  },
+
+  addNutritionMeal: async (payload: Omit<NutritionMeal, 'id' | 'user_id' | 'created_at'>): Promise<NutritionMeal> => {
+    return request<NutritionMeal>(`${API_BASE}/nutrition/meals`, {
+      method: 'POST',
+      body: JSON.stringify(payload)
+    });
+  },
+
+  deleteNutritionMeal: async (mealId: string): Promise<void> => {
+    return request<void>(`${API_BASE}/nutrition/meals/${mealId}`, {
+      method: 'DELETE'
+    });
+  },
+
   scanMealPhoto: async (file: File): Promise<ScannedMealData> => {
     const formData = new FormData();
     formData.append('file', file);
@@ -271,15 +404,37 @@ export const kineticsApi = {
     return res.json();
   },
 
+
+
   getAnalyticsCorrelation: async (weeks: number = 8): Promise<any[]> => {
     const res = await fetch(`${API_BASE}/analytics/correlation?weeks=${weeks}`);
     if (!res.ok) throw new Error('Ошибка загрузки корреляционной аналитики');
     return res.json();
   },
 
-  getCalendarMonth: async (): Promise<any[]> => {
+  getCalendarMonth: async (): Promise<WorkoutPlan[]> => {
     const res = await fetch(`${API_BASE}/calendar/month`);
     if (!res.ok) throw new Error('Ошибка загрузки календаря');
+    return res.json();
+  },
+
+  updateWorkoutPlanSettings: async (payload: WorkoutPlanSettingsPayload): Promise<WorkoutPlan> => {
+    const res = await fetch(`${API_BASE}/workouts/plan`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('Ошибка обновления настроек плана');
+    return res.json();
+  },
+
+  completeWorkout: async (planId: string): Promise<WorkoutPlan> => {
+    const res = await fetch(`${API_BASE}/workouts/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ plan_id: planId })
+    });
+    if (!res.ok) throw new Error('Ошибка завершения тренировки');
     return res.json();
   },
 
@@ -291,6 +446,66 @@ export const kineticsApi = {
     });
     if (!res.ok) throw new Error('Ошибка перепланирования календаря');
     return res.json();
+  },
+
+  generateMesocycle: async (payload: MesocycleSettingsPayload): Promise<{status: string, message: string}> => {
+    const res = await fetch(`${API_BASE}/workouts/generate-mesocycle`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error('Ошибка синтеза мезоцикла');
+    return res.json();
+  },
+      getRecoveryAnalytics: async (): Promise<RecoveryAnalyticsResponse> => {
+    const res = await fetch(`${API_BASE}/analytics/recovery`);
+    if (!res.ok) throw new Error('Failed to fetch recovery analytics');
+    return res.json();
+  },
+  saveBiometrics: async (data: BiometricsCreate): Promise<void> => {
+    const res = await fetch(`${API_BASE}/biometrics`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) throw new Error('Failed to save biometrics');
+  },
+  getOverloadAnalytics: async (): Promise<OverloadAnalyticsResponse> => {
+    const res = await fetch(`${API_BASE}/analytics/overload`);
+    if (!res.ok) throw new Error('Failed to fetch overload analytics');
+    return res.json();
+  },
+  duplicateWorkoutPlan: async (planId: string, targetDate: string, applyOverload: boolean = false, overloadIncrementKg: number = 1.25): Promise<WorkoutPlan> => {
+    const res = await fetch(`${API_BASE}/workouts/${planId}/duplicate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ target_date: targetDate, apply_overload: applyOverload, overload_increment_kg: overloadIncrementKg })
+    });
+    if (!res.ok) throw new Error('Failed to duplicate workout plan');
+    return res.json();
+  },
+  createWorkoutSet: async (exerciseId: string, data: Partial<WorkoutSet>): Promise<WorkoutSet> => {
+    const response = await fetch(`${API_BASE}/exercises/${exerciseId}/sets`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!response.ok) throw new Error('Failed to create set');
+    return response.json();
+  },
+  
+  updateWorkoutSet: async (setId: string, data: Partial<WorkoutSet>): Promise<WorkoutSet> => {
+    const response = await fetch(`${API_BASE}/workout-sets/${setId}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data)
+    });
+    if (!response.ok) throw new Error('Failed to update set');
+    return response.json();
+  },
+  
+  deleteWorkoutSet: async (setId: string): Promise<void> => {
+    await fetch(`${API_BASE}/workout-sets/${setId}`, { method: 'DELETE' });
   }
 };
 

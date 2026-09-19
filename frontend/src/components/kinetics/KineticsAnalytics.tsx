@@ -115,11 +115,15 @@ const phaseStroke: Record<string, string> = {
 };
 
 import React, { useState, useEffect } from 'react';
-import { TrendingDown, Award, Zap, BarChart2, Target, CheckCircle2, Clock, Flame } from 'lucide-react';
+import { TrendingDown, Award, Zap, BarChart2, Target, CheckCircle2, Clock, Flame, LineChart } from 'lucide-react';
+import { OverloadCharts } from './OverloadCharts';
+import { RecoveryDashboard } from './RecoveryDashboard';
+import { HeartPulse } from 'lucide-react';
 import { ComposedChart, Line, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, Area } from 'recharts';
 import { BiometricsLog, kineticsApi } from '../../api/kinetics';
 
 export const KineticsAnalytics: React.FC<{ biometrics: BiometricsLog[] }> = ({ biometrics }) => {
+  const [activeTab, setActiveTab] = useState<'roadmap' | 'overload' | 'recovery'>('recovery');
   const [hoveredMilestone, setHoveredMilestone] = useState<number | null>(null);
   const [actualProgressData, setActualProgressData] = useState<any[]>([]);
   const latestBio = biometrics.length > 0 ? biometrics[0] : null;
@@ -174,6 +178,40 @@ export const KineticsAnalytics: React.FC<{ biometrics: BiometricsLog[] }> = ({ b
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex bg-slate-900/50 p-1 rounded-lg border border-slate-800/80 w-fit">
+        <button
+          onClick={() => setActiveTab('roadmap')}
+          className={`px-4 py-1.5 text-xs font-bold rounded-md transition-colors ${
+            activeTab === 'roadmap' ? 'bg-slate-800 text-cyan-400' : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          <div className="flex items-center gap-2"><Target className="w-4 h-4" /> Глобальный Roadmap</div>
+        </button>
+        <button
+          onClick={() => setActiveTab('overload')}
+          className={`px-4 py-1.5 text-xs font-bold rounded-md transition-colors ${
+            activeTab === 'overload' ? 'bg-slate-800 text-indigo-400' : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          <div className="flex items-center gap-2"><LineChart className="w-4 h-4" /> Аналитика 1RM (Overload)</div>
+        </button>
+        <button
+          onClick={() => setActiveTab('recovery')}
+          className={`px-4 py-1.5 text-xs font-bold rounded-md transition-colors ${
+            activeTab === 'recovery' ? 'bg-slate-800 text-emerald-400' : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          <div className="flex items-center gap-2"><HeartPulse className="w-4 h-4" /> Дашборд Восстановления</div>
+        </button>
+      </div>
+
+      {activeTab === 'recovery' ? (
+        <RecoveryDashboard />
+      ) : activeTab === 'overload' ? (
+        <OverloadCharts />
+      ) : (
+        <>
       {/* KPI карточки */}
       <div className="grid grid-cols-4 gap-4 shrink-0">
         <div className="bg-[#090d16] border border-slate-800 p-4 rounded-xl">
@@ -479,6 +517,8 @@ export const KineticsAnalytics: React.FC<{ biometrics: BiometricsLog[] }> = ({ b
           </div>
         </div>
       </div>
+      </>
+      )}
     </div>
   );
 };

@@ -1,276 +1,526 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldAlert, Zap, CalendarDays, ArrowRightRight, History, CheckCircle2, XCircle, Clock, Moon } from 'lucide-react';
+import { AlertTriangle, Moon, Activity, Dumbbell, Zap, Copy, X, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
+import { ExerciseSetTable } from './ExerciseSetTable';
 import { kineticsApi } from '../../api/kinetics';
+import { WorkoutPlan, WorkoutExercise } from '../../api/kinetics';
+import { MesocycleGeneratorModal } from './MesocycleGeneratorModal';
 
-export type SessionIntensity = 'heavy' | 'hypertrophy' | 'active_rest' | 'recovery';
-export type SessionStatus = 'completed' | 'planned' | 'missed';
 
-export interface CalendarDay {
-  id: string;
-  date: string; // YYYY-MM-DD
-  dayOfWeek: number; // 1-7 (Пн-Вс)
-  title: string;
-  intensity: SessionIntensity;
-  status: SessionStatus;
-  estimatedRpe: number;
-  completedRpe?: number;
-  planId?: string;
-}
-
-const intensityColors: Record<SessionIntensity, string> = {
-  heavy: 'border-rose-500/40 bg-rose-950/20 text-rose-400',
-  hypertrophy: 'border-amber-500/40 bg-amber-950/20 text-amber-400',
-  active_rest: 'border-cyan-500/40 bg-cyan-950/20 text-cyan-400',
-  recovery: 'border-emerald-500/40 bg-emerald-950/20 text-emerald-400',
+const toLocalDateKey = (d: Date): string => {
+  const year = d.getFullYear();
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 };
 
-const weekDays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+const SPLIT_COLORS: Record<string, { label: string; color: string }> = {
+  push: { label: 'Push', color: 'bg-rose-500/10 text-rose-400 border-rose-500/30' },
+  pull: { label: 'Pull', color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' },
+  legs: { label: 'Legs', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
+  fullbody: { label: 'Fullbody', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
+  core: { label: 'Кор', color: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
+  shoulders: { label: 'Плечи', color: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
+  neck: { label: 'Шея', color: 'bg-pink-500/10 text-pink-400 border-pink-500/30' },
+  functional: { label: 'Функционал', color: 'bg-teal-500/10 text-teal-400 border-teal-500/30' },
+  default: { label: 'Сессия', color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' },
+};
 
-const initialDays: CalendarDay[] = [
-  // Неделя 1 (Прошлая)
-  { id: '1', date: '12 Окт', dayOfWeek: 1, title: 'Push (Сила)', intensity: 'heavy', status: 'completed', estimatedRpe: 8, completedRpe: 8 },
-  { id: '2', date: '13 Окт', dayOfWeek: 2, title: 'Восстановление', intensity: 'recovery', status: 'completed', estimatedRpe: 1 },
-  { id: '3', date: '14 Окт', dayOfWeek: 3, title: 'Pull (Сила)', intensity: 'heavy', status: 'completed', estimatedRpe: 8, completedRpe: 9 },
-  { id: '4', date: '15 Окт', dayOfWeek: 4, title: 'Активный отдых', intensity: 'active_rest', status: 'completed', estimatedRpe: 4, completedRpe: 4 },
-  { id: '5', date: '16 Окт', dayOfWeek: 5, title: 'Legs (Сила)', intensity: 'heavy', status: 'missed', estimatedRpe: 8 },
-  { id: '6', date: '17 Окт', dayOfWeek: 6, title: 'Восстановление', intensity: 'recovery', status: 'completed', estimatedRpe: 1 },
-  { id: '7', date: '18 Окт', dayOfWeek: 7, title: 'Fullbody (Объем)', intensity: 'hypertrophy', status: 'missed', estimatedRpe: 7 },
+function resolveSplitType(targetSplit?: string): { label: string; color: string } {
+  const s = (targetSplit || '').toLowerCase();
+  if (s.includes('push') || s.includes('грудь')) return SPLIT_COLORS.push;
+  if (s.includes('pull') || s.includes('спина')) return SPLIT_COLORS.pull;
+  if (s.includes('ноги') || s.includes('legs')) return SPLIT_COLORS.legs;
+  if (s.includes('фулбоди') || s.includes('fullbody')) return SPLIT_COLORS.fullbody;
+  if (s.includes('кор')) return SPLIT_COLORS.core;
+  if (s.includes('плечи') || s.includes('дельты')) return SPLIT_COLORS.shoulders;
+  if (s.includes('шея')) return SPLIT_COLORS.neck;
+  if (s.includes('функционал') || s.includes('кардио')) return SPLIT_COLORS.functional;
+  return { label: targetSplit || 'Тренировка', color: SPLIT_COLORS.default.color };
+}
 
-  // Неделя 2 (Текущая)
-  { id: '8', date: '19 Окт', dayOfWeek: 1, title: 'Push (Сила)', intensity: 'heavy', status: 'planned', estimatedRpe: 8 },
-  { id: '9', date: '20 Окт', dayOfWeek: 2, title: 'Восстановление', intensity: 'recovery', status: 'planned', estimatedRpe: 1 },
-  { id: '10', date: '21 Окт', dayOfWeek: 3, title: 'Pull (Сила)', intensity: 'heavy', status: 'planned', estimatedRpe: 8 },
-  { id: '11', date: '22 Окт', dayOfWeek: 4, title: 'Активный отдых', intensity: 'active_rest', status: 'planned', estimatedRpe: 4 },
-  { id: '12', date: '23 Окт', dayOfWeek: 5, title: 'Legs (Сила)', intensity: 'heavy', status: 'planned', estimatedRpe: 8 },
-  { id: '13', date: '24 Окт', dayOfWeek: 6, title: 'Восстановление', intensity: 'recovery', status: 'planned', estimatedRpe: 1 },
-  { id: '14', date: '25 Окт', dayOfWeek: 7, title: 'Fullbody', intensity: 'hypertrophy', status: 'planned', estimatedRpe: 7 },
-  
-  // Неделя 3 (Будущая)
-  { id: '15', date: '26 Окт', dayOfWeek: 1, title: 'Push (Сила)', intensity: 'heavy', status: 'planned', estimatedRpe: 8 },
-  { id: '16', date: '27 Окт', dayOfWeek: 2, title: 'Восстановление', intensity: 'recovery', status: 'planned', estimatedRpe: 1 },
-  { id: '17', date: '28 Окт', dayOfWeek: 3, title: 'Pull (Сила)', intensity: 'heavy', status: 'planned', estimatedRpe: 8 },
-  { id: '18', date: '29 Окт', dayOfWeek: 4, title: 'Активный отдых', intensity: 'active_rest', status: 'planned', estimatedRpe: 4 },
-  { id: '19', date: '30 Окт', dayOfWeek: 5, title: 'Legs (Сила)', intensity: 'heavy', status: 'planned', estimatedRpe: 8 },
-  { id: '20', date: '31 Окт', dayOfWeek: 6, title: 'Восстановление', intensity: 'recovery', status: 'planned', estimatedRpe: 1 },
-  { id: '21', date: '01 Ноя', dayOfWeek: 7, title: 'Fullbody', intensity: 'hypertrophy', status: 'planned', estimatedRpe: 7 },
-];
 
-export const KineticsCalendar: React.FC = () => {
-  const [days, setDays] = useState<CalendarDay[]>(initialDays);
-  const [fatigueScore, setFatigueScore] = useState<number>(8.5); // Высокое системное утомление
-  const [sleepHours, setSleepHours] = useState<number>(5.5); // Недосып
-  const [logs, setLogs] = useState<string[]>([]);
-  const [isRescheduling, setIsRescheduling] = useState(false);
+interface CalendarProps {
+  plans: WorkoutPlan[];
+  onSelectPlan: (plan: WorkoutPlan | null, date: Date) => void;
+}
 
-  useEffect(() => {
-    kineticsApi.getCalendarMonth().then(data => {
-      if (data && data.length > 0) {
-        setDays(data as CalendarDay[]);
-      }
-    }).catch(err => console.error("Error loading calendar month", err));
-  }, []);
+export const MonthGrid: React.FC<CalendarProps & { selectedDateStr?: string }> = ({ plans, onSelectPlan, selectedDateStr: propsSelectedDateStr }) => {
+  const [currentMonth, setCurrentMonth] = useState<Date>(() => new Date());
+  const [localSelectedDateStr, setSelectedDateStr] = useState<string>(toLocalDateKey(new Date()));
+  const selectedDateStr = propsSelectedDateStr || localSelectedDateStr;
 
-  const handleReschedule = async () => {
-    if (isRescheduling) return;
-    setIsRescheduling(true);
-    let newDays = [...days];
-    let newLogs: string[] = [];
-    
-    // Находим все missed сессии
-    const missedIndices = newDays
-      .map((d, i) => (d.status === 'missed' ? i : -1))
-      .filter((i) => i !== -1);
-
-    if (missedIndices.length === 0) {
-      newLogs.push('Пропущенных сессий нет. Сетка оптимальна.');
-      setLogs(prev => [...newLogs, ...prev].slice(0, 5));
-      return;
-    }
-
-    missedIndices.forEach(index => {
-      const missedDay = newDays[index];
-      
-      // Ищем ближайший будущий planned день восстановления
-      const futureRecoveryIndex = newDays.findIndex(
-        (d, i) => i > index && d.status === 'planned' && (d.intensity === 'recovery' || d.intensity === 'active_rest')
-      );
-
-      if (futureRecoveryIndex !== -1) {
-        const targetDay = newDays[futureRecoveryIndex];
-        
-        // Эвристика: если утомление высокое, снижаем интенсивность тяжелой сессии при переносе
-        let newIntensity = missedDay.intensity;
-        let newRpe = missedDay.estimatedRpe;
-        let newTitle = missedDay.title;
-
-        if (missedDay.intensity === 'heavy' && (fatigueScore >= 8 || sleepHours < 6)) {
-          newIntensity = 'hypertrophy';
-          newRpe = Math.max(6, newRpe - 2);
-          newTitle = missedDay.title.replace('(Сила)', '(Объем, Сниж. RPE)');
-          newLogs.push(`КРИТИЧЕСКОЕ УТОМЛЕНИЕ: Тяжелая сессия "${missedDay.title}" понижена до Hypertrophy (RPE ${newRpe}) и перенесена на ${targetDay.date}.`);
-        } else {
-          newLogs.push(`ПЕРЕНОС: Сессия "${missedDay.title}" перенесена на свободный день ${targetDay.date}.`);
-        }
-
-        // Обновляем targetDay
-        newDays[futureRecoveryIndex] = {
-          ...targetDay,
-          title: newTitle,
-          intensity: newIntensity,
-          estimatedRpe: newRpe,
-        };
-
-        // Помечаем старый день как recovery
-        newDays[index] = {
-          ...missedDay,
-          title: 'Смещено',
-          intensity: 'recovery',
-          status: 'completed',
-          estimatedRpe: 1
-        };
-      } else {
-        newLogs.push(`ОТМЕНА: Не найдено окон для переноса "${missedDay.title}". Сессия отменена (Deload).`);
-        newDays[index] = {
-          ...missedDay,
-          title: 'Отменено',
-          intensity: 'recovery',
-          status: 'completed'
-        };
-      }
+  const plansByDate = React.useMemo(() => {
+    const map = new Map<string, WorkoutPlan>();
+    plans.forEach(p => {
+      const d = p.scheduled_date || (p.created_at ? toLocalDateKey(new Date(p.created_at)) : undefined);
+      if (d) map.set(d, p);
     });
+    return map;
+  }, [plans]);
 
-    try {
-      await kineticsApi.rescheduleCalendar(newDays);
-      newLogs.push('СИНХРОНИЗАЦИЯ: Изменения сохранены в базе данных (WorkoutPlan).');
-    } catch (e) {
-      newLogs.push('ОШИБКА СИНХРОНИЗАЦИИ: Не удалось сохранить изменения на сервере.');
+  const daysInGrid = React.useMemo(() => {
+    const year = currentMonth.getFullYear();
+    const month = currentMonth.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+
+    const startOffset = (firstDay.getDay() + 6) % 7;
+    const totalDays = lastDay.getDate();
+
+    const days: { date: Date; isCurrentMonth: boolean }[] = [];
+    for (let i = startOffset - 1; i >= 0; i--) {
+      const prevDate = new Date(year, month, -i);
+      days.push({ date: prevDate, isCurrentMonth: false });
     }
+    for (let i = 1; i <= totalDays; i++) {
+      days.push({ date: new Date(year, month, i), isCurrentMonth: true });
+    }
+    while (days.length % 7 !== 0) {
+      const nextDate = new Date(year, month + 1, days.length - totalDays - startOffset + 1);
+      days.push({ date: nextDate, isCurrentMonth: false });
+    }
+    return days;
+  }, [currentMonth]);
 
-    setDays(newDays);
-    setLogs(prev => [...newLogs, ...prev].slice(0, 10));
-    setFatigueScore(6.0); // Эмулируем, что после перепланировки утомление "разгрузится"
-    setIsRescheduling(false);
+  const handleDayClick = (date: Date) => {
+    const dateStr = toLocalDateKey(date);
+    setSelectedDateStr(dateStr);
+    const plan = plansByDate.get(dateStr) || null;
+    onSelectPlan(plan, date);
   };
 
   return (
-    <div className="flex h-full gap-4 font-mono w-full">
-      
-      {/* ЛЕВАЯ КОЛОНКА: Сайдбар (Утомление и логи) */}
-      <div className="w-1/4 min-w-[280px] max-w-sm flex flex-col gap-4">
-        
-        <div className="bg-[#090d16] border border-slate-800 rounded-xl p-5 shrink-0 shadow-[0_0_20px_rgba(0,0,0,0.5)]">
-          <h3 className="text-sm font-bold text-slate-300 mb-4 flex items-center gap-2 tracking-widest">
-            <ShieldAlert className="w-4 h-4 text-indigo-400" />
-            СИСТЕМНЫЙ СТРЕСС
-          </h3>
-
-          <div className="space-y-4">
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-slate-400">Накопленное утомление ЦНС</span>
-                <span className={fatigueScore >= 8 ? 'text-rose-400 font-bold' : 'text-indigo-400'}>{fatigueScore.toFixed(1)} / 10</span>
-              </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                <div style={{ width: `${(fatigueScore / 10) * 100}%` }} className={`h-full ${fatigueScore >= 8 ? 'bg-rose-500' : 'bg-indigo-500'}`} />
-              </div>
-            </div>
-
-            <div>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-slate-400">Средний сон (3 дня)</span>
-                <span className={sleepHours < 6 ? 'text-amber-400 font-bold' : 'text-cyan-400'}>{sleepHours.toFixed(1)} ч</span>
-              </div>
-              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
-                <div style={{ width: `${(sleepHours / 10) * 100}%` }} className={`h-full ${sleepHours < 6 ? 'bg-amber-500' : 'bg-cyan-500'}`} />
-              </div>
-            </div>
-          </div>
-
-          <button
-            onClick={handleReschedule}
-            className="w-full mt-6 flex items-center justify-center gap-2 px-4 py-2.5 bg-indigo-600 hover:bg-indigo-500 text-slate-100 text-xs font-bold rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] hover:shadow-[0_0_20px_rgba(79,70,229,0.5)]"
-          >
-            <ArrowRightRight className="w-4 h-4" />
-            АВТО-ПЕРЕНОС СЕССИЙ
-          </button>
-        </div>
-
-        <div className="flex-1 min-h-0 bg-[#090d16] border border-slate-800 rounded-xl p-5 flex flex-col shadow-[0_0_20px_rgba(0,0,0,0.5)]">
-          <h3 className="text-sm font-bold text-slate-300 mb-3 flex items-center gap-2 tracking-widest shrink-0">
-            <History className="w-4 h-4 text-slate-400" />
-            ЖУРНАЛ СИНТЕЗА
-          </h3>
-          <div className="flex-1 overflow-y-auto custom-scrollbar space-y-3">
-            {logs.length === 0 ? (
-              <div className="text-xs text-slate-500 italic text-center mt-4">Ожидание команд перерасчета...</div>
-            ) : (
-              logs.map((log, idx) => (
-                <div key={idx} className={`text-[10px] leading-relaxed border-l-2 pl-2 py-1 ${log.includes('КРИТИЧЕСКОЕ') ? 'border-rose-500 text-rose-300/90' : 'border-indigo-500 text-slate-400'}`}>
-                  {log}
-                </div>
-              ))
-            )}
-          </div>
-        </div>
+    <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4">
+      <div className="grid grid-cols-7 gap-2 mb-2 text-center text-xs font-mono text-slate-500">
+        {['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(d => (
+          <div key={d}>{d}</div>
+        ))}
       </div>
+      <div className="grid grid-cols-7 gap-2">
+        {daysInGrid.map(({ date, isCurrentMonth }, idx) => {
+          const dateStr = toLocalDateKey(date);
+          const plan = plansByDate.get(dateStr);
+          const isSelected = selectedDateStr === dateStr;
+          const isToday = toLocalDateKey(new Date()) === dateStr;
 
-      {/* ПРАВАЯ КОЛОНКА: Сетка календаря */}
-      <div className="flex-1 bg-[#030712] border border-slate-800/60 rounded-xl p-5 flex flex-col h-full overflow-y-auto custom-scrollbar shadow-inner">
-        <div className="flex justify-between items-center mb-6 shrink-0">
-          <h2 className="text-base font-bold text-slate-200 flex items-center gap-2">
-            <CalendarDays className="w-5 h-5 text-cyan-400" />
-            МИКРОЦИКЛЫ: ОКТЯБРЬ — НОЯБРЬ 2026
-          </h2>
-          <div className="flex gap-4 text-[10px] text-slate-400">
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-rose-500/80" />Сила (Heavy)</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-amber-500/80" />Объем (Hypertrophy)</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-cyan-500/80" />Активный (Active Rest)</span>
-            <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-sm bg-emerald-500/80" />Отдых (Recovery)</span>
-          </div>
-        </div>
-
-        {/* Заголовки дней недели */}
-        <div className="grid grid-cols-7 gap-3 mb-3 shrink-0">
-          {weekDays.map(day => (
-            <div key={day} className="text-center text-xs font-bold text-slate-500 uppercase tracking-widest">
-              {day}
-            </div>
-          ))}
-        </div>
-
-        {/* Сетка дней */}
-        <div className="grid grid-cols-7 gap-3 auto-rows-max">
-          {days.map((day) => (
-            <div 
-              key={day.id} 
-              className={`flex flex-col border rounded-lg p-2.5 min-h-[90px] transition-all duration-300 ${intensityColors[day.intensity]} ${day.status === 'missed' ? 'opacity-70 border-dashed ring-2 ring-rose-500/30 ring-offset-2 ring-offset-[#030712]' : ''}`}
+          return (
+            <div
+              key={idx}
+              onClick={() => handleDayClick(date)}
+              className={`min-h-[78px] p-1.5 rounded-lg border transition-all cursor-pointer flex flex-col justify-between ${
+                isSelected
+                  ? 'border-cyan-500 bg-cyan-950/20 shadow-[0_0_12px_rgba(6,182,212,0.15)]'
+                  : isCurrentMonth
+                  ? 'border-slate-800/80 bg-slate-900/40 hover:border-slate-700'
+                  : 'border-transparent bg-slate-950/20 opacity-30'
+              }`}
             >
-              <div className="flex justify-between items-start mb-2">
-                <span className="text-[10px] font-bold opacity-70">{day.date}</span>
-                {day.status === 'completed' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-                {day.status === 'missed' && <XCircle className="w-3.5 h-3.5 text-rose-500" />}
-                {day.status === 'planned' && <Clock className="w-3 h-3 opacity-50" />}
-              </div>
-              
-              <div className={`text-xs font-bold leading-tight ${day.status === 'missed' ? 'line-through decoration-rose-500/60 decoration-2' : ''}`}>
-                {day.title}
-              </div>
-
-              <div className="mt-auto pt-2 flex justify-between items-center">
-                {day.intensity !== 'recovery' && day.intensity !== 'active_rest' ? (
-                  <span className="text-[9px] font-bold bg-black/30 px-1.5 py-0.5 rounded">RPE {day.estimatedRpe}</span>
-                ) : (
-                  <Moon className="w-3 h-3 opacity-50" />
-                )}
-                {day.status === 'completed' && day.completedRpe && (
-                  <span className="text-[9px] text-emerald-300 ml-auto">Факт: {day.completedRpe}</span>
+              <div className="flex justify-between items-center">
+                <span className={`text-xs font-mono ${isToday ? 'text-cyan-400 font-bold' : 'text-slate-400'}`}>
+                  {date.getDate()}
+                </span>
+                {plan?.status === 'completed' && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_4px_#34d399]" />
                 )}
               </div>
+              {plan ? (
+                <div className="mt-1 px-1.5 py-1 rounded bg-purple-950/40 border border-purple-800/50 text-[10px]">
+                  <div className="font-semibold text-purple-300 truncate">{plan.target_split || plan.split_type || 'Сессия'}</div>
+                  <div className="text-slate-400 text-[9px]">{plan.exercises?.length || 0} упр.</div>
+                </div>
+              ) : (
+                <div className="text-[9px] text-slate-600 font-mono text-center pb-1">Отдых</div>
+              )}
             </div>
-          ))}
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (date: Date) => void, onStartTimer?: (seconds: number) => void }> = ({ selectedDate: propsSelectedDate, onDateSelect, onStartTimer }) => {
+
+  const [plans, setPlans] = useState<WorkoutPlan[]>([]);
+  const [selectedPlan, setSelectedPlan] = useState<WorkoutPlan | null>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [localSelectedDate, setLocalSelectedDate] = useState<Date>(new Date());
+  const selectedDate = propsSelectedDate || localSelectedDate;
+  const setSelectedDate = onDateSelect || setLocalSelectedDate;
+  const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
+
+  const [expandedExerciseId, setExpandedExerciseId] = useState<string | number | null>(null);
+  const toggleExercise = (id: string | number) => {
+    setExpandedExerciseId(prev => (prev === id ? null : id));
+  };
+
+
+    const [isDuplicateModalOpen, setIsDuplicateModalOpen] = useState(false);
+    const [duplicateTargetDate, setDuplicateTargetDate] = useState(() => {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      return toLocalDateKey(d);
+    });
+    const [applyOverload, setApplyOverload] = useState(false);
+    const [overloadIncrement, setOverloadIncrement] = useState(1.25);
+    const [isDuplicating, setIsDuplicating] = useState(false);
+
+    const handleDuplicate = async () => {
+      if (!selectedPlan) return;
+      setIsDuplicating(true);
+      try {
+        await kineticsApi.duplicateWorkoutPlan(selectedPlan.id, duplicateTargetDate, applyOverload, overloadIncrement);
+        setIsDuplicateModalOpen(false);
+        // Refresh plans
+        window.location.reload();
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setIsDuplicating(false);
+      }
+    };
+
+
+  const fetchCalendar = () => {
+    setIsLoading(true);
+    kineticsApi.getCalendarMonth()
+      .then((data) => {
+        const uniqueDates = new Set();
+        const filteredPlans: WorkoutPlan[] = [];
+        for (let i = data.length - 1; i >= 0; i--) {
+          const dateKey = new Date(data[i].created_at).toLocaleDateString('ru-RU');
+          if (!uniqueDates.has(dateKey)) {
+            uniqueDates.add(dateKey);
+            filteredPlans.unshift(data[i]);
+          }
+        }
+        
+        setPlans(filteredPlans);
+      })
+      .catch((err) => console.error('Ошибка загрузки календаря:', err))
+      .finally(() => setIsLoading(false));
+  };
+
+  const handleComplete = async () => {
+    if (!selectedPlan) return;
+    try {
+      const updated = await kineticsApi.completeWorkout(selectedPlan.id);
+      setSelectedPlan(updated);
+      setPlans(prev => prev.map(p => p.id === updated.id ? updated : p));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  useEffect(() => {
+    fetchCalendar();
+  }, []);
+
+  useEffect(() => {
+    if (plans.length > 0) {
+      const targetDateKey = toLocalDateKey(selectedDate);
+      const planForDate = plans.find(p => {
+        const d = p.scheduled_date || (p.created_at ? toLocalDateKey(new Date(p.created_at)) : undefined);
+        return d === targetDateKey;
+      });
+      setSelectedPlan(planForDate || null);
+    }
+  }, [selectedDate, plans]);
+
+  return (
+    <div className="grid grid-cols-1 xl:grid-cols-4 gap-6 p-2 font-mono">
+      <MesocycleGeneratorModal 
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        onSuccess={() => fetchCalendar()}
+      />
+      {/* Левая панель: Сетка тренировочных сессий */}
+      <div className="xl:col-span-3 bg-slate-950/70 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+        <div>
+          <div className="flex items-center justify-between pb-4 border-b border-slate-800/80 mb-4">
+            <div className="flex items-center gap-3">
+              <span className="text-xs uppercase tracking-wider text-slate-400">АРХИВ И ПЛАН СЕССИЙ:</span>
+              <h3 className="text-sm font-bold text-slate-200">АКТИВНЫЙ МЕЗОЦИКЛ</h3>
+            </div>
+            
+            <div className="flex items-center gap-3 text-[10px] text-slate-400">
+              <button 
+                onClick={() => setIsModalOpen(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/40 rounded transition-colors mr-2"
+              >
+                <Zap className="w-3 h-3" />
+                <span className="font-bold uppercase tracking-wider">Синтез мезоцикла (4 недели)</span>
+              </button>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-rose-500"></span> Push</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-indigo-500"></span> Pull</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-amber-500"></span> Legs</span>
+              <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-emerald-500"></span> Fullbody</span>
+            </div>
+          </div>
+
+          {isLoading ? (
+            <div className="text-center py-16 text-slate-500 text-xs">Загрузка данных телеметрии...</div>
+          ) : (
+            <MonthGrid plans={plans} selectedDateStr={toLocalDateKey(selectedDate)} onSelectPlan={(plan, date) => {
+              setSelectedPlan(plan);
+              setSelectedDate(date);
+            }} />
+          )}
+        </div>
+
+        <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-500">
+          <span>Синхронизировано с pgvector и телеметрией атлета</span>
+          <span>Всего сессий в базе: {plans.length}</span>
         </div>
       </div>
 
+      {/* Правая панель: Системный стресс и Инспектор упражнений */}
+      <div className="space-y-4">
+        <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
+          <div className="flex items-center gap-2 text-xs font-bold text-rose-400 mb-3">
+            <AlertTriangle className="w-4 h-4" />
+            <span>СИСТЕМНЫЙ СТРЕСС</span>
+          </div>
+
+          <div className="space-y-3 text-xs">
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Утомление ЦНС</span>
+                <span className="text-rose-400 font-bold">8.5 / 10</span>
+              </div>
+              <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+                <div className="bg-rose-500 h-full rounded-full w-[85%]"></div>
+              </div>
+            </div>
+
+            <div>
+              <div className="flex justify-between text-slate-400 mb-1">
+                <span>Средний сон (3 дня)</span>
+                <span className="text-amber-400 font-bold">5.5 ч</span>
+              </div>
+              <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
+                <div className="bg-amber-400 h-full rounded-full w-[65%]"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Инспектор упражнений выбранного дня */}
+        <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 flex flex-col">
+          <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-3">
+            <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
+              <Dumbbell className="w-3.5 h-3.5 text-cyan-400" />
+              ДЕТАЛИ СЕССИИ
+            </span>
+            <div className="flex items-center gap-3">
+              {selectedPlan && (
+                <button
+                  onClick={() => {
+                    const tomorrow = new Date();
+                    tomorrow.setDate(tomorrow.getDate() + 1);
+                    setDuplicateTargetDate(toLocalDateKey(tomorrow));
+                    setIsDuplicateModalOpen(true);
+                  }}
+                  className="p-1 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 rounded transition-colors"
+                  title="Дуплирај тренинг"
+                >
+                  <Copy className="w-4 h-4" />
+                </button>
+              )}
+              {selectedPlan?.status === 'completed' && (
+                <span className="text-[10px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded">ВЫПОЛНЕНО</span>
+              )}
+              <span className="text-[10px] text-slate-500">
+                {selectedDate ? selectedDate.toLocaleDateString('ru-RU') : (selectedPlan ? new Date(selectedPlan.created_at).toLocaleDateString('ru-RU') : '')}
+              </span>
+            </div>
+          </div>
+
+          {selectedPlan ? (
+            <div className="space-y-3">
+              <div>
+                <div className="text-sm font-bold text-cyan-300">
+                  {selectedPlan.target_split || (selectedPlan as any).split_day || 'Тренировка'}
+                </div>
+                <div className="text-[11px] text-slate-400 mt-0.5">
+                  Локация: <span className="text-slate-200">{selectedPlan.location || 'Дом'}</span>
+                </div>
+              </div>
+
+              {selectedPlan.ai_rationale && (
+                <div className="text-[11px] text-slate-400 bg-slate-900/60 p-2 rounded border border-slate-800/80 leading-relaxed italic">
+                  "{selectedPlan.ai_rationale}"
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-slate-800/60 mt-3">
+                <div className="text-[11px] font-bold text-slate-400 mb-2">УПРАЖНЕНИЯ:</div>
+                <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
+                  {selectedPlan.exercises && selectedPlan.exercises.length > 0 ? (
+                    selectedPlan.exercises.map((ex: WorkoutExercise, idx: number) => {
+                      const exerciseId = ex.id || idx;
+                      const isExpanded = expandedExerciseId === exerciseId;
+
+                      return (
+                        <div 
+                          key={exerciseId}
+                          className="bg-slate-900/50 border border-slate-800 rounded-lg overflow-hidden transition-colors"
+                        >
+                          <div
+                            onClick={() => toggleExercise(exerciseId)}
+                            className="p-2.5 text-xs flex justify-between items-center cursor-pointer hover:bg-slate-800/40 select-none"
+                          >
+                            <div className="pr-2 flex items-center gap-2">
+                              {isExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5 text-cyan-400" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                              )}
+                              <div>
+                                <div className="font-semibold text-slate-200 text-[11px]">
+                                  {ex.exercise_name}
+                                </div>
+                                <div className="text-[10px] text-slate-500">
+                                  {Array.isArray(ex.target_muscle_groups)
+                                    ? ex.target_muscle_groups.join(', ')
+                                    : (ex.target_muscle_groups || 'Функционал')}
+                                </div>
+                              </div>
+                            </div>
+                            
+                            <div className="text-right whitespace-nowrap">
+                              <div className="text-cyan-400 font-bold text-[11px]">
+                                {ex.sets} × {ex.reps_or_duration}
+                              </div>
+                              <div className="text-[10px] text-slate-400">RPE {ex.rpe_target}</div>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="p-3 pt-1 border-t border-slate-800/80 bg-slate-950/60">
+                              <ExerciseSetTable
+                                exercise={ex}
+                                onStartTimer={onStartTimer}
+                                onSetUpdated={(updatedSet) => {
+                                  if (selectedPlan) {
+                                    const updatedExercises = selectedPlan.exercises.map(e => {
+                                      if (e.id === ex.id) {
+                                        return {
+                                          ...e,
+                                          workout_sets: (e.workout_sets || []).map(s => 
+                                            s.id === updatedSet.id ? updatedSet : s
+                                          )
+                                        };
+                                      }
+                                      return e;
+                                    });
+                                    setSelectedPlan({ ...selectedPlan, exercises: updatedExercises });
+                                  }
+                                }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-slate-600 text-xs py-2">Список упражнений пуст</div>
+                  )}
+                </div>
+                
+                {selectedPlan.status !== 'completed' && (
+                  <button 
+                    onClick={handleComplete}
+                    className="w-full mt-4 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/40 rounded text-xs font-bold transition-colors"
+                  >
+                    ОТМЕТИТЬ КАК ВЫПОЛНЕНО
+                  </button>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center text-center py-10 opacity-70">
+              <Moon className="w-8 h-8 text-indigo-400/50 mb-3" />
+              <div className="text-sm font-bold text-indigo-300">ДЕНЬ ВОССТАНОВЛЕНИЯ</div>
+              <div className="text-[10px] text-slate-500 mt-2 max-w-[200px] leading-relaxed">
+                Суперкомпенсация ЦНС. Рекомендуется увеличить сон до 8+ часов и добавить 40 мин прогулки.
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Duplicate Modal */}
+      {isDuplicateModalOpen && selectedPlan && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+          <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-md overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/50">
+              <div className="flex items-center gap-2">
+                <Copy className="w-4 h-4 text-cyan-400" />
+                <h3 className="font-bold text-slate-200">Дублировать тренировку</h3>
+              </div>
+              <button onClick={() => setIsDuplicateModalOpen(false)} className="text-slate-400 hover:text-rose-400">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-4 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Дата новой тренировки</label>
+                <input 
+                  type="date" 
+                  value={duplicateTargetDate}
+                  onChange={e => setDuplicateTargetDate(e.target.value)}
+                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-slate-200 focus:outline-none focus:border-cyan-500 focus:ring-1 focus:ring-cyan-500"
+                />
+              </div>
+
+              <div className="pt-2">
+                <label className="flex items-center gap-2 cursor-pointer group">
+                  <div className="relative flex items-center">
+                    <input 
+                      type="checkbox" 
+                      checked={applyOverload}
+                      onChange={e => setApplyOverload(e.target.checked)}
+                      className="sr-only"
+                    />
+                    <div className={`w-10 h-5 rounded-full transition-colors ${applyOverload ? 'bg-cyan-500/30' : 'bg-slate-800'}`}>
+                      <div className={`absolute top-1 left-1 w-3 h-3 rounded-full transition-transform ${applyOverload ? 'translate-x-5 bg-cyan-400' : 'bg-slate-500'}`} />
+                    </div>
+                  </div>
+                  <span className="text-sm font-medium text-slate-300 group-hover:text-slate-200">
+                    Прогрессивная перегрузка
+                  </span>
+                </label>
+                <p className="text-[10px] text-slate-500 mt-1 ml-12">
+                  Увеличить рабочий вес в подходах (кроме разминки).
+                </p>
+              </div>
+
+              {applyOverload && (
+                <div className="pl-12 pt-1 flex gap-3">
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="overload" checked={overloadIncrement === 1.25} onChange={() => setOverloadIncrement(1.25)} className="text-cyan-500 bg-slate-900 border-slate-700" />
+                    <span className="text-xs text-slate-300">+1.25 кг</span>
+                  </label>
+                  <label className="flex items-center gap-1.5 cursor-pointer">
+                    <input type="radio" name="overload" checked={overloadIncrement === 2.5} onChange={() => setOverloadIncrement(2.5)} className="text-cyan-500 bg-slate-900 border-slate-700" />
+                    <span className="text-xs text-slate-300">+2.5 кг</span>
+                  </label>
+                </div>
+              )}
+
+              <button 
+                onClick={handleDuplicate}
+                disabled={isDuplicating}
+                className="w-full mt-2 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {isDuplicating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
+                {isDuplicating ? 'Копирование...' : 'Скопировать'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

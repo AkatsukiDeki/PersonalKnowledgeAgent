@@ -258,37 +258,51 @@ class ModelManager:
 
             yield f"\n\n[Ошибка генерации: Локальная модель недоступна]"
 
-    async def generate_vision(self, messages: list, image_bytes: bytes, mime_type: str,
-                              allow_cloud_fallback: bool = True) -> str:
-        vision_model = getattr(settings, "OLLAMA_VISION_MODEL", "qwen2.5-vl")
-        try:
-            return await self.ollama_client.chat(
-                model=vision_model,
-                messages=messages
-            )
-        except Exception as e:
-            logger.error(f"[ModelManager] Ollama Vision failed ({e}).")
+    async def generate_vision(
+        self,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str = "image/jpeg",
+        allow_cloud_fallback: bool = True
+    ) -> str:
+        """Прямой вызов мультимодальной Gemini для анализа фото блюда."""
+        # 1. Основной путь: Gemini Multimodal
+        if self._cloud_client:
+            try:
+                from google.genai import types
+                response = await self._cloud_client.aio.models.generate_content(
+                    model="gemini-3.6-flash",
+                    contents=[
+                        types.Part.from_bytes(
+                            data=image_bytes,
+                            mime_type=mime_type or "image/jpeg",
+                        ),
+                        prompt
+                    ]
+                )
+                if response and response.text:
+                    return response.text
+            except Exception as e:
+                import logging
+                logging.error(f"[ModelManager] Ошибка Gemini Vision: {e}")
 
-            if allow_cloud_fallback and self.cloud_available and self._cloud_client:
-                logger.warning("[ModelManager] Falling back to Gemini for Vision.")
-                try:
-                    from google.genai import types
-                    from ..agent.gemini import _to_gemini_contents
+        # 2. Локальный путь: Ollama (только если передана картинка в поле images)
+        if self.ollama_client:
+            try:
+                import base64
+                b64_image = base64.b64encode(image_bytes).decode("utf-8")
+                # Для Ollama нужен вызов generate или chat с передачей base64 в images
+                response = await self.ollama_client.generate(
+                    model="llava",  # или текущая активная модель
+                    prompt=prompt,
+                    images=[b64_image]
+                )
+                return response.get("response", "")
+            except Exception as e:
+                import logging
+                logging.error(f"[ModelManager] Ошибка Ollama Vision: {e}")
 
-                    config = types.GenerateContentConfig(temperature=0.2)
-                    gemini_contents = _to_gemini_contents(messages)
-                    gemini_contents[-1].parts.insert(0, types.Part.from_bytes(data=image_bytes, mime_type=mime_type))
-
-                    response = await self._cloud_client.aio.models.generate_content(
-                        model=self.fast_model,
-                        contents=gemini_contents,
-                        config=config
-                    )
-                    return response.text or ""
-                except Exception as cloud_err:
-                    logger.error(f"[ModelManager] Gemini Vision fallback failed: {cloud_err}")
-
-            return "[Ошибка обработки изображения: Vision-провайдер недоступен]"
+        return ""
 
     async def stream_vision(
             self,

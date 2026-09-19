@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 from typing import List, Optional, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 import uuid
 from enum import Enum
 
@@ -117,6 +117,13 @@ class AlternativeRequest(BaseModel):
     reason: ExerciseAlternativeReason = ExerciseAlternativeReason.JOINT_PAIN
     custom_note: Optional[str] = None
 
+class AlternativeResponse(BaseModel):
+    original_exercise: str
+    alternative_exercise: str
+    reason: Optional[str] = None
+    target_muscle_groups: Optional[List[str]] = None
+    rpe_target: Optional[float] = None
+
 class ExerciseAlternativeItem(BaseModel):
     exercise_name: str
     exercise_type: str = "hypertrophy"
@@ -150,3 +157,183 @@ class TrainingResearchResponse(TrainingResearchBase):
     applied_to_protocol: bool = False
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class CoachActionItem(BaseModel):
+    type: str
+    exercise_id: Optional[uuid.UUID] = None
+    name: Optional[str] = None
+    sets: Optional[int] = None
+    reps: Optional[str] = None
+    rpe: Optional[int] = None
+    targets: List[str] = Field(default_factory=list)
+
+class CoachActionResponse(BaseModel):
+    coach_response: str
+    actions: List[CoachActionItem] = Field(default_factory=list)
+
+class NutritionIngredient(BaseModel):
+    name: str
+    weight_g: float
+    protein: float
+    fat: float
+    carbs: float
+
+class NutritionScanResponse(BaseModel):
+    name: str
+    weight_g: float
+    calories: float
+    protein: float
+    fat: float
+    carbs: float
+    confidence: float
+    ingredients: List[NutritionIngredient] = Field(default_factory=list)
+
+class KineticsChatLogResponse(BaseModel):
+    id: uuid.UUID
+    module: str
+    role: str
+    message: str
+    log_date: date
+
+    model_config = ConfigDict(from_attributes=True)
+
+class KineticsInsightResponse(BaseModel):
+    id: uuid.UUID
+    module: str
+    period_start: date
+    period_end: date
+    insight_text: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MesocycleGeneratePayload(BaseModel):
+    start_date: date
+    days_of_week: List[int] = Field(..., description="0=ПН, 1=ВТ, ..., 6=ВС")
+    target_split: str = "Push/Pull/Legs"
+    location: str = "Дом"
+    include_deload: bool = True
+    weeks_count: int = 4
+
+class MesocycleExercise(BaseModel):
+    name: str
+    target_muscle_groups: List[str]
+    sets: int
+    reps_or_duration: str
+    rpe_target: int
+    type: str = "hypertrophy"
+
+class MesocycleSession(BaseModel):
+    target_split: str
+    ai_rationale: str
+    exercises: List[MesocycleExercise]
+
+class MesocyclePlan(BaseModel):
+    sessions: List[MesocycleSession]
+
+
+class NutritionMealCreate(BaseModel):
+    meal_date: date
+    time_str: str = "12:00"
+    name: str
+    weight_g: float
+    calories: float
+    protein: float
+    fat: float
+    carbs: float
+    ingredients: List[NutritionIngredient] = Field(default_factory=list)
+
+class NutritionMealResponse(NutritionMealCreate):
+    id: uuid.UUID
+    user_id: uuid.UUID
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+class DailyNutritionSummaryResponse(BaseModel):
+    date: date
+    total_calories: float
+    total_protein: float
+    total_fat: float
+    total_carbs: float
+    meals: List[NutritionMealResponse]
+
+from enum import Enum
+class SetType(str, Enum):
+    WARMUP = "W"
+    NORMAL = "N"
+    DROPSET = "D"
+    FAILURE = "F"
+
+class WorkoutSetCreate(BaseModel):
+    set_number: int
+    set_type: SetType = SetType.NORMAL
+    weight_kg: float = 0.0
+    reps: int = 0
+    rpe: Optional[float] = None
+    is_completed: bool = False
+    previous_weight_kg: Optional[float] = None
+    previous_reps: Optional[int] = None
+
+class WorkoutSetUpdate(BaseModel):
+    weight_kg: Optional[float] = None
+    reps: Optional[int] = None
+    rpe: Optional[float] = None
+    is_completed: Optional[bool] = None
+
+class WorkoutSetResponse(WorkoutSetCreate):
+    id: uuid.UUID
+    exercise_id: uuid.UUID
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class WorkoutDuplicateRequest(BaseModel):
+    target_date: str
+    apply_overload: bool = False
+    overload_increment_kg: float = 1.25
+
+
+
+class OneRMDataPoint(BaseModel):
+    date: str
+    one_rm_kg: float
+
+class ExerciseOneRM(BaseModel):
+    exercise_name: str
+    history: List[OneRMDataPoint]
+
+class TonnageDataPoint(BaseModel):
+    week_start: str
+    muscle_group: str
+    tonnage_kg: float
+
+class OverloadAnalyticsResponse(BaseModel):
+    one_rm_top_exercises: List[ExerciseOneRM]
+    weekly_tonnage: List[TonnageDataPoint]
+
+
+
+class BiometricsCreate(BaseModel):
+    weight_kg: Optional[float] = None
+    sleep_hours: Optional[float] = None
+    fatigue_score: Optional[int] = None
+    notes: Optional[str] = None
+
+class RecoveryDataPoint(BaseModel):
+    date: str
+    tonnage_kg: float
+    calories: int
+    protein_g: int
+    sleep_hours: float
+    fatigue_score: int
+    recovery_score: float
+
+class RecoveryAnalyticsResponse(BaseModel):
+    timeline: List[RecoveryDataPoint]
+    average_sleep: float
+    average_calories: float
+    total_tonnage: float
+    current_recovery_score: float
+

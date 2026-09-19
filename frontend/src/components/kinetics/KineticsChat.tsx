@@ -26,6 +26,43 @@ export const KineticsChat: React.FC<KineticsChatProps> = ({ currentPlan, locatio
     },
   ]);
 
+  React.useEffect(() => {
+    kineticsApi.getChatHistory('coach').then((logs) => {
+      if (logs && logs.length > 0) {
+        const history: Message[] = logs.map((l: any) => ({
+          id: l.id,
+          sender: l.role === 'user' ? 'user' : 'ai',
+          text: l.message
+        }));
+        // Добавляем дефолтное если его не было
+        if (history[0].text !== messages[0].text) {
+          setMessages([messages[0], ...history]);
+        } else {
+          setMessages(history);
+        }
+      }
+    }).catch(console.error);
+  }, []);
+
+  const handleSummarize = async () => {
+    try {
+      setIsTyping(true);
+      const insight = await kineticsApi.summarizeChat('coach');
+      setMessages([
+        {
+          id: Date.now().toString(),
+          sender: 'ai',
+          text: `Итоги подведены! История сброшена.\n\nИнсайт: ${insight.insight_text}`
+        }
+      ]);
+    } catch (e) {
+      console.error(e);
+      setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'ai', text: 'Ошибка суммаризации' }]);
+    } finally {
+      setIsTyping(false);
+    }
+  };
+
   const handleSend = async (textToSend: string) => {
     const cleanText = textToSend.trim();
     if (!cleanText || isTyping) return;
@@ -72,14 +109,26 @@ export const KineticsChat: React.FC<KineticsChatProps> = ({ currentPlan, locatio
           </span>
         </div>
 
-        <button
-          onClick={onOpenJournal}
-          className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-800 text-cyan-300 text-[10px] transition-colors"
-          title="Открыть исследования и научные источники"
-        >
-          <BookOpen className="w-3 h-3 text-cyan-400" />
-          <span>ИСТОЧНИКИ</span>
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={handleSummarize}
+            disabled={isTyping}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-purple-950/50 hover:bg-purple-900/60 border border-purple-800 text-purple-300 text-[10px] transition-colors disabled:opacity-50"
+            title="Подвести итоги диалогов и сбросить чат"
+          >
+            <RefreshCw className={`w-3 h-3 text-purple-400 ${isTyping ? 'animate-spin' : ''}`} />
+            <span>ИТОГИ</span>
+          </button>
+          
+          <button
+            onClick={onOpenJournal}
+            className="flex items-center gap-1 px-2 py-0.5 rounded bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-800 text-cyan-300 text-[10px] transition-colors"
+            title="Открыть исследования и научные источники"
+          >
+            <BookOpen className="w-3 h-3 text-cyan-400" />
+            <span>ИСТОЧНИКИ</span>
+          </button>
+        </div>
       </div>
 
       {/* Лента сообщений */}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { HeartPulse, Flame, Zap, ShieldAlert, CheckCircle2, Circle, RefreshCw, Timer, Layers, ArrowLeftRight, Activity, X, Plus, Sparkles, Bot, BookOpen, Dumbbell } from 'lucide-react';
+import { HeartPulse, Flame, Zap, ShieldAlert, CheckCircle2, Circle, RefreshCw, Timer, Layers, ArrowLeftRight, Activity, X, Plus, Sparkles, Bot, BookOpen, Dumbbell, Download } from 'lucide-react';
 import { kineticsApi, BiometricsLog, WorkoutPlan } from '../api/kinetics';
 import { HoloBodyMap } from '../components/kinetics/HoloBodyMap';
 import { KineticsChat } from '../components/kinetics/KineticsChat';
@@ -8,24 +8,73 @@ import { KineticsCalendar } from '../components/kinetics/KineticsCalendar';
 import { KineticsAnalytics } from '../components/kinetics/KineticsAnalytics';
 import { KineticsNutrition } from '../components/kinetics/KineticsNutrition';
 import { KineticsJournal } from '../components/kinetics/KineticsJournal';
+import { RestTimerWidget } from '../components/kinetics/RestTimerWidget';
+
 import { UserCheck } from 'lucide-react';
 import { AthleteProfileModal } from '../components/kinetics/AthleteProfileModal';
 
-export const KineticsWorkspace: React.FC = () => {
+interface KineticsWorkspaceProps {
+  onClose?: () => void;
+}
+
+export const KineticsWorkspace: React.FC<KineticsWorkspaceProps> = ({ onClose }) => {
   const [biometrics, setBiometrics] = useState<BiometricsLog[]>([]);
   const [currentPlan, setCurrentPlan] = useState<WorkoutPlan | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [selectedDate, setSelectedDate] = useState<Date>(new Date());
   const [activeTab, setActiveTab] = useState<'training' | 'anatomy' | 'calendar' | 'analytics' | 'nutrition' | 'journal'>('training');
-  const [focusGroup, setFocusGroup] = useState('Кор / Плечи / Шея');
   const [isAddExerciseModalOpen, setIsAddExerciseModalOpen] = useState(false);
-  const onClose = () => {};
-  
-  // BodyMap States
   const [selectedSegment, setSelectedSegment] = useState<string | null>(null);
 
-  // Context Selectors
-  const [location, setLocation] = useState<'Дом' | 'Зал'>('Дом');
-  const [splitDay, setSplitDay] = useState('Функционал: Кор / Плечи / Шея');
+  const [restTimerTarget, setRestTimerTarget] = useState<number | null>(null);
+
+  const handleStartRestTimer = (seconds: number) => {
+    setRestTimerTarget(Date.now() + seconds * 1000);
+  };
+
+  const handleAddRestTime = (seconds: number) => {
+    setRestTimerTarget(prev => prev ? prev + seconds * 1000 : null);
+  };
+
+  const handleCloseRestTimer = () => {
+    setRestTimerTarget(null);
+  };
+
+
+  // Plan Settings Form
+  const [viewMode, setViewMode] = useState<'chat' | 'settings'>('chat');
+  const [settingsLocation, setSettingsLocation] = useState<string>('Дом');
+  const [settingsSplit, setSettingsSplit] = useState<string>('Кор / Плечи / Шея');
+  const [settingsRestrictions, setSettingsRestrictions] = useState<string>('');
+  const [isSavingSettings, setIsSavingSettings] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (currentPlan) {
+      setSettingsLocation((currentPlan as any).location || 'Дом');
+      setSettingsSplit((currentPlan as any).target_split || (currentPlan as any).split_day || 'Кор / Плечи / Шея');
+    }
+  }, [currentPlan]);
+
+  const handleSaveSettings = async () => {
+    if (!currentPlan) return;
+    setIsSavingSettings(true);
+    try {
+      const updated = await kineticsApi.updateWorkoutPlanSettings({
+        plan_id: currentPlan.id,
+        location: settingsLocation,
+        target_split: settingsSplit,
+        split_day: settingsSplit,
+        restrictions: settingsRestrictions
+      });
+      setCurrentPlan(updated);
+      setViewMode('chat');
+    } catch (error) {
+      console.error('Ошибка сохранения настроек плана:', error);
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
 
   const [swappingExerciseId, setSwappingExerciseId] = useState<string | null>(null);
   const [swapReason, setSwapReason] = useState<'joint_pain' | 'no_axial_load' | 'equipment_busy' | 'too_intense'>('joint_pain');
@@ -76,28 +125,7 @@ export const KineticsWorkspace: React.FC = () => {
     }
   };
 
-  const SPLIT_PROGRAM = {
-    HOME: [
-      { id: 'home_functional', title: 'Функционал: Кор / Плечи / Шея', target: 'Изометрия, лопаточный блок, шея' },
-      { id: 'home_cardio', title: 'Кардио: Плиометрика / Степпер', target: 'Аэробная выносливость, взрывная сила' },
-      { id: 'home_recovery', title: 'Мобильность: Миофасциальный релиз / Стретчинг', target: 'Восстановление ЦНС' },
-    ],
-    GYM: [
-      { id: 'gym_upper_horiz', title: 'Верх: Горизонтальный вектор (Жим / Тяга в наклоне)', target: 'Грудные, широчайшие' },
-      { id: 'gym_lower_quad', title: 'Низ: Квадрицепс-доминанта (Присед / Гакк)', target: 'Передняя цепь бедра' },
-      { id: 'gym_upper_vert', title: 'Верх: Вертикальный вектор (Подтягивания / Армейский жим)', target: 'Дельты, верх спины' },
-      { id: 'gym_lower_post', title: 'Низ: Тазово-доминантная база (Мертвая тяга)', target: 'Задняя цепь, ягодичные' },
-    ],
-  };
 
-  const handleLocationChange = (newLoc: 'Дом' | 'Зал') => {
-    setLocation(newLoc);
-    const nextDays = newLoc === 'Дом' ? SPLIT_PROGRAM.HOME : SPLIT_PROGRAM.GYM;
-    setSplitDay(nextDays[0].title);
-  };
-
-
-  const availableDays = location === 'Дом' ? SPLIT_PROGRAM.HOME : SPLIT_PROGRAM.GYM;
 
   // Bio Modal
   const [isBioModalOpen, setIsBioModalOpen] = useState(false);
@@ -139,9 +167,9 @@ export const KineticsWorkspace: React.FC = () => {
     setIsGenerating(true);
     try {
       const newPlan = await kineticsApi.generateWorkout({
-        location,
-        split_day: splitDay,
-        target_split: splitDay
+        location: settingsLocation as 'Дом' | 'Зал',
+        split_day: settingsSplit,
+        target_split: settingsSplit
       });
       setCurrentPlan(newPlan);
     } finally {
@@ -201,13 +229,14 @@ export const KineticsWorkspace: React.FC = () => {
 
   // Calculate muscle load based on current plan
   const activeMuscles: string[] = [];
-  if (currentPlan) {
-    currentPlan.exercises.forEach(ex => {
-      ex.target_muscle_groups.forEach(group => {
-        activeMuscles.push(group);
+    if (currentPlan) {
+      currentPlan.exercises.forEach(ex => {
+        const groups = Array.isArray(ex.target_muscle_groups) ? ex.target_muscle_groups : (ex.target_muscle_groups ? [ex.target_muscle_groups] : []);
+        groups.forEach((group: any) => {
+          activeMuscles.push(group as string);
+        });
       });
-    });
-  }
+    }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-2 sm:p-4 select-none">
@@ -254,43 +283,20 @@ export const KineticsWorkspace: React.FC = () => {
             ))}
           </div>
 
-          {/* Правая часть шапки: Параметры тренировки + Синтез + Закрыть */}
+          {/* Правая часть шапки: Синтез + Закрыть */}
           <div className="flex items-center gap-3 shrink-0">
-            {/* Дом / Зал */}
-            <div className="flex bg-[#090d16] p-1 rounded-lg border border-slate-800 text-xs">
-              <button
-                onClick={() => handleLocationChange('Дом')}
-                className={`px-3 py-1 rounded transition-all ${
-                  location === 'Дом'
-                    ? 'bg-cyan-950 text-cyan-300 font-bold border border-cyan-800 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                ДОМ
-              </button>
-              <button
-                onClick={() => handleLocationChange('Зал')}
-                className={`px-3 py-1 rounded transition-all ${
-                  location === 'Зал'
-                    ? 'bg-cyan-950 text-cyan-300 font-bold border border-cyan-800 shadow-[0_0_8px_rgba(6,182,212,0.2)]'
-                    : 'text-slate-400 hover:text-slate-200'
-                }`}
-              >
-                ЗАЛ
-              </button>
-            </div>
 
-            {/* Фокус */}
-            <select
-              value={focusGroup}
-              onChange={(e) => setFocusGroup(e.target.value)}
-              className="bg-[#090d16] border border-slate-800 text-slate-200 text-xs rounded-lg px-3 py-1.5 outline-none focus:border-cyan-500 cursor-pointer"
+            {/* Кнопка экспорта в Excel */}
+            <button
+              onClick={() => {
+                window.open('/api/v1/kinetics/export/excel', '_blank');
+              }}
+              className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-black rounded-lg transition-all shadow-[0_0_15px_rgba(79,70,229,0.4)]"
+              title="Экспорт всех данных в .xlsx"
             >
-              <option value="Кор / Плечи / Шея">Кор / Плечи / Шея</option>
-              <option value="Ноги / Ягодицы / Кор">Ноги / Ягодицы / Кор</option>
-              <option value="Грудь / Спина / Руки">Грудь / Спина / Руки</option>
-              <option value="Фулбоди / Кардио">Фулбоди / Кардио</option>
-            </select>
+              <Download className="w-3.5 h-3.5" />
+              <span>ЭКСПОРТ</span>
+            </button>
 
             {/* Кнопка синтеза */}
             <button
@@ -304,7 +310,13 @@ export const KineticsWorkspace: React.FC = () => {
 
             {/* Крестик закрытия */}
             <button
-              onClick={onClose}
+              onClick={() => {
+                if (onClose) {
+                  onClose();
+                } else {
+                  window.history.back();
+                }
+              }}
               className="p-1.5 text-slate-400 hover:text-slate-100 rounded-lg hover:bg-slate-800 transition-colors ml-1"
               title="Закрыть"
             >
@@ -319,198 +331,293 @@ export const KineticsWorkspace: React.FC = () => {
           <>
             {/* Левая колонка: Протокол */}
             <div className="flex-1 shrink-0 bg-[#090d16] border border-slate-800/80 rounded-xl p-4 flex flex-col font-mono h-full min-w-0">
-              <div className="text-[11px] text-slate-400 font-bold border-b border-slate-800 pb-1.5 flex justify-between items-center mb-2">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-800 mb-4">
                 <div className="flex items-center gap-2">
-                  <span>ПРОТОКОЛ: {currentPlan?.target_split?.toUpperCase() || 'НЕТ АКТИВНОГО ПЛАНА'}</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-cyan-950 text-cyan-300 border border-cyan-800">
-                    ИНТЕРАКТИВНЫЙ РЕЖИМ
-                  </span>
+                  <span className="text-xs font-mono uppercase tracking-wider text-slate-400">ПРОТОКОЛ:</span>
+                  <span className="text-xs font-mono text-cyan-400 font-bold">{settingsSplit}</span>
+                  
+                  {/* Переключатель режимов */}
+                  <div className="flex items-center bg-slate-900/80 p-0.5 rounded border border-slate-700 ml-3">
+                    <button
+                      onClick={() => setViewMode('chat')}
+                      className={`px-2.5 py-1 text-[11px] font-mono rounded transition-colors ${
+                        viewMode === 'chat'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      УПРАЖНЕНИЯ
+                    </button>
+                    <button
+                      onClick={() => setViewMode('settings')}
+                      className={`px-2.5 py-1 text-[11px] font-mono rounded transition-colors flex items-center gap-1 ${
+                        viewMode === 'settings'
+                          ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                          : 'text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <span>⚙</span> ПАРАМЕТРЫ ПЛАНА
+                    </button>
+                  </div>
                 </div>
+
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={async () => {
-                      if (!currentPlan) return;
-                      const name = prompt('Название нового упражнения:');
-                      if (name) {
-                        const added = await kineticsApi.addExercise(currentPlan.id, name);
-                        setCurrentPlan({
-                          ...currentPlan,
-                          exercises: [...currentPlan.exercises, added]
-                        });
-                      }
-                    }}
-                    className="px-2 py-0.5 text-[10px] bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 rounded hover:bg-cyan-500/20"
-                  >
-                    + ДОБАВИТЬ
-                  </button>
+                  {viewMode === 'chat' && (
+                    <button
+                      onClick={async () => {
+                        if (!currentPlan) return;
+                        const name = prompt('Название нового упражнения:');
+                        if (name) {
+                          const added = await kineticsApi.addExercise(currentPlan.id, name);
+                          setCurrentPlan({
+                            ...currentPlan,
+                            exercises: [...currentPlan.exercises, added]
+                          });
+                        }
+                      }}
+                      className="px-2 py-0.5 text-[10px] bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 rounded hover:bg-cyan-500/20"
+                    >
+                      + ДОБАВИТЬ
+                    </button>
+                  )}
                   <span className="text-[10px] text-cyan-400">{currentPlan?.exercises?.length || 0} УПР.</span>
                 </div>
               </div>
 
-              {(!currentPlan || currentPlan.exercises.length === 0) ? (
-                <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-cyan-950 rounded-xl p-8 bg-[#090d16]/40 font-mono text-center my-auto">
-                  <div className="w-12 h-12 rounded-full bg-cyan-950/60 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mb-3 shadow-[0_0_20px_rgba(6,182,212,0.2)]">
-                    <Dumbbell className="w-6 h-6" />
-                  </div>
-                  <div className="text-sm font-bold text-slate-200">ПРОТОКОЛ НА СЕГОДНЯ НЕ СФОРМИРОВАН</div>
-                  <div className="text-xs text-slate-500 max-w-md mt-1 leading-relaxed">
-                    Система готова рассчитать биомеханический объем под параметры атлета ({location.toUpperCase()}, фокус: {focusGroup}).
-                  </div>
-              
-                  <div className="flex items-center gap-3 mt-5">
-                    <button
-                      onClick={handleGeneratePlan}
-                      disabled={isGenerating}
-                      className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
-                    >
-                      <Sparkles className="w-4 h-4" />
-                      СГЕНЕРИРОВАТЬ ПЛАН ЧЕРЕЗ AI
-                    </button>
-                    <button
-                      onClick={() => setIsAddExerciseModalOpen(true)}
-                      className="px-4 py-2 bg-[#030712] hover:bg-slate-800 border border-slate-700 text-slate-300 font-bold rounded-lg text-xs flex items-center gap-2 transition-all"
-                    >
-                      <Plus className="w-4 h-4" />
-                      ДОБАВИТЬ ВРУЧНУЮ
-                    </button>
-                  </div>
-              
-                  <div className="mt-6 pt-4 border-t border-slate-800/80 flex items-center gap-4 text-xs text-slate-400">
-                    <span>База знаний:</span>
-                    <button
-                      onClick={() => setActiveTab('journal')}
-                      className="text-cyan-400 hover:underline flex items-center gap-1 font-bold"
-                    >
-                      <BookOpen className="w-3.5 h-3.5" /> Открыть исследования и источники →
-                    </button>
-                  </div>
-                </div>
-              ) : (
-              <div className="flex-1 overflow-y-auto mt-1 custom-scrollbar pr-2">
-                {currentPlan?.exercises?.map((item) => (
-                  <div
-                    key={item.id}
-                    className={`flex flex-col border-b border-slate-800/40 transition-colors ${
-                      flashingExerciseId === item.id ? 'bg-cyan-900/60 shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'hover:bg-slate-800/30'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between py-2 px-1">
-                      <div className="flex items-center gap-2 flex-1 min-w-0">
-                        <button onClick={() => handleToggleExercise(item.id, item.is_completed)}>
-                          {item.is_completed ? <CheckCircle2 className="w-4 h-4 text-cyan-500" /> : <Circle className="w-4 h-4 text-slate-600" />}
-                        </button>
-                        <span className={`text-xs ${item.is_completed ? 'line-through text-slate-500' : 'text-slate-200 font-bold'}`}>
-                          {item.exercise_name}
-                        </span>
+              {viewMode === 'chat' ? (
+                <>
+                  {(!currentPlan || currentPlan.exercises.length === 0) ? (
+                    <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-cyan-950 rounded-xl p-8 bg-[#090d16]/40 font-mono text-center my-auto">
+                      <div className="w-12 h-12 rounded-full bg-cyan-950/60 border border-cyan-500/30 flex items-center justify-center text-cyan-400 mb-3 shadow-[0_0_20px_rgba(6,182,212,0.2)]">
+                        <Dumbbell className="w-6 h-6" />
                       </div>
-
-                      <div className="flex items-center gap-2 text-[10px] text-slate-400">
-                        <span>{item.sets} × {item.reps_or_duration}</span>
-                        <span className="text-cyan-400">RPE {item.rpe_target ?? 7}</span>
-
-                        {/* Кнопка альтернативы */}
+                      <div className="text-sm font-bold text-slate-200">ПРОТОКОЛ НА СЕГОДНЯ НЕ СФОРМИРОВАН</div>
+                      <div className="text-xs text-slate-500 max-w-md mt-1 leading-relaxed">
+                        Система готова рассчитать биомеханический объем под параметры атлета ({settingsLocation.toUpperCase()}, фокус: {settingsSplit}).
+                      </div>
+                  
+                      <div className="flex items-center gap-3 mt-5">
                         <button
-                          type="button"
-                          title="Подобрать безопасную альтернативу"
-                          onClick={() => handleOpenSwapPopover(item.id)}
-                          className={`p-1 rounded transition-all ${
-                            swappingExerciseId === item.id
-                              ? 'bg-cyan-500 text-slate-950 font-bold shadow-[0_0_8px_rgba(6,182,212,0.5)]'
-                              : 'text-cyan-400 hover:bg-cyan-950/60 border border-cyan-500/30'
-                          }`}
+                          onClick={handleGeneratePlan}
+                          disabled={isGenerating}
+                          className="px-4 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded-lg text-xs flex items-center gap-2 transition-all shadow-[0_0_15px_rgba(6,182,212,0.3)]"
                         >
-                          <ArrowLeftRight className="w-3.5 h-3.5" />
+                          <Sparkles className="w-4 h-4" />
+                          СГЕНЕРИРОВАТЬ ПЛАН ЧЕРЕЗ AI
                         </button>
-
                         <button
-                          onClick={() => kineticsApi.deleteExercise(item.id).then(() => {
-                            if (currentPlan) setCurrentPlan({ ...currentPlan, exercises: currentPlan.exercises.filter(e => e.id !== item.id) });
-                          })}
-                          className="text-slate-600 hover:text-rose-400 px-1"
+                          onClick={() => setIsAddExerciseModalOpen(true)}
+                          className="px-4 py-2 bg-[#030712] hover:bg-slate-800 border border-slate-700 text-slate-300 font-bold rounded-lg text-xs flex items-center gap-2 transition-all"
                         >
-                          ✕
+                          <Plus className="w-4 h-4" />
+                          ДОБАВИТЬ ВРУЧНУЮ
+                        </button>
+                      </div>
+                  
+                      <div className="mt-6 pt-4 border-t border-slate-800/80 flex items-center gap-4 text-xs text-slate-400">
+                        <span>База знаний:</span>
+                        <button
+                          onClick={() => setActiveTab('journal')}
+                          className="text-cyan-400 hover:underline flex items-center gap-1 font-bold"
+                        >
+                          <BookOpen className="w-3.5 h-3.5" /> Открыть исследования и источники →
                         </button>
                       </div>
                     </div>
+                  ) : (
+                  <div className="flex-1 overflow-y-auto mt-1 custom-scrollbar pr-2">
+                    {currentPlan?.exercises?.map((item) => (
+                      <div
+                        key={item.id}
+                        className={`flex flex-col border-b border-slate-800/40 transition-colors ${
+                          flashingExerciseId === item.id ? 'bg-cyan-900/60 shadow-[0_0_15px_rgba(6,182,212,0.4)]' : 'hover:bg-slate-800/30'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between py-2 px-1">
+                          <div className="flex items-center gap-2 flex-1 min-w-0">
+                            <button onClick={() => handleToggleExercise(item.id, item.is_completed)}>
+                              {item.is_completed ? <CheckCircle2 className="w-4 h-4 text-cyan-500" /> : <Circle className="w-4 h-4 text-slate-600" />}
+                            </button>
+                            <span className={`text-xs ${item.is_completed ? 'line-through text-slate-500' : 'text-slate-200 font-bold'}`}>
+                              {item.exercise_name}
+                            </span>
+                          </div>
 
-                    {/* Всплывающий Popover выбора альтернативы */}
-                    {swappingExerciseId === item.id && (
-                      <div className="p-3 my-1.5 bg-[#020617] border border-cyan-500/40 rounded-lg space-y-2.5 font-mono shadow-[0_0_20px_rgba(6,182,212,0.15)]">
-                        <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-1.5">
-                          <span className="text-cyan-300 font-bold flex items-center gap-1.5">
-                            <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
-                            AI ADVISOR // ПОДБОР БЕЗОПАСНОЙ АЛЬТЕРНАТИВЫ
-                          </span>
-                          <button onClick={() => setSwappingExerciseId(null)} className="text-slate-500 hover:text-slate-300">✕</button>
-                        </div>
+                          <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                            <span>{item.sets} × {item.reps_or_duration}</span>
+                            <span className="text-cyan-400">RPE {item.rpe_target ?? 7}</span>
 
-                        {/* Причина замены */}
-                        <div className="flex flex-wrap gap-1.5 text-[10px]">
-                          {[
-                            { id: 'joint_pain', label: 'Боль в суставах' },
-                            { id: 'no_axial_load', label: 'Исключить осевую' },
-                            { id: 'equipment_busy', label: 'Тренажер занят' },
-                            { id: 'too_intense', label: 'Слишком тяжело' }
-                          ].map(r => (
+                            {/* Кнопка альтернативы */}
                             <button
-                              key={r.id}
                               type="button"
-                              onClick={async () => {
-                                setSwapReason(r.id as any);
-                                setIsLoadingAlternatives(true);
-                                const alts = await kineticsApi.getExerciseAlternatives(item.id, r.id as any);
-                                setAlternatives(alts);
-                                setIsLoadingAlternatives(false);
-                              }}
-                              className={`px-2 py-0.5 rounded border transition-all ${
-                                swapReason === r.id
-                                  ? 'bg-cyan-950 text-cyan-300 border-cyan-500 font-bold'
-                                  : 'border-slate-800 text-slate-400 hover:text-slate-200'
+                              title="Подобрать безопасную альтернативу"
+                              onClick={() => handleOpenSwapPopover(item.id)}
+                              className={`p-1 rounded transition-all ${
+                                swappingExerciseId === item.id
+                                  ? 'bg-cyan-500 text-slate-950 font-bold shadow-[0_0_8px_rgba(6,182,212,0.5)]'
+                                  : 'text-cyan-400 hover:bg-cyan-950/60 border border-cyan-500/30'
                               }`}
                             >
-                              {r.label}
+                              <ArrowLeftRight className="w-3.5 h-3.5" />
                             </button>
-                          ))}
+
+                            <button
+                              onClick={() => kineticsApi.deleteExercise(item.id).then(() => {
+                                if (currentPlan) setCurrentPlan({ ...currentPlan, exercises: currentPlan.exercises.filter(e => e.id !== item.id) });
+                              })}
+                              className="text-slate-600 hover:text-rose-400 px-1"
+                            >
+                              ✕
+                            </button>
+                          </div>
                         </div>
 
-                        {/* Карточки сгенерированных замен */}
-                        <div className="space-y-2 pt-1">
-                          {isLoadingAlternatives ? (
-                            <div className="text-center py-3 text-xs text-cyan-400 animate-pulse">
-                              Анализ кинематической цепи и биомеханики...
+                        {/* Всплывающий Popover выбора альтернативы */}
+                        {swappingExerciseId === item.id && (
+                          <div className="p-3 my-1.5 bg-[#020617] border border-cyan-500/40 rounded-lg space-y-2.5 font-mono shadow-[0_0_20px_rgba(6,182,212,0.15)]">
+                            <div className="flex items-center justify-between text-xs border-b border-slate-800 pb-1.5">
+                              <span className="text-cyan-300 font-bold flex items-center gap-1.5">
+                                <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+                                AI ADVISOR // ПОДБОР БЕЗОПАСНОЙ АЛЬТЕРНАТИВЫ
+                              </span>
+                              <button onClick={() => setSwappingExerciseId(null)} className="text-slate-500 hover:text-slate-300">✕</button>
                             </div>
-                          ) : alternatives.map((alt, idx) => (
-                            <div key={idx} className="p-2.5 bg-[#090d16] border border-slate-800 rounded flex justify-between items-start gap-2">
-                              <div className="flex-1">
-                                <div className="text-xs font-bold text-slate-100">{alt.exercise_name}</div>
-                                <div className="text-[10px] text-cyan-400 mt-0.5">
-                                  {alt.sets} сета × {alt.reps_or_duration} | Целевой RPE: {alt.rpe_target}
-                                </div>
-                                <div className="text-[10px] text-slate-400 mt-1 leading-relaxed bg-[#020617] p-1.5 rounded border border-slate-800/80">
-                                  {alt.biomechanical_rationale}
-                                </div>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleApplySwap(item.id, alt)}
-                                className="px-2.5 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded text-xs font-bold transition-all shadow-[0_0_10px_rgba(6,182,212,0.2)] shrink-0"
-                              >
-                                Применить
-                              </button>
+
+                            {/* Причина замены */}
+                            <div className="flex flex-wrap gap-1.5 text-[10px]">
+                              {[
+                                { id: 'joint_pain', label: 'Боль в суставах' },
+                                { id: 'no_axial_load', label: 'Исключить осевую' },
+                                { id: 'equipment_busy', label: 'Тренажер занят' },
+                                { id: 'too_intense', label: 'Слишком тяжело' }
+                              ].map(r => (
+                                <button
+                                  key={r.id}
+                                  type="button"
+                                  onClick={async () => {
+                                    setSwapReason(r.id as any);
+                                    setIsLoadingAlternatives(true);
+                                    const alts = await kineticsApi.getExerciseAlternatives(item.id, r.id as any);
+                                    setAlternatives(alts);
+                                    setIsLoadingAlternatives(false);
+                                  }}
+                                  className={`px-2 py-0.5 rounded border transition-all ${
+                                    swapReason === r.id
+                                      ? 'bg-cyan-950 text-cyan-300 border-cyan-500 font-bold'
+                                      : 'border-slate-800 text-slate-400 hover:text-slate-200'
+                                  }`}
+                                >
+                                  {r.label}
+                                </button>
+                              ))}
                             </div>
-                          ))}
-                        </div>
+
+                            {/* Карточки сгенерированных замен */}
+                            <div className="space-y-2 pt-1">
+                              {isLoadingAlternatives ? (
+                                <div className="text-center py-3 text-xs text-cyan-400 animate-pulse">
+                                  Анализ кинематической цепи и биомеханики...
+                                </div>
+                              ) : alternatives.map((alt, idx) => (
+                                <div key={idx} className="p-2.5 bg-[#090d16] border border-slate-800 rounded flex justify-between items-start gap-2">
+                                  <div className="flex-1">
+                                    <div className="text-xs font-bold text-slate-100">{alt.exercise_name}</div>
+                                    <div className="text-[10px] text-cyan-400 mt-0.5">
+                                      {alt.sets} сета × {alt.reps_or_duration} | Целевой RPE: {alt.rpe_target}
+                                    </div>
+                                    <div className="text-[10px] text-slate-400 mt-1 leading-relaxed bg-[#020617] p-1.5 rounded border border-slate-800/80">
+                                      {alt.biomechanical_rationale}
+                                    </div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApplySwap(item.id, alt)}
+                                    className="px-2.5 py-1.5 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded text-xs font-bold transition-all shadow-[0_0_10px_rgba(6,182,212,0.2)] shrink-0"
+                                  >
+                                    Применить
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    ))}
                   </div>
-                ))}
-              </div>
+                  )}
+                </>
+              ) : (
+                <div className="p-4 bg-slate-900/50 border border-slate-800 rounded-lg space-y-4 font-mono text-xs overflow-y-auto custom-scrollbar">
+                  <div>
+                    <label className="block text-slate-400 mb-1">ЛОКАЦИЯ ТРЕНИРОВКИ</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {['Дом', 'Зал'].map((loc) => (
+                        <button
+                          key={loc}
+                          type="button"
+                          onClick={() => setSettingsLocation(loc)}
+                          className={`py-2 text-center rounded border transition-all ${
+                            settingsLocation === loc
+                              ? 'bg-cyan-950/40 border-cyan-500 text-cyan-300'
+                              : 'bg-slate-950 border-slate-800 text-slate-400 hover:border-slate-700'
+                          }`}
+                        >
+                          {loc}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 mb-1">АКТИВНЫЙ СПЛИТ</label>
+                    <select
+                      value={settingsSplit}
+                      onChange={(e) => setSettingsSplit(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-slate-200 focus:border-cyan-500 outline-none"
+                    >
+                      <option value="Кор / Плечи / Шея">Кор / Плечи / Шея</option>
+                      <option value="Грудь / Трицепс">Грудь / Трицепс</option>
+                      <option value="Спина / Бицепс">Спина / Бицепс</option>
+                      <option value="Ноги / Функционал">Ноги / Функционал</option>
+                      <option value="Фулбоди">Фулбоди</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 mb-1">ОГРАНИЧЕНИЯ И ЗАМЕТКИ ДЛЯ ИИ</label>
+                    <textarea
+                      value={settingsRestrictions}
+                      onChange={(e) => setSettingsRestrictions(e.target.value)}
+                      placeholder="Например: без осевой нагрузки на поясницу, легкий дискомфорт в левом плече..."
+                      rows={3}
+                      className="w-full bg-slate-950 border border-slate-800 rounded p-2 text-slate-200 placeholder-slate-600 focus:border-cyan-500 outline-none resize-none"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2 border-t border-slate-800/80">
+                    <button
+                      type="button"
+                      onClick={() => setViewMode('chat')}
+                      className="px-4 py-2 rounded border border-slate-700 text-slate-400 hover:text-slate-200"
+                    >
+                      ОТМЕНА
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveSettings}
+                      disabled={isSavingSettings}
+                      className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-slate-950 font-bold rounded transition-colors disabled:opacity-50"
+                    >
+                      {isSavingSettings ? 'СОХРАНЕНИЕ...' : 'ПРИМЕНИТЬ ПАРАМЕТРЫ'}
+                    </button>
+                  </div>
+                </div>
               )}
             </div>
 
             {/* Правая колонка: Чат (компактный w-72) */}
             <div className="w-72 shrink-0 h-full">
-              <KineticsChat currentPlan={currentPlan} location={location} onPlanMutated={setCurrentPlan} onOpenJournal={() => setActiveTab('journal')} />
+              <KineticsChat currentPlan={currentPlan} location={settingsLocation as 'Дом' | 'Зал'} onPlanMutated={setCurrentPlan} onOpenJournal={() => setActiveTab('journal')} />
             </div>
           </>
         )}
@@ -600,15 +707,16 @@ export const KineticsWorkspace: React.FC = () => {
                   };
 
                   const segData: any = latestBio?.segment_data?.[bioKey] || defaultSegments[bioKey] || defaultSegments.torso;
-                  const relatedExs = currentPlan?.exercises?.filter(ex => 
-                    ex.target_muscle_groups.some(m => m.toLowerCase().includes(selectedSegment.split('_')[0]))
-                  ) || [];
+                    const relatedExs = currentPlan?.exercises?.filter(ex => {
+                      const groups = Array.isArray(ex.target_muscle_groups) ? ex.target_muscle_groups : (ex.target_muscle_groups ? [ex.target_muscle_groups] : []);
+                      return groups.some((m: string) => m.toLowerCase().includes(selectedSegment.split('_')[0]));
+                    }) || [];
 
                   return (
                     <SegmentDetailedView
                       segmentId={selectedSegment || 'torso'}
                       exercises={currentPlan?.exercises || []}
-                      location={location}
+                      location={settingsLocation as 'Дом' | 'Зал'}
                       onBack={() => setSelectedSegment(null)}
                     />
                   );
@@ -631,7 +739,11 @@ export const KineticsWorkspace: React.FC = () => {
 
         {activeTab === 'calendar' && (
           <div className="flex-1 h-full min-w-0">
-            <KineticsCalendar />
+            <KineticsCalendar 
+              selectedDate={selectedDate} 
+              onDateSelect={setSelectedDate} 
+              onStartTimer={handleStartRestTimer} 
+            />
           </div>
         )}
 
@@ -643,7 +755,7 @@ export const KineticsWorkspace: React.FC = () => {
 
         {activeTab === 'nutrition' && (
           <div className="flex-1 h-full min-w-0">
-            <KineticsNutrition />
+            <KineticsNutrition selectedDate={selectedDate} />
           </div>
         )}
 
@@ -653,11 +765,7 @@ export const KineticsWorkspace: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'calendar' && (
-          <div className="flex-1 h-full min-w-0">
-            <KineticsCalendar />
-          </div>
-        )}
+
       </div>
 
       {isBioModalOpen && (
@@ -804,6 +912,12 @@ export const KineticsWorkspace: React.FC = () => {
         onProfileUpdated={loadDashboardData}
       />
       </div>
+
+      <RestTimerWidget 
+        targetTime={restTimerTarget} 
+        onClose={handleCloseRestTimer} 
+        onAddTime={handleAddRestTime} 
+      />
     </div>
   );
 };

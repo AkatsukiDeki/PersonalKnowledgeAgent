@@ -177,8 +177,9 @@ export const SegmentDetailedView: React.FC<SegmentDetailedViewProps> = ({
   const currentMeta = EXTENDED_KNOWLEDGE_BASE[activeZone] || EXTENDED_KNOWLEDGE_BASE.quads;
   const currentSite = caliperSites.find(s => s.id === selectedSiteId) || caliperSites[0];
 
-  const matchedExercises = exercises.filter(ex =>
-    ex.target_muscle_groups.some(m => {
+  const matchedExercises = exercises.filter(ex => {
+    const groups = Array.isArray(ex.target_muscle_groups) ? ex.target_muscle_groups : (ex.target_muscle_groups ? [ex.target_muscle_groups] : []);
+    return groups.some((m: string) => {
       const ml = m.toLowerCase();
       if (activeZone === 'glutes' && (ml.includes('ягодиц') || ml.includes('мост') || ml.includes('тяга') || ml.includes('выпад'))) return true;
       if (activeZone === 'hamstrings' && (ml.includes('бицепс бедра') || ml.includes('хамстринг') || ml.includes('тяга'))) return true;
@@ -191,8 +192,8 @@ export const SegmentDetailedView: React.FC<SegmentDetailedViewProps> = ({
       if (activeZone === 'triceps' && (ml.includes('трицепс') || ml.includes('отжимания'))) return true;
       if (activeZone === 'delts' && (ml.includes('плеч') || ml.includes('дельт'))) return true;
       return false;
-    })
-  );
+    });
+  });
 
   const isLeg = normSeg.includes('leg') || normSeg.includes('thigh') || normSeg.includes('glute');
   const isArm = normSeg.includes('arm') || normSeg.includes('hand');

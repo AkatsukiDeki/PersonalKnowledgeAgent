@@ -159,9 +159,9 @@ export const AthleteProfileModal: React.FC<Props> = ({ isOpen, onClose, onProfil
             <div className="space-y-4">
               <div>
                 <label className="block text-slate-400 mb-1">Отстающие мышечные группы (через запятую)</label>
-                <input
-                  type="text"
-                  value={profile.lagging_muscles.join(', ')}
+                  <input
+                    type="text"
+                    value={Array.isArray(profile.lagging_muscles) ? profile.lagging_muscles.join(', ') : (profile.lagging_muscles || '')}
                   onChange={(e) => setProfile({ ...profile, lagging_muscles: e.target.value.split(',').map(s => s.trim()).filter(Boolean) })}
                   className="w-full bg-[#020617] border border-slate-800 rounded p-2.5 text-slate-200 outline-none focus:border-cyan-500"
                   placeholder="Грудь, Спина, Ноги"

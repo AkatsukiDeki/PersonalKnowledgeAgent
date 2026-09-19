@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Utensils, Flame, Plus, Trash2, Camera, Edit3, Check, X, Loader2, ShieldCheck, Sparkles, Send } from 'lucide-react';
+import { Utensils, Flame, Plus, Trash2, Camera, Edit3, Check, X, Loader2, ShieldCheck, Sparkles, Send, RefreshCw } from 'lucide-react';
 import { kineticsApi, ScannedMealData } from '../../api/kinetics';
 
 interface MealItem {
@@ -12,13 +12,28 @@ interface MealItem {
   time: string;
 }
 
-export const KineticsNutrition: React.FC = () => {
+export const KineticsNutrition: React.FC<{ selectedDate?: Date }> = ({ selectedDate = new Date() }) => {
   const [targetCalories] = useState(2200);
-  const [meals, setMeals] = useState<MealItem[]>([
-    { id: '1', name: 'Овсянка на воде + яйца вареные (3 шт)', calories: 480, protein: 32, fat: 16, carbs: 52, time: '08:30' },
-    { id: '2', name: 'Куриное филе гриль + гречка + овощной салат', calories: 650, protein: 55, fat: 12, carbs: 70, time: '13:00' },
-    { id: '3', name: 'Творог 5% + ягоды + миндаль (20г)', calories: 410, protein: 36, fat: 14, carbs: 28, time: '18:30' }
-  ]);
+  const [meals, setMeals] = useState<any[]>([]);
+  const [isLoadingMeals, setIsLoadingMeals] = useState(true);
+
+  const fetchMeals = async () => {
+    setIsLoadingMeals(true);
+    setMeals([]);
+    try {
+      const dateStr = selectedDate.toISOString().split('T')[0];
+      const data = await kineticsApi.getDailyNutrition(dateStr);
+      setMeals(data.meals);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsLoadingMeals(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchMeals();
+  }, [selectedDate]);
 
   // Inline edit state
   const [editingMealId, setEditingMealId] = useState<string | null>(null);
@@ -46,17 +61,33 @@ export const KineticsNutrition: React.FC = () => {
     { role: 'assistant', text: 'Анализ рациона активирован. Жду данные по приемам пищи или вопросы по балансу макросов.' }
   ]);
 
-  const totalCals = meals.reduce((acc, m) => acc + m.calories, 0);
-  const totalProt = meals.reduce((acc, m) => acc + m.protein, 0);
-  const totalFat = meals.reduce((acc, m) => acc + m.fat, 0);
-  const totalCarbs = meals.reduce((acc, m) => acc + m.carbs, 0);
+  useEffect(() => {
+    kineticsApi.getChatHistory('nutrition').then((logs) => {
+      if (logs && logs.length > 0) {
+        const history: { role: 'user' | 'assistant', text: string }[] = logs.map((l: any) => ({
+          role: l.role === 'user' ? 'user' : 'assistant',
+          text: l.message
+        }));
+        if (history[0].text !== chatHistory[0].text) {
+          setChatHistory([chatHistory[0], ...history]);
+        } else {
+          setChatHistory(history);
+        }
+      }
+    }).catch(console.error);
+  }, []);
+
+  const totalCals = Math.round(meals.reduce((acc, m) => acc + m.calories, 0));
+  const totalProt = parseFloat(meals.reduce((acc, m) => acc + m.protein, 0).toFixed(1));
+  const totalFat = parseFloat(meals.reduce((acc, m) => acc + m.fat, 0).toFixed(1));
+  const totalCarbs = parseFloat(meals.reduce((acc, m) => acc + m.carbs, 0).toFixed(1));
 
   useEffect(() => {
     kineticsApi.logBiometrics({
       calories_in: totalCals,
       protein_g: totalProt,
       notes: "Авто-синхронизация КБЖУ из нутрициолога"
-    }).catch(err => console.error("Failed to sync biometrics", err));
+    } as any).catch(err => console.error("Failed to sync biometrics", err));
   }, [totalCals, totalProt]);
 
   const handleStartEdit = (meal: MealItem) => {
@@ -93,18 +124,24 @@ export const KineticsNutrition: React.FC = () => {
     }
   };
 
-  const handleApplyScannedMeal = () => {
+  const handleApplyScannedMeal = async () => {
     if (!scannedResult) return;
-    const item: MealItem = {
-      id: Date.now().toString(),
-      name: scannedResult.name,
-      calories: scannedResult.calories,
-      protein: scannedResult.protein,
-      fat: scannedResult.fat,
-      carbs: scannedResult.carbs,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    setMeals(prev => [...prev, item]);
+    try {
+      const dateStr = selectedDate.toISOString().split('T')[0];
+      const payload = {
+        meal_date: dateStr,
+        time_str: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        name: scannedResult.name,
+        weight_g: scannedResult.weight_g ?? scannedResult.portion_weight_g ?? 200,
+        calories: scannedResult.calories,
+        protein: scannedResult.protein,
+        fat: scannedResult.fat,
+        carbs: scannedResult.carbs,
+        ingredients: scannedResult.ingredients_detected?.map((i: any) => ({ name: i, weight_g: 0, protein: 0, fat: 0, carbs: 0 })) || []
+      };
+      await kineticsApi.addNutritionMeal(payload);
+      await fetchMeals();
+    } catch(e) { console.error(e); }
     setScannedResult(null);
     setPreviewUrl(null);
   };
@@ -131,6 +168,24 @@ export const KineticsNutrition: React.FC = () => {
     setNewMealProt('');
   };
 
+  const handleSummarize = async () => {
+    try {
+      setIsSending(true);
+      const insight = await kineticsApi.summarizeChat('nutrition');
+      setChatHistory([
+        {
+          role: 'assistant',
+          text: `Итоги подведены! История сброшена.\n\nИнсайт: ${insight.insight_text}`
+        }
+      ]);
+    } catch (e) {
+      console.error(e);
+      setChatHistory(prev => [...prev, { role: 'assistant', text: 'Ошибка суммаризации' }]);
+    } finally {
+      setIsSending(false);
+    }
+  };
+
   const handleSendNutritionMessage = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!chatInput.trim()) return;
@@ -150,27 +205,41 @@ export const KineticsNutrition: React.FC = () => {
       
       let responseText = data.response;
       
-      // Check for MEAL_ACTION mutation block
-      const mutationRegex = /<<<MEAL_ACTION\s*([\s\S]*?)\s*MEAL_ACTION>>>/;
-      const match = responseText.match(mutationRegex);
-      if (match) {
+      // Check for MEAL_ACTION mutation blocks
+      const mutationRegex = /<<<MEAL_ACTION\s*([\s\S]*?)\s*MEAL_ACTION>>>/g;
+      let match;
+      while ((match = mutationRegex.exec(responseText)) !== null) {
         try {
           const mealData = JSON.parse(match[1]);
-          const newMeal: MealItem = {
-            id: Date.now().toString(),
-            name: mealData.name,
-            calories: mealData.calories,
-            protein: mealData.protein,
-            fat: mealData.fat,
-            carbs: mealData.carbs,
-            time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-          };
-          setMeals(prev => [...prev, newMeal]);
+          const rawAction = (mealData.action || 'add').toLowerCase();
+          const action = (rawAction === 'remove' || rawAction === 'delete' || rawAction === 'удалить') ? 'remove' : 
+                         (rawAction === 'modify' || rawAction === 'update' || rawAction === 'изменить') ? 'modify' : 'add';
+          
+          if (action === 'remove') {
+            if (mealData.id) {
+              setMeals(prev => prev.filter(m => m.id !== mealData.id));
+            } else if (mealData.name) {
+              setMeals(prev => prev.filter(m => !m.name.toLowerCase().includes(mealData.name.toLowerCase()) && !mealData.name.toLowerCase().includes(m.name.toLowerCase())));
+            }
+          } else if (action === 'modify' && mealData.id) {
+            setMeals(prev => prev.map(m => m.id === mealData.id ? { ...m, ...mealData } : m));
+          } else if (action === 'add' || (!mealData.id && mealData.name && mealData.calories !== undefined)) {
+            const newMeal: MealItem = {
+              id: Date.now().toString() + Math.random().toString(36).substring(7),
+              name: mealData.name || 'Новый прием пищи',
+              calories: mealData.calories || 0,
+              protein: mealData.protein || 0,
+              fat: mealData.fat || 0,
+              carbs: mealData.carbs || 0,
+              time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            };
+            setMeals(prev => [...prev, newMeal]);
+          }
         } catch (e) {
           console.error("Failed to parse MEAL_ACTION JSON", e);
         }
-        responseText = responseText.replace(mutationRegex, '').trim();
       }
+      responseText = responseText.replace(/<<<MEAL_ACTION\s*([\s\S]*?)\s*MEAL_ACTION>>>/g, '').trim();
 
       setChatHistory(prev => [...prev, { role: 'assistant', text: responseText }]);
     } catch (error) {
@@ -285,7 +354,7 @@ export const KineticsNutrition: React.FC = () => {
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-bold text-slate-100 truncate">{scannedResult.name}</div>
                 <div className="text-[10px] text-slate-500 mt-0.5 leading-relaxed">
-                  {scannedResult.ingredients_detected.join(' · ')}
+                  {Array.isArray(scannedResult.ingredients_detected) ? scannedResult.ingredients_detected.join(' · ') : (scannedResult.ingredients_detected || '')}
                 </div>
 
                 {/* КБЖУ */}
@@ -308,7 +377,7 @@ export const KineticsNutrition: React.FC = () => {
                     <div className="text-[9px] text-slate-500">углеводы</div>
                   </div>
                   <div className="text-center">
-                    <div className="text-sm font-bold text-slate-400">{scannedResult.portion_weight_g}г</div>
+                    <div className="text-sm font-bold text-slate-400">{scannedResult.weight_g ?? scannedResult.portion_weight_g ?? 200}г</div>
                     <div className="text-[9px] text-slate-500">порция</div>
                   </div>
                 </div>
@@ -480,8 +549,18 @@ export const KineticsNutrition: React.FC = () => {
           <span className="text-[10px] text-cyan-400">{meals.length} ПРИЕМА</span>
         </div>
 
+        
         <div className="flex-1 overflow-y-auto mt-2 space-y-1.5 pr-1 custom-scrollbar">
-          {meals.map((meal) => {
+          {isLoadingMeals ? (
+            <div className="text-center py-8 text-slate-500 text-xs flex flex-col items-center">
+              <Loader2 className="w-5 h-5 animate-spin mb-2" />
+              Загрузка рациона...
+            </div>
+          ) : meals.length === 0 ? (
+            <div className="text-center py-8 text-slate-500 text-xs">Нет приемов пищи за эту дату</div>
+          ) : (
+            meals.map((meal) => {
+
             const isEditing = editingMealId === meal.id;
 
             return (
@@ -586,7 +665,7 @@ export const KineticsNutrition: React.FC = () => {
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
                       <button
-                        onClick={() => setMeals(meals.filter(m => m.id !== meal.id))}
+                        onClick={() => kineticsApi.deleteNutritionMeal(meal.id).then(fetchMeals).catch(console.error)}
                         className="p-1.5 text-slate-600 hover:text-rose-400 transition-colors rounded hover:bg-rose-950/20"
                         title="Удалить"
                       >
@@ -597,7 +676,7 @@ export const KineticsNutrition: React.FC = () => {
                 )}
               </div>
             );
-          })}
+          }))}
         </div>
       </div>
     </div>
@@ -607,9 +686,20 @@ export const KineticsNutrition: React.FC = () => {
       <span className="text-cyan-400 font-bold flex items-center gap-1.5">
         <Sparkles className="w-3.5 h-3.5" /> AI NUTRITIONIST
       </span>
-      <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800">
-        ONLINE
-      </span>
+      <div className="flex gap-2 items-center">
+        <button
+          onClick={handleSummarize}
+          disabled={isSending}
+          className="flex items-center gap-1 px-2 py-0.5 rounded bg-purple-950/50 hover:bg-purple-900/60 border border-purple-800 text-purple-300 text-[10px] transition-colors disabled:opacity-50"
+          title="Подвести итоги диалогов и сбросить чат"
+        >
+          <RefreshCw className={`w-3 h-3 text-purple-400 ${isSending ? 'animate-spin' : ''}`} />
+          <span>ИТОГИ</span>
+        </button>
+        <span className="text-[10px] text-emerald-400 bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-800">
+          ONLINE
+        </span>
+      </div>
     </div>
 
     {/* Лента сообщений диетолога */}

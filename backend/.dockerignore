@@ -1,39 +1,13 @@
-# Python / Cache
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
+__pycache__
+*.pyc
+*.pyo
+*.pyd
 .Python
-.pytest_cache/
-.coverage
-htmlcov/
-
-# Environments
+env/
 venv/
 .venv/
-env/
-
-# IDE / OS
-.idea/
-.vscode/
-*.swp
-.DS_Store
-Thumbs.db
-
-# Git
-.git/
+.git
 .gitignore
-
-# Media & Weights Cache
-uploads/
-models_cache/
-*.mp3
-*.mp4
-*.wav
-*.bin
-*.pt
-
-# Node / Frontend artifacts
-node_modules/
-dist/
-build/
+.mypy_cache
+.pytest_cache
+*.log
