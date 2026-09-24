@@ -13,10 +13,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Копируем ТОЛЬКО файлы зависимостей!
 # Пока они не меняются, этот тяжелый слой всегда будет в кеше Docker
-COPY requirements.txt .
+COPY requirements.lock .
 
-# Ставим зависимости в изолированную директорию wheels / root prefix
-RUN pip install --user --no-cache-dir -r requirements.txt
+# Установка зависимостей (жесткое разделение слоев)
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --user -r requirements.lock
 
 # ==========================================
 # Этап 2: Финальный легкий образ (Runner)
@@ -46,7 +47,9 @@ COPY alembic ./alembic
 # Копируем исходный код приложения в САМЫЙ ПОСЛЕДНИЙ СЛОЙ
 # Любые правки логики затронут только этот шаг (занимает 1-2 секунды)
 COPY app ./app
+COPY start.sh .
+RUN chmod +x start.sh
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["./start.sh"]

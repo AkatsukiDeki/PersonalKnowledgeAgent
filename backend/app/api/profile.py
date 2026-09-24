@@ -85,7 +85,7 @@ async def get_profile(db: AsyncSession = Depends(get_db)):
         return UserProfile(
             id=str(row.id),
             role=row.role,
-            stack=row.stack if isinstance(row.stack, list) else json.loads(row.stack),
+            stack=row.stack if isinstance(row.stack, list) else json.loads(row.stack) if isinstance(row.stack, str) else [],
             invariants=row.invariants,
             learning_style=row.learning_style,
             projects=row.projects,

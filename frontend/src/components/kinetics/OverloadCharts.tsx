@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { kineticsApi, OverloadAnalyticsResponse } from '../../api/kinetics';
 import { Activity, Dumbbell, BarChart3, TrendingUp, Loader2 } from 'lucide-react';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Legend } from 'recharts';
 
 export const OverloadCharts: React.FC = () => {
   const [data, setData] = useState<OverloadAnalyticsResponse | null>(null);
@@ -34,9 +35,34 @@ export const OverloadCharts: React.FC = () => {
   const minRm = Math.max(0, Math.min(...rmValues) - 5);
   const maxRm = Math.max(...rmValues) + 5;
   
+// Normalize muscle groups (lowercase, map aliases to standard names)
+  const normalizeMuscle = (m: string) => {
+    const s = m.toLowerCase().trim();
+    if (s.includes('бедро') || s.includes('бедра') || s.includes('ноги')) return 'Ноги';
+    if (s.includes('грудь') || s.includes('грудные')) return 'Грудь';
+    if (s.includes('спина') || s.includes('широчайшие') || s.includes('лопатки')) return 'Спина';
+    if (s.includes('плечи') || s.includes('дельты')) return 'Плечи';
+    if (s.includes('бицепс')) return 'Бицепс';
+    if (s.includes('трицепс')) return 'Трицепс';
+    if (s.includes('кор') || s.includes('пресс')) return 'Кор';
+    if (s.includes('шея')) return 'Шея';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  };
+
+  const normalizedTonnage = data.weekly_tonnage.reduce((acc, curr) => {
+    const norm = normalizeMuscle(curr.muscle_group);
+    const existing = acc.find(t => t.week_start === curr.week_start && t.muscle_group === norm);
+    if (existing) {
+      existing.tonnage_kg += curr.tonnage_kg;
+    } else {
+      acc.push({ ...curr, muscle_group: norm });
+    }
+    return acc;
+  }, [] as typeof data.weekly_tonnage);
+
   // Weekly tonnage aggregation
-  const weeks = Array.from(new Set(data.weekly_tonnage.map(t => t.week_start))).sort();
-  const muscleGroups = Array.from(new Set(data.weekly_tonnage.map(t => t.muscle_group)));
+  const weeks = Array.from(new Set(normalizedTonnage.map(t => t.week_start))).sort();
+  const muscleGroups = Array.from(new Set(normalizedTonnage.map(t => t.muscle_group)));
   
   // Pastel colors for different muscle groups
   const muscleColors = ['#06b6d4', '#6366f1', '#f59e0b', '#10b981', '#ec4899', '#8b5cf6'];
@@ -135,66 +161,46 @@ export const OverloadCharts: React.FC = () => {
         </div>
 
         {weeks.length > 0 ? (
-          <div className="relative w-full h-56">
-             <svg viewBox={`0 0 ${Math.max(400, weeks.length * 60)} 200`} className="w-full h-full overflow-visible" preserveAspectRatio="none">
-               {/* Compute max total tonnage per week to scale */}
-               {(() => {
-                 const weeklyTotals = weeks.map(w => {
-                   return data.weekly_tonnage.filter(t => t.week_start === w).reduce((acc, curr) => acc + curr.tonnage_kg, 0);
-                 });
-                 const maxTotal = Math.max(...weeklyTotals, 1000);
-                 
-                 return weeks.map((w, wIdx) => {
-                   const weekData = data.weekly_tonnage.filter(t => t.week_start === w);
-                   const xOffset = wIdx * (400 / Math.max(weeks.length, 5)) + 20;
-                   const barWidth = Math.min(30, 300 / Math.max(weeks.length, 5));
-                   
-                   let currentY = 200;
-                   return (
-                     <g key={w}>
-                       {weekData.map((d, i) => {
-                         const barHeight = (d.tonnage_kg / maxTotal) * 180;
-                         const mColor = muscleColors[muscleGroups.indexOf(d.muscle_group) % muscleColors.length];
-                         const y = currentY - barHeight;
-                         const rect = (
-                           <rect 
-                             key={d.muscle_group}
-                             x={xOffset} 
-                             y={y} 
-                             width={barWidth} 
-                             height={barHeight} 
-                             fill={mColor} 
-                             rx={i === weekData.length - 1 ? 4 : 0} // top rounding only
-                           />
-                         );
-                         currentY = y;
-                         return rect;
-                       })}
-                       <text x={xOffset + barWidth/2} y={currentY - 5} fill="#cbd5e1" fontSize="9" textAnchor="middle" fontWeight="bold">
-                         {(weeklyTotals[wIdx]/1000).toFixed(1)}т
-                       </text>
-                       <text x={xOffset + barWidth/2} y={215} fill="#64748b" fontSize="8" textAnchor="middle">
-                         {new Date(w).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' })}
-                       </text>
-                     </g>
-                   );
-                 });
-               })()}
-             </svg>
+          <div className="w-full h-64 mt-4">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart 
+                data={weeks.map(w => {
+                  const weekData = normalizedTonnage.filter(t => t.week_start === w);
+                  const obj: any = { week: new Date(w).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' }) };
+                  weekData.forEach(d => {
+                    obj[d.muscle_group] = Number((d.tonnage_kg / 1000).toFixed(1));
+                  });
+                  return obj;
+                })} 
+                margin={{ top: 20, right: 10, left: -20, bottom: 0 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} />
+                <XAxis dataKey="week" stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} dy={10} />
+                <YAxis stroke="#64748b" fontSize={11} tickLine={false} axisLine={false} tickFormatter={(val) => `${val}т`} />
+                <Tooltip 
+                  cursor={{ fill: '#1e293b', opacity: 0.4 }}
+                  contentStyle={{ backgroundColor: '#0f172a', borderColor: '#1e293b', borderRadius: '8px', color: '#f8fafc' }}
+                  itemStyle={{ fontSize: '12px' }}
+                  formatter={(value: any) => [`${value} т`, '']}
+                />
+                <Legend iconType="circle" wrapperStyle={{ fontSize: '11px', paddingTop: '20px' }} />
+                {muscleGroups.map((m, i) => (
+                  <Bar 
+                    key={m} 
+                    dataKey={m} 
+                    stackId="a" 
+                    fill={muscleColors[i % muscleColors.length]} 
+                    maxBarSize={40}
+                  />
+                ))}
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         ) : (
           <div className="text-slate-500 text-xs italic">Нет данных о тоннаже</div>
         )}
 
-        {/* Legend */}
-        <div className="flex flex-wrap gap-3 mt-8 border-t border-slate-800/60 pt-4">
-          {muscleGroups.map((mg, i) => (
-            <div key={mg} className="flex items-center gap-1.5">
-              <div className="w-3 h-3 rounded-sm" style={{ backgroundColor: muscleColors[i % muscleColors.length] }}></div>
-              <span className="text-[10px] text-slate-400">{mg}</span>
-            </div>
-          ))}
-        </div>
+
       </div>
     </div>
   );

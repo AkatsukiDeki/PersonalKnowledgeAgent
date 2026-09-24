@@ -205,8 +205,8 @@ export const KineticsNutrition: React.FC<{ selectedDate?: Date }> = ({ selectedD
       
       let responseText = data.response;
       
-      // Check for MEAL_ACTION mutation blocks
-      const mutationRegex = /<<<MEAL_ACTION\s*([\s\S]*?)\s*MEAL_ACTION>>>/g;
+      // Check for MEAL_ACTION mutation blocks (resilient to missing closing tags)
+      const mutationRegex = /<<<MEAL_ACTION\s*(\{[\s\S]*?\})(?:\s*MEAL_ACTION>>>)?/g;
       let match;
       while ((match = mutationRegex.exec(responseText)) !== null) {
         try {
@@ -239,7 +239,7 @@ export const KineticsNutrition: React.FC<{ selectedDate?: Date }> = ({ selectedD
           console.error("Failed to parse MEAL_ACTION JSON", e);
         }
       }
-      responseText = responseText.replace(/<<<MEAL_ACTION\s*([\s\S]*?)\s*MEAL_ACTION>>>/g, '').trim();
+      responseText = responseText.replace(/<<<MEAL_ACTION\s*(\{[\s\S]*?\})(?:\s*MEAL_ACTION>>>)?/g, '').trim();
 
       setChatHistory(prev => [...prev, { role: 'assistant', text: responseText }]);
     } catch (error) {

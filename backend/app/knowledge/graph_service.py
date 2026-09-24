@@ -38,13 +38,20 @@ class GraphService:
         self.embedder = get_embedding_provider()
 
     async def upsert_entity(self, name: str, entity_type: str, description: str = "") -> UUID:
-        normalized = name.strip()
+        import re
+        # Нормализация: lower, strip, удаление лишних символов (оставляем буквы, цифры, пробелы)
+        cleaned_name = re.sub(r'[^\w\s-]', '', name.lower().strip())
+        normalized = " ".join(cleaned_name.split())
+        if not normalized:
+            normalized = name.strip()
         embedding = await self.embedder.embed_query(name)
 
-        # 1. Поиск по точному совпадению канонического имени (case-insensitive)
+        # 1. Поиск по точному совпадению или триграммному сходству (pg_trgm)
         find_sql = text("""
             SELECT id FROM entities 
-            WHERE LOWER(canonical_name) = LOWER(:name) AND entity_type = :type
+            WHERE entity_type = :type 
+              AND (LOWER(canonical_name) = LOWER(:name) OR similarity(canonical_name, :name) > 0.85)
+            ORDER BY similarity(canonical_name, :name) DESC
             LIMIT 1
         """)
         res = await self.db.execute(find_sql, {"name": normalized, "type": entity_type})

@@ -11,6 +11,8 @@ import { ChatModeSelector } from './ChatModeSelector';
 import { ActiveAudioProvider } from './ActiveAudioContext';
 import { useCopilot } from '../../hooks/useCopilot';
 import { CopilotTextarea } from './CopilotTextarea';
+import { AudioQueueManager } from '../../utils/AudioQueue';
+import { VoiceVisualizer } from './VoiceVisualizer';
 
 interface Props {
   onOrbitUpdate?: (ctx: OrbitContext | null) => void;
@@ -37,6 +39,20 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [loadingStatus, setLoadingStatus] = useState('');
   const [showHelpPopover, setShowHelpPopover] = useState(false);
+  const [isAudioActive, setIsAudioActive] = useState(false);
+  
+  const wakeUpAudio = async () => {
+    try {
+      const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+      const ctx = new AudioContext();
+      await ctx.resume();
+      AudioQueueManager.getInstance().setAudioContext(ctx);
+      setIsAudioActive(true);
+      AudioQueueManager.getInstance().playSystemAlert([600, 800]); // Startup sound
+    } catch (e) {
+      console.error("Audio unlock failed", e);
+    }
+  };
 
   const [chatMode, setChatMode] = useState<ChatMode>(() => {
     if (typeof window !== 'undefined') {
@@ -351,6 +367,25 @@ export function ChatWorkspace({ onOrbitUpdate, seedPrompt, onSeedConsumed }: Pro
               : msg
           )
         );
+
+        if (window.speechSynthesis && streamBuffer && window.AudioContext) {
+          AudioQueueManager.getInstance().enqueue(async () => {
+            return new Promise((resolve) => {
+              const utterance = new SpeechSynthesisUtterance(streamBuffer);
+              utterance.lang = 'ru-RU';
+              utterance.rate = 1.1;
+              const voices = window.speechSynthesis.getVoices();
+              const ruVoice = voices.find(v => v.lang.includes('ru') && (v.name.includes('Google') || v.name.includes('Microsoft')));
+              if (ruVoice) utterance.voice = ruVoice;
+              
+              utterance.onend = () => resolve();
+              utterance.onerror = () => resolve();
+              
+              setTimeout(() => window.speechSynthesis.speak(utterance), 50);
+            });
+          });
+        }
+
         setIsLoading(false);
         setLoadingStatus('');
         setIsCooldown(true);

@@ -33,6 +33,7 @@ from ..learning.schemas import (
 )
 from ..schemas.learning import FlashcardResponse, LearningRequest, QuizResponse
 from .deps import get_db
+from .endpoints.planner import get_current_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/learning", tags=["Learning"])
@@ -264,7 +265,9 @@ async def save_as_subject(
 
 @router.post("/adaptive/session")
 async def generate_adaptive_session(
-    request: AdaptiveSessionRequest, db: AsyncSession = Depends(get_db)
+    request: AdaptiveSessionRequest, 
+    db: AsyncSession = Depends(get_db),
+    user = Depends(get_current_user)
 ):
   from datetime import datetime, timezone
   from sqlalchemy.sql import func
@@ -320,10 +323,30 @@ async def generate_adaptive_session(
       [(s.content or s.raw_content or "") for s in sources]
   )[:15000]
 
-  adaptive_instruction = (
-      f"ВАЖНО: Это адаптивная сессия по предмету «{subject_title}». Удели особое внимание следующим темам: {focus_topics_str}. "
-      f"Генерируй вопросы/карточки именно по этим концептам, основываясь на переданных материалах (sources/chunks)."
+  # Phase 2: CNS Adaptive logic
+  from ..db.models import DailyReadiness
+  from datetime import date
+  cns_result = await db.execute(
+      select(DailyReadiness).where(
+          DailyReadiness.user_id == user.id,
+          DailyReadiness.date == date.today(),
+          DailyReadiness.is_baseline == True
+      ).order_by(DailyReadiness.created_at.desc())
   )
+  daily_readiness = cns_result.scalars().first()
+  cns_score = daily_readiness.cns_score if daily_readiness else 8.0
+
+  if cns_score <= 4.0:
+      adaptive_instruction = (
+          f"ВАЖНО (РЕЖИМ LIGHT REVIEW - ЦНС ПЕРЕГРУЖЕНА): Это адаптивная сессия по предмету «{subject_title}». "
+          f"Фокусируйся ТОЛЬКО на простом закреплении известных тем ({focus_topics_str}). "
+          f"НЕ ДАВАЙ новых или слишком сложных концептов. Формулировки должны быть простыми."
+      )
+  else:
+      adaptive_instruction = (
+          f"ВАЖНО (ЦНС={cns_score}): Это адаптивная сессия по предмету «{subject_title}». Удели особое внимание следующим темам: {focus_topics_str}. "
+          f"Генерируй вопросы/карточки именно по этим концептам, основываясь на переданных материалах (sources/chunks)."
+      )
 
   try:
     if request.mode == "flashcards":
@@ -368,12 +391,15 @@ class RecordAttemptRequest(BaseModel):
 
 @router.post("/attempt")
 async def record_learning_attempt(
-    data: RecordAttemptRequest, db: AsyncSession = Depends(get_db)
+    data: RecordAttemptRequest, 
+    db: AsyncSession = Depends(get_db),
+    user = Depends(get_current_user)
 ):
   from ..learning.mastery import MasteryService
 
   mastery = await MasteryService.record_attempt(
       db=db,
+      user_id=user.id,
       subject_id=data.subject_id,
       topic_name=data.topic_name,
       is_correct=data.is_correct,

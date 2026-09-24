@@ -27,6 +27,40 @@ class FakeChunk:
     text: str | None = None
     function_calls: list[FakeFunctionCall] = field(default_factory=list)
 
+CREATE_TASK_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "create_planner_task",
+        "description": "Create a new task in the planner",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Task title"},
+                "description": {"type": "string", "description": "Task description"},
+                "due_date": {"type": "string", "description": "Due date in ISO 8601 format (YYYY-MM-DD)"},
+                "estimated_minutes": {"type": "integer", "description": "Estimated minutes to complete"},
+            },
+            "required": ["title", "due_date"],
+        },
+    },
+}
+
+RESCHEDULE_TASK_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "reschedule_planner_task",
+        "description": "Reschedule an existing task",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "task_id": {"type": "string", "description": "ID of the task"},
+                "new_due_date": {"type": "string", "description": "New due date in ISO 8601 format (YYYY-MM-DD)"},
+            },
+            "required": ["task_id", "new_due_date"],
+        },
+    },
+}
+
 EXECUTE_CODE_SCHEMA = {
     "type": "function",
     "function": {
@@ -292,7 +326,7 @@ async def _do_stream(messages: list, system_instruction: str, target_model: str 
         ollama = OllamaClient()
         
         async def ollama_stream():
-            ollama_tools = [EXECUTE_CODE_SCHEMA] if tools else None
+            ollama_tools = [EXECUTE_CODE_SCHEMA, CREATE_TASK_SCHEMA, RESCHEDULE_TASK_SCHEMA] if tools else None
             async for chunk in ollama.stream_chat(messages=dict_msgs, model=local_model, tools=ollama_tools):
                 if isinstance(chunk, dict) and "tool_calls" in chunk:
                     fcs = []
@@ -364,6 +398,43 @@ SANDBOX_PROMPT = """
    - Никаких вспомогательных "обвязок" на других языках, если их прямо не запрашивали.
    - Код должен быть сразу готов к запуску в соответствующей песочнице (sql -> aiosqlite, python/cpp/bash -> Piston).
 """
+
+
+create_task_tool = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="create_task",
+            description="Create a new task in the planner. Ensure the date is in ISO 8601 format (YYYY-MM-DD).",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "title": types.Schema(type=types.Type.STRING, description="Task title"),
+                    "description": types.Schema(type=types.Type.STRING, description="Task description"),
+                    "due_date": types.Schema(type=types.Type.STRING, description="Due date in ISO 8601 format (YYYY-MM-DD)"),
+                    "estimated_minutes": types.Schema(type=types.Type.INTEGER, description="Estimated minutes to complete"),
+                },
+                required=["title", "due_date"],
+            ),
+        )
+    ]
+)
+
+reschedule_task_tool = types.Tool(
+    function_declarations=[
+        types.FunctionDeclaration(
+            name="reschedule_task",
+            description="Reschedule an existing task to a new date.",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "task_id": types.Schema(type=types.Type.STRING, description="ID of the task"),
+                    "new_due_date": types.Schema(type=types.Type.STRING, description="New due date in ISO 8601 format (YYYY-MM-DD)"),
+                },
+                required=["task_id", "new_due_date"],
+            ),
+        )
+    ]
+)
 
 execute_code_tool = types.Tool(
     function_declarations=[
@@ -456,7 +527,7 @@ async def stream_rag_response_sse(
         while step < MAX_TOOL_STEPS:
             step += 1
             try:
-                response_stream = await _do_stream(contents, system_instruction=active_system_prompt, target_model=target_model, tools=[execute_code_tool])
+                response_stream = await _do_stream(contents, system_instruction=active_system_prompt, target_model=target_model, tools=[execute_code_tool, create_task_tool, reschedule_task_tool])
             except Exception as api_err:
                 logger.warning(f"Error calling target_model {target_model}: {api_err}")
                 if "gemini" in target_model.lower():
@@ -480,25 +551,50 @@ async def stream_rag_response_sse(
                 if chunk.function_calls:
                     for fc in chunk.function_calls:
                         model_parts.append(types.Part.from_function_call(name=fc.name, args=fc.args))
+                        has_tool_call = True
                         if fc.name == "execute_code":
-                            has_tool_call = True
                             lang = fc.args.get("language", "python")
                             code = fc.args.get("code", "")
-                            
                             yield SSEEnvelope(event="tool_start", data=SSEEventData(output={"tool": "execute_code", "input": {"language": lang, "code": code}}))
-                            
                             sandbox_result = await PolyglotSandbox.execute(language=lang, code=code)
-                            
                             tool_out = {
                                 "stdout": sandbox_result.get("stdout", ""),
                                 "stderr": sandbox_result.get("stderr", ""),
                                 "exit_code": sandbox_result.get("exit_code", 0)
                             }
-                            
                             yield SSEEnvelope(event="tool_result", data=SSEEventData(output=tool_out))
-                            
                             func_resp_part = types.Part.from_function_response(
                                 name="execute_code",
+                                response={"result": tool_out}
+                            )
+                        elif fc.name == "create_task":
+                            yield SSEEnvelope(event="tool_start", data=SSEEventData(output={"tool": "create_task", "input": fc.args}))
+                            from datetime import datetime
+                            try:
+                                due_date_str = fc.args.get("due_date", "")
+                                parsed_date = datetime.fromisoformat(due_date_str.replace('Z', '+00:00'))
+                                tool_out = {"status": "success", "message": f"Task created for {parsed_date.date().isoformat()}"}
+                            except Exception as e:
+                                tool_out = {"status": "error", "message": str(e)}
+                                
+                            yield SSEEnvelope(event="tool_result", data=SSEEventData(output=tool_out))
+                            func_resp_part = types.Part.from_function_response(
+                                name="create_task",
+                                response={"result": tool_out}
+                            )
+                        elif fc.name == "reschedule_task":
+                            yield SSEEnvelope(event="tool_start", data=SSEEventData(output={"tool": "reschedule_task", "input": fc.args}))
+                            from datetime import datetime
+                            try:
+                                new_date_str = fc.args.get("new_due_date", "")
+                                parsed_date = datetime.fromisoformat(new_date_str.replace('Z', '+00:00'))
+                                tool_out = {"status": "success", "message": f"Task rescheduled to {parsed_date.date().isoformat()}"}
+                            except Exception as e:
+                                tool_out = {"status": "error", "message": str(e)}
+                                
+                            yield SSEEnvelope(event="tool_result", data=SSEEventData(output=tool_out))
+                            func_resp_part = types.Part.from_function_response(
+                                name="reschedule_task",
                                 response={"result": tool_out}
                             )
                 

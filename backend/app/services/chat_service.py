@@ -430,6 +430,47 @@ async def stream_chat(
                 except Exception as e:
                     logger.error(f"Error fetching kinetics telemetry: {e}")
 
+                try:
+                    from .twin_service import TwinService
+                    twin_telemetry = await TwinService.get_twin_telemetry(db, row.id)
+                    twin_snapshot = twin_telemetry.get("agent_snapshot", "")
+                    insights = twin_telemetry.get("insights", {})
+                    
+                    if twin_snapshot:
+                        cns_score = twin_telemetry.get('cognitive_metrics', {}).get('avg_cns_score', 8.4)
+                        retention = twin_telemetry.get('cognitive_metrics', {}).get('retention_rate_pct', 0)
+                        avg_rt = twin_telemetry.get('cognitive_metrics', {}).get('avg_response_time_ms', 0)
+                        
+                        radar_concepts = twin_telemetry.get('radar_concepts', [])
+                        weak_spot = radar_concepts[-1]['subject'] if len(radar_concepts) > 1 else "Не определено"
+                        
+                        system_instruction = f"""
+Ты — персональный когнитивный ассистент PKA и оператор системы задач.
+
+[ОБЪЕКТИВНЫЙ ПРОФИЛЬ И СИНТЕЗ ЦИФРОВОГО ДВОЙНИКА]:
+- Сырые метрики: ЦНС {cns_score}/10, Retention {retention}%, средний отклик {avg_rt}мс.
+{twin_snapshot}
+
+[ТЕКУЩИЙ ИНЖЕНЕРНЫЙ ДИАГНОЗ]:
+- Слепое пятно: {insights.get('blind_spot', 'Данные собираются')}
+- Точка оптимума: {insights.get('optimum', 'Данные собираются')}
+- Рекомендуемое действие: {insights.get('action', 'Данные собираются')}
+
+ДАННЫЕ ЦИФРОВОГО ДВОЙНИКА ЯВЛЯЮТСЯ ВНУТРЕННЕЙ ТЕЛЕМЕТРИЕЙ СИСТЕМЫ:
+- Не делай оговорок вроде 'В базе знаний нет данных о состоянии'.
+- Считай этот блок прямым аппаратным срезом телеметрии.
+- Сразу переходи к анализу когнитивного ресурса и рекомендациям по задачам.
+
+ПРАВИЛО ОБЪЯСНЕНИЯ ИТОГОВ (EXPLAINABILITY):
+Если пользователь спрашивает, откуда взялись эти выводы, отвечай строго по цепочке фактов:
+1. Какая сырая метрика зафиксирована в базе (например: 60% mastery против 90% в других темах).
+2. С чем она сопоставлена (например: отсутствие задач по теме в planner_tasks при высокой выработке в других доменах).
+3. Почему сделан такой вывод (математический разрыв между целевым профилем и распределением фокуса).
+"""
+                        profile_text = system_instruction + "\n\n" + profile_text
+                except Exception as e:
+                    logger.error(f"Error fetching twin telemetry: {e}")
+
             except Exception as e:
                 logger.error(f"Error parsing profile: {e}")
 

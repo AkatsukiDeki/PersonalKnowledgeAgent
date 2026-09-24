@@ -12,12 +12,13 @@ import {
   BookOpen,
   Activity,
   Layers,
-  HeartPulse
+  HeartPulse,
+  Compass
 } from 'lucide-react';
 import { conflictsApi } from '../../api/conflicts';
 import { useLanguage } from '../../context/LanguageContext';
 
-export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts' | 'playlists' | 'kinetics';
+export type ViewType = 'chat' | 'insights' | 'universe' | 'graph' | 'conflicts' | 'timeline' | 'learning' | 'transcripts' | 'playlists' | 'kinetics' | 'planner' | 'twin';
 
 interface Props {
   onOpenUploader: () => void;
@@ -65,12 +66,14 @@ export function Sidebar({
 
   const navItems: NavItem[] = [
     { id: 'chat', icon: <SquareTerminal size={16} strokeWidth={1.5} />, label: t('nav.dialogs'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'twin', icon: <Cpu size={16} strokeWidth={1.5} />, label: 'Digital Twin', activeColor: 'text-purple-400 hud-glow-cyan' },
     { id: 'insights', icon: <Cpu size={16} strokeWidth={1.5} />, label: t('nav.insights'), activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'transcripts', icon: <Activity size={16} strokeWidth={1.5} />, label: t('nav.transcripts'), activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'playlists', icon: <Layers size={16} strokeWidth={1.5} />, label: t('nav.playlists'), activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'universe', icon: <Orbit size={16} strokeWidth={1.5} />, label: t('nav.universe'), activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'conflicts', icon: <Binary size={16} strokeWidth={1.5} />, label: t('nav.contradictions'), activeColor: 'text-amber-400 hud-glow-cyan', badge: unresolvedCount },
     { id: 'timeline', icon: <History size={16} strokeWidth={1.5} />, label: t('nav.timeline'), activeColor: 'text-indigo-400 hud-glow-cyan' },
+    { id: 'planner', icon: <Compass size={16} strokeWidth={1.5} />, label: 'Planner', activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'learning', icon: <BookOpen size={16} strokeWidth={1.5} />, label: t('nav.learning'), activeColor: 'text-indigo-400 hud-glow-cyan' },
     { id: 'kinetics', icon: <HeartPulse size={16} strokeWidth={1.5} />, label: t('nav.kinetics'), activeColor: 'text-cyan-400 hud-glow-cyan' },
   ];

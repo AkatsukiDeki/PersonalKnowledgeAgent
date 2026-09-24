@@ -27,6 +27,10 @@ from .auth import router as auth_router
 from .tasks import router as tasks_router
 from .endpoints import playlists
 from .endpoints.kinetics import router as kinetics_router
+from .endpoints.planner import router as planner_router
+from .endpoints.readiness import router as readiness_router
+from .endpoints.calendar import router as calendar_router
+from .endpoints.twin import router as twin_router
 
 api_router = APIRouter()
 
@@ -55,3 +59,7 @@ api_router.include_router(auth_router)
 api_router.include_router(tasks_router, prefix="/tasks", tags=["tasks"])
 api_router.include_router(playlists.router, prefix="/playlists", tags=["playlists"])
 api_router.include_router(kinetics_router, prefix="/kinetics", tags=["kinetics"])
+api_router.include_router(planner_router, prefix="/planner", tags=["planner"])
+api_router.include_router(readiness_router, prefix="/planner/readiness", tags=["readiness"])
+api_router.include_router(calendar_router, prefix="/planner/calendar", tags=["calendar"])
+api_router.include_router(twin_router, prefix="/twin", tags=["twin"])

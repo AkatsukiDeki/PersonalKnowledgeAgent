@@ -16,7 +16,7 @@ from .api.router import api_router
 from .core.config import settings
 from .core.security import limiter
 from .db.init_db import init_database
-from .core.scheduler import scheduler, graph_scheduler
+from .core.scheduler import scheduler, graph_scheduler, notification_scheduler
 from .core.redis import init_redis_pool, close_redis_pool
 
 logging.basicConfig(
@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
 
     await scheduler.start()
     await graph_scheduler.start()
+    await notification_scheduler.start()
     app.state.redis = await init_redis_pool()
 
     yield
@@ -82,6 +83,7 @@ async def lifespan(app: FastAPI):
     warmup_task.cancel()
     await scheduler.stop()
     await graph_scheduler.stop()
+    await notification_scheduler.stop()
     await close_redis_pool()
 
 

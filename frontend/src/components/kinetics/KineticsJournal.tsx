@@ -206,7 +206,7 @@ export const KineticsJournal: React.FC = () => {
             <button
               onClick={handleSaveLog}
               disabled={isSaving}
-              className="mt-auto py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded text-xs font-bold transition-all shadow-[0_0_12px_rgba(6,182,212,0.2)] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="mt-auto shrink-0 py-2 bg-cyan-500/20 hover:bg-cyan-500/30 border border-cyan-500/50 text-cyan-300 rounded text-xs font-bold transition-all shadow-[0_0_12px_rgba(6,182,212,0.2)] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {isSaving ? 'Сохранение...' : 'Зафиксировать в журнал'}
             </button>
@@ -263,17 +263,27 @@ export const KineticsJournal: React.FC = () => {
                 const res = await fetch('/api/v1/kinetics/journal/researches', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
+                  credentials: 'include',
                   body: JSON.stringify(payload)
                 });
                 if (res.ok) {
                   const saved = await res.json();
-                  setResearches([saved, ...researches]);
+                  setResearches(prev => [{
+                    id: String(saved.id),
+                    title: saved.title || payload.title,
+                    source: saved.source_url || payload.source_url,
+                    url: saved.source_url || payload.source_url,
+                    takeaway: saved.key_takeaways || payload.key_takeaways,
+                    tags: Array.isArray(saved.tags) ? saved.tags : payload.tags
+                  }, ...prev]);
                 } else {
-                  // Локальный фоллбек
-                  setResearches([{ id: Date.now().toString(), ...payload, source: payload.source_url, url: payload.source_url, takeaway: payload.key_takeaways } as any, ...researches]);
+                  const errText = await res.text();
+                  console.error('Ошибка сохранения исследования:', res.status, errText);
+                  alert(`Ошибка сохранения: ${res.status}`);
                 }
-              } catch {
-                setResearches([{ id: Date.now().toString(), ...payload, source: payload.source_url, url: payload.source_url, takeaway: payload.key_takeaways } as any, ...researches]);
+              } catch (err) {
+                console.error('Сетевая ошибка при сохранении исследования:', err);
+                alert('Не удалось сохранить — проверьте подключение.');
               }
 
               setNewResTitle('');
@@ -325,7 +335,7 @@ export const KineticsJournal: React.FC = () => {
             {/* Кнопка сохранения — гарантированно видна */}
             <button
               type="submit"
-              className="w-full py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded text-xs transition-all shadow-[0_0_12px_rgba(6,182,212,0.35)] flex items-center justify-center gap-1.5 mt-1"
+              className="w-full shrink-0 py-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold rounded text-xs transition-all shadow-[0_0_12px_rgba(6,182,212,0.35)] flex items-center justify-center gap-1.5 mt-1"
             >
               <Plus className="w-3.5 h-3.5" />
               СОХРАНИТЬ В БАЗУ ЗНАНИЙ

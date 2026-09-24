@@ -45,6 +45,8 @@ class ResolveConflictRequest(BaseModel):
 @router.get("/", response_model=List[ConflictResponse])
 async def get_conflicts(
     status_filter: Optional[str] = None,
+    limit: int = 50,
+    offset: int = 0,
     db: AsyncSession = Depends(get_db)
 ):
     stmt = select(ClaimConflict).options(
@@ -54,7 +56,7 @@ async def get_conflicts(
     if status_filter:
         stmt = stmt.where(ClaimConflict.status == status_filter)
         
-    stmt = stmt.order_by(ClaimConflict.created_at.desc())
+    stmt = stmt.order_by(ClaimConflict.created_at.desc()).limit(limit).offset(offset)
     
     result = await db.execute(stmt)
     conflicts = result.scalars().all()
@@ -119,9 +121,11 @@ async def resolve_conflict(
         if payload.winner_claim_id == conflict.claim_a_id:
             conflict.claim_b.is_active = False
             conflict.claim_b.superseded_by = conflict.claim_a_id
+            conflict.claim_b.lifecycle_status = "superseded"
         elif payload.winner_claim_id == conflict.claim_b_id:
             conflict.claim_a.is_active = False
             conflict.claim_a.superseded_by = conflict.claim_b_id
+            conflict.claim_a.lifecycle_status = "superseded"
         else:
             raise HTTPException(status_code=400, detail="winner_claim_id must be one of the conflicting claims")
             

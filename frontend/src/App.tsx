@@ -26,6 +26,8 @@ const TranscriptsWorkspace = React.lazy(() => import('./pages/TranscriptsWorkspa
 const TimelineWorkspace = React.lazy(() => import('./pages/TimelineWorkspace').then(m => ({ default: m.TimelineWorkspace })));
 const PlaylistsWorkspace = React.lazy(() => import('./pages/PlaylistsWorkspace').then(m => ({ default: m.PlaylistsWorkspace })));
 const KineticsWorkspace = React.lazy(() => import('./pages/KineticsWorkspace').then(m => ({ default: m.KineticsWorkspace })));
+const PlannerWorkspace = React.lazy(() => import('./pages/PlannerWorkspace').then(m => ({ default: m.PlannerWorkspace })));
+const TwinWorkspace = React.lazy(() => import('./components/twin/TwinWorkspace').then(m => ({ default: m.TwinWorkspace })));
 const UniverseCanvas = React.lazy(() => import('./components/universe/UniverseCanvas').then(m => ({ default: m.UniverseCanvas })));
 const LearningStudio = React.lazy(() => import('./components/learning/LearningStudio').then(m => ({ default: m.LearningStudio })));
 const SemanticSearchModal = React.lazy(() => import('./components/search/SemanticSearchModal').then(m => ({ default: m.SemanticSearchModal })));
@@ -100,7 +102,7 @@ export function App() {
       }
       if (e.key === 'Escape') {
         setActiveView(prev => {
-          if (['transcripts', 'insights', 'conflicts', 'timeline', 'learning', 'playlists'].includes(prev)) {
+          if (['transcripts', 'insights', 'conflicts', 'timeline', 'learning', 'playlists', 'twin'].includes(prev)) {
             return 'chat';
           }
           return prev;
@@ -261,7 +263,12 @@ export function App() {
             )}
 
             {/* Modals Layer: Workspaces rendered as Modals over Chat */}
-            {['conflicts', 'insights', 'transcripts', 'timeline', 'learning', 'playlists', 'kinetics'].includes(activeView) && (
+            {activeView === 'planner' && (
+              <Suspense fallback={<FallbackLoader />}>
+                <PlannerWorkspace onClose={() => setActiveView('chat')} />
+              </Suspense>
+            )}
+            {['conflicts', 'insights', 'transcripts', 'timeline', 'learning', 'playlists', 'kinetics', 'twin'].includes(activeView) && (
               <Suspense fallback={<FallbackLoader />}>
               <div 
                 className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 md:p-8 bg-black/60 backdrop-blur-md animate-fadeIn"
@@ -286,7 +293,8 @@ export function App() {
                     {activeView === 'learning' && (
                       <LearningStudio />
                     )}
-                    {activeView === 'kinetics' && <KineticsWorkspace />}
+                    {activeView === 'kinetics' && <KineticsWorkspace onClose={() => setActiveView('chat')} />}
+                    {activeView === 'twin' && <TwinWorkspace />}
                   </div>
                 </div>
               </div>
@@ -370,6 +378,14 @@ export function App() {
             category: 'navigation',
             keywords: ['universe', 'graph', 'вселенная', 'граф', 'карта'],
             execute: () => setActiveView('universe')
+          },
+          {
+            id: 'open-planner',
+            title: 'Focus Studio (Планировщик)',
+            description: 'Открыть многоконтурный планировщик задач',
+            category: 'navigation',
+            keywords: ['planner', 'tasks', 'задачи', 'цели', 'спринты', 'план'],
+            execute: () => setActiveView('planner')
           },
           {
             id: 'upload-source',

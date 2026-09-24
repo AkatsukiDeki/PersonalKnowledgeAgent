@@ -1,8 +1,12 @@
 import asyncio
 import logging
+import json
+from datetime import datetime, timezone
 from sqlalchemy import text
 from ..db.session import async_session_factory
 from ..knowledge.pattern_engine import run_pattern_discovery_pipeline
+from ..db.models import PlannerReminder
+from ..api.endpoints.calendar import manager
 
 logger = logging.getLogger(__name__)
 
@@ -150,5 +154,66 @@ class GraphScheduler:
             logger.error(f"[GraphScheduler] Error in check loop: {e}")
 
 
+class NotificationScheduler:
+    def __init__(self, check_interval_seconds: int = 30):
+        self.check_interval_seconds = check_interval_seconds
+        self.task = None
+
+    async def start(self):
+        logger.info("[NotificationScheduler] Starting background scheduler...")
+        self.task = asyncio.create_task(self._run_loop())
+
+    async def stop(self):
+        if self.task:
+            logger.info("[NotificationScheduler] Stopping background scheduler...")
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
+            logger.info("[NotificationScheduler] Stopped.")
+
+    async def _run_loop(self):
+        try:
+            while True:
+                await asyncio.sleep(self.check_interval_seconds)
+                await self._check_and_run()
+        except asyncio.CancelledError:
+            logger.info("[NotificationScheduler] Task cancelled.")
+        except Exception as e:
+            logger.error(f"[NotificationScheduler] Unexpected error: {e}")
+
+    async def _check_and_run(self):
+        try:
+            async with async_session_factory() as db:
+                from sqlalchemy.future import select
+                now = datetime.now(timezone.utc)
+                stmt = select(PlannerReminder).where(
+                    PlannerReminder.is_triggered == False,
+                    PlannerReminder.trigger_time <= now
+                )
+                res = await db.execute(stmt)
+                reminders = res.scalars().all()
+                
+                for rem in reminders:
+                    msg = {
+                        "type": "reminder",
+                        "id": str(rem.id),
+                        "message": rem.message,
+                        "priority": rem.priority,
+                        "event_id": str(rem.event_id) if rem.event_id else None
+                    }
+                    # Send alert
+                    await manager.send_personal_message(json.dumps(msg), str(rem.user_id))
+                    
+                    # Mark as triggered
+                    rem.is_triggered = True
+                
+                if reminders:
+                    await db.commit()
+        except Exception as e:
+            logger.error(f"[NotificationScheduler] Error in check loop: {e}")
+
 scheduler = PatternScheduler(check_interval_seconds=60) # Check every 60 seconds
 graph_scheduler = GraphScheduler(check_interval_seconds=120) # Check every 120 seconds
+notification_scheduler = NotificationScheduler(check_interval_seconds=30) # Check every 30 seconds

@@ -35,8 +35,8 @@ def _sanitize_model_name(model_name: Optional[str]) -> str:
     if not model_name or not model_name.strip():
         return fallback_model
     m = model_name.strip().lower()
-    # Устаревшие ветки 1.5 и 2.5 перенаправляем на актуальный дефолт
-    if "1.5" in m or "2.5" in m or m in {"gemini-1.5-flash", "gemini-2.5-flash", "gemini-3.6-flash"}:
+    # Устаревшие или нестабильные версии перенаправляем на актуальный дефолт
+    if "1.5" in m or "2.5" in m or "2.0" in m or m in {"gemini-1.5-flash", "gemini-2.5-flash", "gemini-2.0-flash", "gemini-3.6-flash"}:
         return fallback_model
     return model_name.strip()
 

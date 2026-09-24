@@ -8,7 +8,7 @@ from ..core.config import settings
 from sqlalchemy import ForeignKey, Index, Integer, String, Text, Float, Table, Column, CheckConstraint, DateTime, Date, text, UniqueConstraint, Enum as SQLEnum
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR, UUID as PG_UUID, ARRAY
-from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym
+from sqlalchemy.orm import Mapped, mapped_column, relationship, synonym, backref
 from sqlalchemy import Computed
 from sqlalchemy.sql.sqltypes import Boolean
 
@@ -132,6 +132,12 @@ class Chunk(Base, TimestampedUUIDMixin):
 
     source: Mapped["Source"] = relationship("Source", back_populates="chunks")
     revision: Mapped[Optional["FileRevision"]] = relationship("FileRevision", back_populates="chunks")
+
+    tsv = Column(
+        TSVECTOR,
+        Computed("to_tsvector('russian', text_content)", persisted=True),
+        nullable=False,
+    )
 
     __table_args__ = (
         Index(
@@ -691,6 +697,7 @@ class ConceptMastery(Base):
     # SM-2 параметры для концепта
     ease_factor = Column(Float, default=2.5, nullable=False)
     interval_days = Column(Integer, default=0, nullable=False)
+    current_streak = Column(Integer, default=0, nullable=False)
     last_reviewed_at = Column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -707,9 +714,10 @@ class LearningAttempt(Base, TimestampedUUIDMixin):
     __tablename__ = 'learning_attempts'
 
     user_id = Column(PG_UUID(as_uuid=True), ForeignKey('user_profiles.id', ondelete='CASCADE'), nullable=True)
-    concept_id = Column(PG_UUID(as_uuid=True), ForeignKey('concepts.id', ondelete='SET NULL'), nullable=True)
+    concept_id = Column(PG_UUID(as_uuid=True), ForeignKey('concept_mastery.id', ondelete='SET NULL'), nullable=True)
     success = Column(Boolean, default=False)
     score = Column(Float, default=0.0)
+    response_time_ms = Column(Integer, nullable=True)
     item_type = Column(String(50), default="quiz")  # 'quiz', 'flashcard', 'sandbox_code'
 
 class Playlist(Base, TimestampedUUIDMixin):
@@ -717,7 +725,7 @@ class Playlist(Base, TimestampedUUIDMixin):
 
     title = Column(String(255), nullable=False)
     description = Column(Text, nullable=True)
-    last_played_item_id = Column(PG_UUID(as_uuid=True), ForeignKey('playlist_items.id', ondelete='SET NULL'), nullable=True)
+    last_played_item_id = Column(PG_UUID(as_uuid=True), ForeignKey('playlist_items.id', ondelete='SET NULL', use_alter=True), nullable=True)
 
     items = relationship("PlaylistItem", back_populates="playlist", cascade="all, delete-orphan", foreign_keys="PlaylistItem.playlist_id")
 
@@ -727,7 +735,7 @@ class PlaylistItem(Base, TimestampedUUIDMixin):
 
     playlist_id = Column(PG_UUID(as_uuid=True), ForeignKey('playlists.id', ondelete='CASCADE'), nullable=False)
     source_id = Column(PG_UUID(as_uuid=True), ForeignKey('sources.id', ondelete='CASCADE'), nullable=False)
-    order_index = Column(Integer, default=0, nullable=False)
+    sequence_num = Column(Integer, default=0, nullable=False)
 
     playlist = relationship("Playlist", back_populates="items", foreign_keys=[playlist_id])
     source = relationship("Source")
@@ -938,3 +946,149 @@ class WorkoutSet(Base):
     __table_args__ = (
         Index("ix_sets_exercise_order", "exercise_id", "set_number"),
     )
+
+
+# ==============================================================================
+# PLANNER (FOCUS STUDIO) MODELS
+# ==============================================================================
+
+class PlannerDomain(Base, TimestampedUUIDMixin):
+    """Кастомный домен/категория планирования (например, 'Учеба', 'Работа', 'Хобби')"""
+    __tablename__ = "planner_domains"
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False)
+    name = Column(String(255), nullable=False)
+    color = Column(String(50), default="blue") # Tailwind color name e.g., 'blue', 'emerald'
+    icon = Column(String(50), nullable=True)   # Lucide icon name
+
+class PlanningCadence(str, enum.Enum):
+    LONG_TERM = "milestone"     # Веха (семестр / квартал)
+    SPRINT = "sprint"           # 2-недельный спринт
+    KANBAN = "flow"             # Потоковая задача (backlog -> in progress -> done)
+    CYCLIC = "cyclic"           # Циклическая (домашние дела)
+
+class Goal(Base, TimestampedUUIDMixin):
+    """Глобальная цель или крупный проект (Эпик). Поддерживает иерархию (parent_goal_id)."""
+    __tablename__ = "planner_goals"
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False)
+    domain_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_domains.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Рекурсивная связь: цель может иметь родительскую цель
+    # Пример: Диплом -> 4 курс -> Зимняя сессия -> Предмет
+    parent_goal_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_goals.id", ondelete="CASCADE"), nullable=True)
+
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    cadence = Column(SQLEnum(PlanningCadence), default=PlanningCadence.LONG_TERM)
+    target_date = Column(Date, nullable=True)
+    progress_pct = Column(Float, default=0.0)  # Вычисляется из задач
+    is_active = Column(Boolean, default=True)
+
+    # Уровень абстракции: vision (жизненная), milestone (семестр/год), semester, subject, sprint
+    level = Column(String(30), default='milestone', nullable=True)
+
+    # Блок «Риски и план Б» (Risk & Friction Engine)
+    risks = Column(Text, nullable=True)           # Узкие места, блокеры
+    contingency_plan = Column(Text, nullable=True) # Что делать если что-то пойдёт не так
+
+    # Связи
+    sprints = relationship("PlannerSprint", back_populates="goal", cascade="all, delete-orphan")
+    tasks = relationship("PlannerTask", back_populates="goal")
+    sub_goals = relationship(
+        "Goal",
+        backref=backref("parent_goal", remote_side="Goal.id", lazy="selectin"),
+        foreign_keys="[Goal.parent_goal_id]",
+        lazy="selectin",
+        cascade="all, delete-orphan",
+    )
+
+class PlannerSprint(Base, TimestampedUUIDMixin):
+    """Спринт (для жестких таймбоксов, как курсы по 2 недели)"""
+    __tablename__ = "planner_sprints"
+
+    goal_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_goals.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False) # "Спринт 4: БД"
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    is_active = Column(Boolean, default=True)
+
+    goal = relationship("Goal", back_populates="sprints")
+    tasks = relationship("PlannerTask", back_populates="sprint")
+
+class PlannerTask(Base, TimestampedUUIDMixin):
+    """Конкретная задача"""
+    __tablename__ = "planner_tasks"
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False)
+    domain_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_domains.id", ondelete="CASCADE"), nullable=False, index=True)
+    goal_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_goals.id", ondelete="SET NULL"), nullable=True)
+    sprint_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_sprints.id", ondelete="SET NULL"), nullable=True)
+
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    status = Column(String(30), default="todo") # todo, in_progress, done, postponed
+    priority = Column(String(20), default="medium") # low, medium, high, critical
+
+    # Оценки времени и дедлайн
+    estimated_minutes = Column(Integer, default=60)
+    actual_minutes = Column(Integer, default=0)
+    due_date = Column(DateTime(timezone=True), nullable=True)
+
+    # Кросс-ссылки с модулями PKA
+    linked_subject_id = Column(PG_UUID(as_uuid=True), ForeignKey("subjects.id", ondelete="SET NULL"), nullable=True)
+    linked_workout_plan_id = Column(PG_UUID(as_uuid=True), ForeignKey("workout_plans.id", ondelete="SET NULL"), nullable=True)
+
+    goal = relationship("Goal", back_populates="tasks")
+    sprint = relationship("PlannerSprint", back_populates="tasks")
+
+class DailyReadiness(Base, TimestampedUUIDMixin):
+    """Ежедневные замеры готовности ЦНС и сна"""
+    __tablename__ = "daily_readiness"
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    date = Column(Date, nullable=False, index=True)
+    
+    sleep_hours = Column(Float, nullable=False)
+    sleep_quality = Column(Integer, nullable=False) # 1-5
+    tapping_count = Column(Integer, nullable=False)
+    mental_clarity = Column(Integer, nullable=False, default=3)
+    physical_freshness = Column(Integer, nullable=False, default=3)
+    motivation = Column(Integer, nullable=False, default=3)
+    sleep_score = Column(Float, nullable=False, default=0.0)
+    cns_score = Column(Float, nullable=False, default=0.0)
+    is_baseline = Column(Boolean, default=False, nullable=False)
+
+class PlannerCalendarEvent(Base, TimestampedUUIDMixin):
+    """События для тайм-блокинга в календаре (пары, тренировки, фокус-сессии)"""
+    __tablename__ = "planner_calendar_events"
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    
+    start_time = Column(DateTime(timezone=True), nullable=False)
+    end_time = Column(DateTime(timezone=True), nullable=False)
+    
+    event_type = Column(String(50), default="custom") # university, gym, sprint_block, custom
+    recurrence_rule = Column(String, nullable=True) # RFC 5545 RRULE
+    
+    linked_task_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_tasks.id", ondelete="SET NULL"), nullable=True)
+    task = relationship("PlannerTask", backref="calendar_events")
+
+
+class PlannerReminder(Base, TimestampedUUIDMixin):
+    """Очередь оповещений (Notification Engine)"""
+    __tablename__ = "planner_reminders"
+
+    user_id = Column(PG_UUID(as_uuid=True), ForeignKey("user_profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    event_id = Column(PG_UUID(as_uuid=True), ForeignKey("planner_calendar_events.id", ondelete="CASCADE"), nullable=True)
+    
+    trigger_time = Column(DateTime(timezone=True), nullable=False, index=True)
+    message = Column(String(500), nullable=False)
+    priority = Column(String(20), default="medium") # low, medium, high, critical
+    
+    is_triggered = Column(Boolean, default=False, index=True)
+    channel = Column(String(20), default="in_app") # in_app, push, email
+    
+    event = relationship("PlannerCalendarEvent", backref="reminders")

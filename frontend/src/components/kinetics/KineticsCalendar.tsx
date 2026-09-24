@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AlertTriangle, Moon, Activity, Dumbbell, Zap, Copy, X, Loader2, ChevronDown, ChevronUp, Trash2, RefreshCw, Plus, MapPin } from 'lucide-react';
 import { ExerciseSetTable } from './ExerciseSetTable';
 import { kineticsApi } from '../../api/kinetics';
@@ -18,24 +18,24 @@ const SPLIT_COLORS: Record<string, { label: string; color: string }> = {
   pull: { label: 'Pull', color: 'bg-indigo-500/10 text-indigo-400 border-indigo-500/30' },
   legs: { label: 'Legs', color: 'bg-amber-500/10 text-amber-400 border-amber-500/30' },
   fullbody: { label: 'Fullbody', color: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' },
-  core: { label: 'РљРѕСЂ', color: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
-  shoulders: { label: 'РџР»РµС‡Рё', color: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
-  neck: { label: 'РЁРµСЏ', color: 'bg-pink-500/10 text-pink-400 border-pink-500/30' },
-  functional: { label: 'Р¤СѓРЅРєС†РёРѕРЅР°Р»', color: 'bg-teal-500/10 text-teal-400 border-teal-500/30' },
-  default: { label: 'РЎРµСЃСЃРёСЏ', color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' },
+  core: { label: 'Кор', color: 'bg-purple-500/10 text-purple-400 border-purple-500/30' },
+  shoulders: { label: 'Плечи', color: 'bg-orange-500/10 text-orange-400 border-orange-500/30' },
+  neck: { label: 'Шея', color: 'bg-pink-500/10 text-pink-400 border-pink-500/30' },
+  functional: { label: 'Функционал', color: 'bg-teal-500/10 text-teal-400 border-teal-500/30' },
+  default: { label: 'Сессия', color: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/30' },
 };
 
 function resolveSplitType(targetSplit?: string): { label: string; color: string } {
   const s = (targetSplit || '').toLowerCase();
-  if (s.includes('push') || s.includes('РіСЂСѓРґСЊ')) return SPLIT_COLORS.push;
-  if (s.includes('pull') || s.includes('СЃРїРёРЅР°')) return SPLIT_COLORS.pull;
-  if (s.includes('РЅРѕРіРё') || s.includes('legs')) return SPLIT_COLORS.legs;
-  if (s.includes('С„СѓР»Р±РѕРґРё') || s.includes('fullbody')) return SPLIT_COLORS.fullbody;
-  if (s.includes('РєРѕСЂ')) return SPLIT_COLORS.core;
-  if (s.includes('РїР»РµС‡Рё') || s.includes('РґРµР»СЊС‚С‹')) return SPLIT_COLORS.shoulders;
-  if (s.includes('С€РµСЏ')) return SPLIT_COLORS.neck;
-  if (s.includes('С„СѓРЅРєС†РёРѕРЅР°Р»') || s.includes('РєР°СЂРґРёРѕ')) return SPLIT_COLORS.functional;
-  return { label: targetSplit || 'РўСЂРµРЅРёСЂРѕРІРєР°', color: SPLIT_COLORS.default.color };
+  if (s.includes('push') || s.includes('грудь')) return SPLIT_COLORS.push;
+  if (s.includes('pull') || s.includes('спина')) return SPLIT_COLORS.pull;
+  if (s.includes('ноги') || s.includes('legs')) return SPLIT_COLORS.legs;
+  if (s.includes('фулбоди') || s.includes('fullbody')) return SPLIT_COLORS.fullbody;
+  if (s.includes('кор')) return SPLIT_COLORS.core;
+  if (s.includes('плечи') || s.includes('дельты')) return SPLIT_COLORS.shoulders;
+  if (s.includes('шея')) return SPLIT_COLORS.neck;
+  if (s.includes('функционал') || s.includes('кардио')) return SPLIT_COLORS.functional;
+  return { label: targetSplit || 'Тренировка', color: SPLIT_COLORS.default.color };
 }
 
 
@@ -92,7 +92,7 @@ export const MonthGrid: React.FC<CalendarProps & { selectedDateStr?: string }> =
   return (
     <div className="bg-slate-950/80 border border-slate-800 rounded-xl p-4">
       <div className="grid grid-cols-7 gap-2 mb-2 text-center text-xs font-mono text-slate-500">
-        {['РџРќ', 'Р’Рў', 'РЎР ', 'Р§Рў', 'РџРў', 'РЎР‘', 'Р’РЎ'].map(d => (
+        {['ПН', 'ВТ', 'СР', 'ЧТ', 'ПТ', 'СБ', 'ВС'].map(d => (
           <div key={d}>{d}</div>
         ))}
       </div>
@@ -125,11 +125,11 @@ export const MonthGrid: React.FC<CalendarProps & { selectedDateStr?: string }> =
               </div>
               {plan ? (
                 <div className="mt-1 px-1.5 py-1 rounded bg-purple-950/40 border border-purple-800/50 text-[10px]">
-                  <div className="font-semibold text-purple-300 truncate">{plan.target_split || plan.split_type || 'РЎРµСЃСЃРёСЏ'}</div>
-                  <div className="text-slate-400 text-[9px]">{plan.exercises?.length || 0} СѓРїСЂ.</div>
+                  <div className="font-semibold text-purple-300 truncate">{plan.target_split || plan.split_type || 'Сессия'}</div>
+                  <div className="text-slate-400 text-[9px]">{plan.exercises?.length || 0} упр.</div>
                 </div>
               ) : (
-                <div className="text-[9px] text-slate-600 font-mono text-center pb-1">РћС‚РґС‹С…</div>
+                <div className="text-[9px] text-slate-600 font-mono text-center pb-1">Отдых</div>
               )}
             </div>
           );
@@ -259,7 +259,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
         
         setPlans(filteredPlans);
       })
-      .catch((err) => console.error('РћС€РёР±РєР° Р·Р°РіСЂСѓР·РєРё РєР°Р»РµРЅРґР°СЂСЏ:', err))
+      .catch((err) => console.error('Ошибка загрузки календаря:', err))
       .finally(() => setIsLoading(false));
   };
 
@@ -296,13 +296,13 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
         onClose={() => setIsModalOpen(false)}
         onSuccess={() => fetchCalendar()}
       />
-      {/* Р›РµРІР°СЏ РїР°РЅРµР»СЊ: РЎРµС‚РєР° С‚СЂРµРЅРёСЂРѕРІРѕС‡РЅС‹С… СЃРµСЃСЃРёР№ */}
+      {/* Левая панель: Сетка тренировочных сессий */}
       <div className="xl:col-span-3 bg-slate-950/70 border border-slate-800 rounded-xl p-5 flex flex-col justify-between">
         <div>
           <div className="flex items-center justify-between pb-4 border-b border-slate-800/80 mb-4">
             <div className="flex items-center gap-3">
-              <span className="text-xs uppercase tracking-wider text-slate-400">РђР РҐРР’ Р РџР›РђРќ РЎР•РЎРЎРР™:</span>
-              <h3 className="text-sm font-bold text-slate-200">РђРљРўРР’РќР«Р™ РњР•Р—РћР¦РРљР›</h3>
+              <span className="text-xs uppercase tracking-wider text-slate-400">АРХИВ И ПЛАН СЕССИЙ:</span>
+              <h3 className="text-sm font-bold text-slate-200">АКТИВНЫЙ МЕЗОЦИКЛ</h3>
             </div>
             
             <div className="flex items-center gap-3 text-[10px] text-slate-400">
@@ -311,7 +311,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                 className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/40 rounded transition-colors mr-2"
               >
                 <Zap className="w-3 h-3" />
-                <span className="font-bold uppercase tracking-wider">РЎРёРЅС‚РµР· РјРµР·РѕС†РёРєР»Р° (4 РЅРµРґРµР»Рё)</span>
+                <span className="font-bold uppercase tracking-wider">Синтез мезоцикла (4 недели)</span>
               </button>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-rose-500"></span> Push</span>
               <span className="flex items-center gap-1"><span className="w-2 h-2 rounded bg-indigo-500"></span> Pull</span>
@@ -321,7 +321,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
           </div>
 
           {isLoading ? (
-            <div className="text-center py-16 text-slate-500 text-xs">Р—Р°РіСЂСѓР·РєР° РґР°РЅРЅС‹С… С‚РµР»РµРјРµС‚СЂРёРё...</div>
+            <div className="text-center py-16 text-slate-500 text-xs">Загрузка данных телеметрии...</div>
           ) : (
             <MonthGrid plans={plans} selectedDateStr={toLocalDateKey(selectedDate)} onSelectPlan={(plan, date) => {
               setSelectedPlan(plan);
@@ -331,23 +331,23 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
         </div>
 
         <div className="mt-4 pt-3 border-t border-slate-800/60 flex items-center justify-between text-xs text-slate-500">
-          <span>РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ СЃ pgvector Рё С‚РµР»РµРјРµС‚СЂРёРµР№ Р°С‚Р»РµС‚Р°</span>
-          <span>Р’СЃРµРіРѕ СЃРµСЃСЃРёР№ РІ Р±Р°Р·Рµ: {plans.length}</span>
+          <span>Синхронизировано с pgvector и телеметрией атлета</span>
+          <span>Всего сессий в базе: {plans.length}</span>
         </div>
       </div>
 
-      {/* РџСЂР°РІР°СЏ РїР°РЅРµР»СЊ: РЎРёСЃС‚РµРјРЅС‹Р№ СЃС‚СЂРµСЃСЃ Рё РРЅСЃРїРµРєС‚РѕСЂ СѓРїСЂР°Р¶РЅРµРЅРёР№ */}
+      {/* Правая панель: Системный стресс и Инспектор упражнений */}
       <div className="space-y-4">
         <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4">
           <div className="flex items-center gap-2 text-xs font-bold text-rose-400 mb-3">
             <AlertTriangle className="w-4 h-4" />
-            <span>РЎРРЎРўР•РњРќР«Р™ РЎРўР Р•РЎРЎ</span>
+            <span>СИСТЕМНЫЙ СТРЕСС</span>
           </div>
 
           <div className="space-y-3 text-xs">
             <div>
               <div className="flex justify-between text-slate-400 mb-1">
-                <span>РЈС‚РѕРјР»РµРЅРёРµ Р¦РќРЎ</span>
+                <span>Утомление ЦНС</span>
                 <span className="text-rose-400 font-bold">8.5 / 10</span>
               </div>
               <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
@@ -357,8 +357,8 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
 
             <div>
               <div className="flex justify-between text-slate-400 mb-1">
-                <span>РЎСЂРµРґРЅРёР№ СЃРѕРЅ (3 РґРЅСЏ)</span>
-                <span className="text-amber-400 font-bold">5.5 С‡</span>
+                <span>Средний сон (3 дня)</span>
+                <span className="text-amber-400 font-bold">5.5 ч</span>
               </div>
               <div className="w-full bg-slate-900 h-1.5 rounded-full overflow-hidden">
                 <div className="bg-amber-400 h-full rounded-full w-[65%]"></div>
@@ -367,12 +367,12 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
           </div>
         </div>
 
-        {/* РРЅСЃРїРµРєС‚РѕСЂ СѓРїСЂР°Р¶РЅРµРЅРёР№ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РґРЅСЏ */}
+        {/* Инспектор упражнений выбранного дня */}
         <div className="bg-slate-950/70 border border-slate-800 rounded-xl p-4 flex flex-col">
           <div className="flex items-center justify-between pb-2 border-b border-slate-800 mb-3">
             <span className="text-xs font-bold text-slate-300 flex items-center gap-1.5">
               <Dumbbell className="w-3.5 h-3.5 text-cyan-400" />
-              Р”Р•РўРђР›Р РЎР•РЎРЎРР
+              ДЕТАЛИ СЕССИИ
             </span>
             <div className="flex items-center gap-3">
               {selectedPlan && (
@@ -384,13 +384,13 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                     setIsDuplicateModalOpen(true);
                   }}
                   className="p-1 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 rounded transition-colors"
-                  title="Р”СѓРїР»РёСЂР°С С‚СЂРµРЅРёРЅРі"
+                  title="Дуплирај тренинг"
                 >
                   <Copy className="w-4 h-4" />
                 </button>
               )}
               {selectedPlan?.status === 'completed' && (
-                <span className="text-[10px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded">Р’Р«РџРћР›РќР•РќРћ</span>
+                <span className="text-[10px] font-bold text-emerald-400 px-2 py-0.5 bg-emerald-500/10 border border-emerald-500/30 rounded">ВЫПОЛНЕНО</span>
               )}
               <span className="text-[10px] text-slate-500">
                 {selectedDate ? selectedDate.toLocaleDateString('ru-RU') : (selectedPlan ? new Date(selectedPlan.created_at).toLocaleDateString('ru-RU') : '')}
@@ -402,11 +402,11 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
             <div className="space-y-3">
               <div>
                 <div className="text-sm font-bold text-cyan-300">
-                  {selectedPlan.target_split || (selectedPlan as any).split_day || 'РўСЂРµРЅРёСЂРѕРІРєР°'}
+                  {selectedPlan.target_split || (selectedPlan as any).split_day || 'Тренировка'}
                 </div>
                 <button
                   onClick={async () => {
-                    const next = selectedPlan.location === 'Р—Р°Р»' ? 'Р”РѕРј' : 'Р—Р°Р»';
+                    const next = selectedPlan.location === 'Зал' ? 'Дом' : 'Зал';
                     try {
                       await kineticsApi.updateWorkoutPlanSettings({ plan_id: selectedPlan.id, location: next } as any);
                       setSelectedPlan(prev => prev ? { ...prev, location: next } : null);
@@ -415,8 +415,8 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                   className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1 hover:text-cyan-300 transition-colors group"
                 >
                   <MapPin className="w-3 h-3" />
-                  Р›РѕРєР°С†РёСЏ: <span className="text-slate-200 group-hover:text-cyan-300">{selectedPlan.location || 'Р”РѕРј'}</span>
-                  <span className="text-slate-600 text-[9px] ml-1">(РєР»РёРє вЂ” СЃРјРµРЅРёС‚СЊ)</span>
+                  Локация: <span className="text-slate-200 group-hover:text-cyan-300">{selectedPlan.location || 'Дом'}</span>
+                  <span className="text-slate-600 text-[9px] ml-1">(клик — сменить)</span>
                 </button>
               </div>
 
@@ -427,7 +427,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
               )}
 
               <div className="pt-2 border-t border-slate-800/60 mt-3">
-                <div className="text-[11px] font-bold text-slate-400 mb-2">РЈРџР РђР–РќР•РќРРЇ:</div>
+                <div className="text-[11px] font-bold text-slate-400 mb-2">УПРАЖНЕНИЯ:</div>
                 <div className="space-y-2 max-h-[460px] overflow-y-auto pr-1">
                   {selectedPlan.exercises && selectedPlan.exercises.length > 0 ? (
                     selectedPlan.exercises.map((ex: WorkoutExercise, idx: number) => {
@@ -456,7 +456,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                                 <div className="text-[10px] text-slate-500">
                                   {Array.isArray(ex.target_muscle_groups)
                                     ? ex.target_muscle_groups.join(', ')
-                                    : (ex.target_muscle_groups || 'Р¤СѓРЅРєС†РёРѕРЅР°Р»')}
+                                    : (ex.target_muscle_groups || 'Функционал')}
                                 </div>
                               </div>
                             </div>
@@ -464,22 +464,22 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                             <div className="flex items-center gap-1">
                               <div className="text-right whitespace-nowrap mr-2">
                                 <div className="text-cyan-400 font-bold text-[11px]">
-                                  {ex.sets} Г— {ex.reps_or_duration}
+                                  {ex.sets} × {ex.reps_or_duration}
                                 </div>
                                 <div className="text-[10px] text-slate-400">RPE {ex.rpe_target}</div>
                               </div>
                               {/* Swap button */}
                               <button
                                 onClick={e => { e.stopPropagation(); setSwapExId(String(ex.id)); setSwapNewName(''); }}
-                                title="Р—Р°РјРµРЅРёС‚СЊ СѓРїСЂР°Р¶РЅРµРЅРёРµ"
+                                title="Заменить упражнение"
                                 className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-amber-400 transition-colors"
                               >
                                 <RefreshCw className="w-3 h-3" />
                               </button>
                               {/* Delete button */}
                               <button
-                                onClick={e => { e.stopPropagation(); if (confirm(`РЈРґР°Р»РёС‚СЊ В«${ex.exercise_name}В»?`)) handleDeleteExercise(String(ex.id)); }}
-                                title="РЈРґР°Р»РёС‚СЊ СѓРїСЂР°Р¶РЅРµРЅРёРµ"
+                                onClick={e => { e.stopPropagation(); if (confirm(`Удалить «${ex.exercise_name}»?`)) handleDeleteExercise(String(ex.id)); }}
+                                title="Удалить упражнение"
                                 className="p-1 rounded hover:bg-slate-700 text-slate-500 hover:text-rose-400 transition-colors"
                               >
                                 <Trash2 className="w-3 h-3" />
@@ -515,7 +515,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                       );
                     })
                   ) : (
-                    <div className="text-slate-600 text-xs py-2">РЎРїРёСЃРѕРє СѓРїСЂР°Р¶РЅРµРЅРёР№ РїСѓСЃС‚</div>
+                    <div className="text-slate-600 text-xs py-2">Список упражнений пуст</div>
                   )}
                 </div>
                 
@@ -525,13 +525,13 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                       onClick={() => setIsAddExModalOpen(true)}
                       className="w-full mt-3 py-1.5 flex items-center justify-center gap-1.5 text-[11px] text-slate-400 hover:text-cyan-300 border border-dashed border-slate-700 hover:border-cyan-500/40 rounded transition-colors"
                     >
-                      <Plus className="w-3 h-3" /> Р”РћР‘РђР’РРўР¬ РЈРџР РђР–РќР•РќРР•
+                      <Plus className="w-3 h-3" /> ДОБАВИТЬ УПРАЖНЕНИЕ
                     </button>
                     <button 
                       onClick={handleComplete}
                       className="w-full mt-2 py-2 bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/40 rounded text-xs font-bold transition-colors"
                     >
-                      РћРўРњР•РўРРўР¬ РљРђРљ Р’Р«РџРћР›РќР•РќРћ
+                      ОТМЕТИТЬ КАК ВЫПОЛНЕНО
                     </button>
                   </>
                 )}
@@ -540,9 +540,9 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
           ) : (
             <div className="flex flex-col items-center justify-center text-center py-10 opacity-70">
               <Moon className="w-8 h-8 text-indigo-400/50 mb-3" />
-              <div className="text-sm font-bold text-indigo-300">Р”Р•РќР¬ Р’РћРЎРЎРўРђРќРћР’Р›Р•РќРРЇ</div>
+              <div className="text-sm font-bold text-indigo-300">ДЕНЬ ВОССТАНОВЛЕНИЯ</div>
               <div className="text-[10px] text-slate-500 mt-2 max-w-[200px] leading-relaxed">
-                РЎСѓРїРµСЂРєРѕРјРїРµРЅСЃР°С†РёСЏ Р¦РќРЎ. Р РµРєРѕРјРµРЅРґСѓРµС‚СЃСЏ СѓРІРµР»РёС‡РёС‚СЊ СЃРѕРЅ РґРѕ 8+ С‡Р°СЃРѕРІ Рё РґРѕР±Р°РІРёС‚СЊ 40 РјРёРЅ РїСЂРѕРіСѓР»РєРё.
+                Суперкомпенсация ЦНС. Рекомендуется увеличить сон до 8+ часов и добавить 40 мин прогулки.
               </div>
             </div>
           )}
@@ -556,7 +556,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800 bg-slate-900/50">
               <div className="flex items-center gap-2">
                 <Copy className="w-4 h-4 text-cyan-400" />
-                <h3 className="font-bold text-slate-200">Р”СѓР±Р»РёСЂРѕРІР°С‚СЊ С‚СЂРµРЅРёСЂРѕРІРєСѓ</h3>
+                <h3 className="font-bold text-slate-200">Дублировать тренировку</h3>
               </div>
               <button onClick={() => setIsDuplicateModalOpen(false)} className="text-slate-400 hover:text-rose-400">
                 <X className="w-4 h-4" />
@@ -564,7 +564,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
             </div>
             <div className="p-4 space-y-4">
               <div>
-                <label className="block text-xs font-medium text-slate-400 mb-1">Р”Р°С‚Р° РЅРѕРІРѕР№ С‚СЂРµРЅРёСЂРѕРІРєРё</label>
+                <label className="block text-xs font-medium text-slate-400 mb-1">Дата новой тренировки</label>
                 <input 
                   type="date" 
                   value={duplicateTargetDate}
@@ -587,11 +587,11 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                     </div>
                   </div>
                   <span className="text-sm font-medium text-slate-300 group-hover:text-slate-200">
-                    РџСЂРѕРіСЂРµСЃСЃРёРІРЅР°СЏ РїРµСЂРµРіСЂСѓР·РєР°
+                    Прогрессивная перегрузка
                   </span>
                 </label>
                 <p className="text-[10px] text-slate-500 mt-1 ml-12">
-                  РЈРІРµР»РёС‡РёС‚СЊ СЂР°Р±РѕС‡РёР№ РІРµСЃ РІ РїРѕРґС…РѕРґР°С… (РєСЂРѕРјРµ СЂР°Р·РјРёРЅРєРё).
+                  Увеличить рабочий вес в подходах (кроме разминки).
                 </p>
               </div>
 
@@ -599,11 +599,11 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                 <div className="pl-12 pt-1 flex gap-3">
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input type="radio" name="overload" checked={overloadIncrement === 1.25} onChange={() => setOverloadIncrement(1.25)} className="text-cyan-500 bg-slate-900 border-slate-700" />
-                    <span className="text-xs text-slate-300">+1.25 РєРі</span>
+                    <span className="text-xs text-slate-300">+1.25 кг</span>
                   </label>
                   <label className="flex items-center gap-1.5 cursor-pointer">
                     <input type="radio" name="overload" checked={overloadIncrement === 2.5} onChange={() => setOverloadIncrement(2.5)} className="text-cyan-500 bg-slate-900 border-slate-700" />
-                    <span className="text-xs text-slate-300">+2.5 РєРі</span>
+                    <span className="text-xs text-slate-300">+2.5 кг</span>
                   </label>
                 </div>
               )}
@@ -614,7 +614,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                 className="w-full mt-2 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded-lg text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {isDuplicating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Copy className="w-4 h-4" />}
-                {isDuplicating ? 'РљРѕРїРёСЂРѕРІР°РЅРёРµ...' : 'РЎРєРѕРїРёСЂРѕРІР°С‚СЊ'}
+                {isDuplicating ? 'Копирование...' : 'Скопировать'}
               </button>
             </div>
           </div>
@@ -627,7 +627,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
           <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-sm">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
               <div className="flex items-center gap-2 text-cyan-400 font-bold text-sm">
-                <Plus className="w-4 h-4" /> Р”РѕР±Р°РІРёС‚СЊ СѓРїСЂР°Р¶РЅРµРЅРёРµ
+                <Plus className="w-4 h-4" /> Добавить упражнение
               </div>
               <button onClick={() => setIsAddExModalOpen(false)} className="text-slate-400 hover:text-rose-400">
                 <X className="w-4 h-4" />
@@ -635,22 +635,22 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
             </div>
             <div className="p-4 space-y-3">
               <div>
-                <label className="text-[10px] text-slate-400 uppercase">РќР°Р·РІР°РЅРёРµ СѓРїСЂР°Р¶РЅРµРЅРёСЏ</label>
+                <label className="text-[10px] text-slate-400 uppercase">Название упражнения</label>
                 <input
                   type="text" autoFocus
                   value={newExName} onChange={e => setNewExName(e.target.value)}
-                  placeholder="Р–РёРј С€С‚Р°РЅРіРё Р»С‘Р¶Р°, РџРѕРґС‚СЏРіРёРІР°РЅРёСЏ..."
+                  placeholder="Жим штанги лёжа, Подтягивания..."
                   className="w-full mt-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-cyan-500"
                 />
               </div>
               <div className="grid grid-cols-3 gap-2">
                 <div>
-                  <label className="text-[10px] text-slate-400 uppercase">РџРѕРґС…РѕРґРѕРІ</label>
+                  <label className="text-[10px] text-slate-400 uppercase">Подходов</label>
                   <input type="number" min={1} max={10} value={newExSets} onChange={e => setNewExSets(Number(e.target.value))}
                     className="w-full mt-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-cyan-500" />
                 </div>
                 <div>
-                  <label className="text-[10px] text-slate-400 uppercase">РџРѕРІС‚РѕСЂРѕРІ</label>
+                  <label className="text-[10px] text-slate-400 uppercase">Повторов</label>
                   <input type="text" value={newExReps} onChange={e => setNewExReps(e.target.value)}
                     className="w-full mt-1 bg-slate-950 border border-slate-700 rounded px-2 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-cyan-500" />
                 </div>
@@ -665,7 +665,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                 className="w-full py-2 bg-cyan-600 hover:bg-cyan-500 text-white font-bold rounded text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {isAddingEx ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                {isAddingEx ? 'Р”РѕР±Р°РІР»РµРЅРёРµ...' : 'Р”РѕР±Р°РІРёС‚СЊ'}
+                {isAddingEx ? 'Добавление...' : 'Добавить'}
               </button>
             </div>
           </div>
@@ -678,7 +678,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
           <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-2xl w-full max-w-sm">
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-800">
               <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
-                <RefreshCw className="w-4 h-4" /> Р—Р°РјРµРЅРёС‚СЊ СѓРїСЂР°Р¶РЅРµРЅРёРµ
+                <RefreshCw className="w-4 h-4" /> Заменить упражнение
               </div>
               <button onClick={() => setSwapExId(null)} className="text-slate-400 hover:text-rose-400">
                 <X className="w-4 h-4" />
@@ -686,21 +686,21 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
             </div>
             <div className="p-4 space-y-3">
               <div>
-                <label className="text-[10px] text-slate-400 uppercase">РџСЂРёС‡РёРЅР° Р·Р°РјРµРЅС‹</label>
+                <label className="text-[10px] text-slate-400 uppercase">Причина замены</label>
                 <select value={swapReason} onChange={e => setSwapReason(e.target.value)}
                   className="w-full mt-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500">
-                  <option value="joint_pain">Р‘РѕР»СЊ РІ СЃСѓСЃС‚Р°РІР°С…</option>
-                  <option value="equipment_busy">Р—Р°РЅСЏС‚ С‚СЂРµРЅР°Р¶С‘СЂ</option>
-                  <option value="no_axial_load">Р‘РµР· РѕСЃРµРІРѕР№ РЅР°РіСЂСѓР·РєРё</option>
-                  <option value="alternative">Р‘РёРѕРјРµС…Р°РЅРёС‡РµСЃРєР°СЏ Р°Р»СЊС‚РµСЂРЅР°С‚РёРІР°</option>
+                  <option value="joint_pain">Боль в суставах</option>
+                  <option value="equipment_busy">Занят тренажёр</option>
+                  <option value="no_axial_load">Без осевой нагрузки</option>
+                  <option value="alternative">Биомеханическая альтернатива</option>
                 </select>
               </div>
               <div>
-                <label className="text-[10px] text-slate-400 uppercase">РќРѕРІРѕРµ СѓРїСЂР°Р¶РЅРµРЅРёРµ</label>
+                <label className="text-[10px] text-slate-400 uppercase">Новое упражнение</label>
                 <input
                   type="text" autoFocus
                   value={swapNewName} onChange={e => setSwapNewName(e.target.value)}
-                  placeholder="РќР°РїСЂРёРјРµСЂ: Р–РёРј РіР°РЅС‚РµР»РµР№ Р»С‘Р¶Р°"
+                  placeholder="Например: Жим гантелей лёжа"
                   className="w-full mt-1 bg-slate-950 border border-slate-700 rounded px-3 py-1.5 text-sm text-slate-200 focus:outline-none focus:border-amber-500"
                 />
               </div>
@@ -709,7 +709,7 @@ export const KineticsCalendar: React.FC<{ selectedDate?: Date, onDateSelect?: (d
                 className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white font-bold rounded text-sm transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 {isSwapping ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                {isSwapping ? 'Р—Р°РјРµРЅР°...' : 'Р—Р°РјРµРЅРёС‚СЊ'}
+                {isSwapping ? 'Замена...' : 'Заменить'}
               </button>
             </div>
           </div>

@@ -84,13 +84,16 @@ class MasteryService:
         mastery.total_attempts += 1
         if is_correct:
             mastery.successful_attempts += 1
+            mastery.current_streak += 1
+        else:
+            mastery.current_streak = 0
             
         # SM-2
         interval, new_ef, _ = MasteryCalculator.calculate_next_review(
             is_correct=is_correct,
             current_interval=mastery.interval_days,
             current_ef=mastery.ease_factor,
-            repetitions=mastery.successful_attempts
+            repetitions=mastery.current_streak - 1 if is_correct else 0
         )
         
         mastery.interval_days = interval
@@ -109,6 +112,7 @@ class MasteryService:
     @staticmethod
     async def record_attempt(
         db: AsyncSession,
+        user_id: uuid.UUID,
         subject_id: uuid.UUID,
         topic_name: str,
         is_correct: bool,
@@ -116,18 +120,18 @@ class MasteryService:
         response_time_ms: Optional[int] = None,
         item_type: str = "quiz"
     ):
+        mastery = await MasteryService._update_mastery(db, subject_id, topic_name, is_correct, node_id)
+        
         attempt = LearningAttempt(
-            subject_id=subject_id,
-            topic_name=topic_name,
-            node_id=node_id,
-            is_correct=is_correct,
+            user_id=user_id,
+            concept_id=mastery.id,
+            success=is_correct,
+            score=1.0 if is_correct else 0.0,
             response_time_ms=response_time_ms,
             item_type=item_type
         )
         db.add(attempt)
         await db.commit()
-        
-        mastery = await MasteryService._update_mastery(db, subject_id, topic_name, is_correct, node_id)
         
         if not is_correct and mastery.mastery_level < 0.35:
             existing_task = await db.scalar(
